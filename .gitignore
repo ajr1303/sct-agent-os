@@ -1,0 +1,5 @@
+data/
+backups/
+.env
+honcho.env
+*.zip

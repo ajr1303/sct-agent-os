@@ -1,0 +1,78 @@
+name: agent-os
+services:
+  hermes:
+    image: nousresearch/hermes-agent:${HERMES_TAG:-latest}
+    container_name: agent-os-hermes
+    restart: unless-stopped
+    command: gateway run
+    ports:
+      - "127.0.0.1:8642:8642"
+      - "127.0.0.1:9119:9119"
+    volumes:
+      - ${HERMES_HOME_DIR:-./data/hermes}:/opt/data
+    environment:
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: "0.0.0.0"
+      API_SERVER_KEY: ${API_SERVER_KEY:?run ./install.sh first}
+      HERMES_DASHBOARD: "1"
+    mem_limit: ${HERMES_MEM_LIMIT:-3G}
+    cpus: 2.0
+
+  honcho-db:
+    profiles: ["memory"]
+    image: pgvector/pgvector:pg16
+    container_name: agent-os-honcho-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: honcho
+      POSTGRES_USER: honcho
+      POSTGRES_PASSWORD: ${HONCHO_DB_PASSWORD:-unset}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    command: ["postgres", "-c", "max_connections=100"]
+    volumes:
+      - honcho-pgdata:/var/lib/postgresql/data
+      - ./templates/honcho-init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U honcho -d honcho"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    mem_limit: 1G
+
+  honcho-api:
+    profiles: ["memory"]
+    build:
+      context: https://github.com/plastic-labs/honcho.git#323f7e79923ffef968669fe4069d8cebed3ec8c3
+      dockerfile: Dockerfile
+    image: agent-os/honcho:323f7e7
+    container_name: agent-os-honcho-api
+    restart: unless-stopped
+    entrypoint: ["sh", "docker/entrypoint.sh"]
+    depends_on:
+      honcho-db: { condition: service_healthy }
+    env_file:
+      - path: honcho.env
+        required: false
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    mem_limit: 1G
+
+  honcho-deriver:
+    profiles: ["memory"]
+    image: agent-os/honcho:323f7e7
+    container_name: agent-os-honcho-deriver
+    restart: unless-stopped
+    entrypoint: ["/app/.venv/bin/python", "-m", "src.deriver"]
+    depends_on:
+      honcho-api: { condition: service_healthy }
+    env_file:
+      - path: honcho.env
+        required: false
+    mem_limit: 1G
+
+volumes:
+  honcho-pgdata:

@@ -1,0 +1,16 @@
+name: check
+on: [push, pull_request]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck -S warning get.sh install.sh scripts/*.sh
+      - name: compose config
+        run: |
+          echo "API_SERVER_KEY=x" > .env
+          docker compose config -q
+          docker compose --profile memory config -q
+      - name: yaml themes parse
+        run: python3 -c "import yaml,glob;[yaml.safe_load(open(f)) for f in glob.glob('templates/dashboard-themes/*.yaml')]"
