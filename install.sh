@@ -51,6 +51,9 @@ collect_answers() {
   ask OWNER_NAME "Your name" "owner"
   ask AGENT_NAME "Name your agent" "navi"
   ask WORKSPACE  "Workspace name" "$(echo "$AGENT_NAME" | tr 'A-Z ' 'a-z-')-workspace"
+  echo "Dashboard access: 1) this machine / SSH tunnel only  2) anyone on my network (LAN)"
+  ask ACCESS "Choice" "1"
+  if [ "$ACCESS" = 2 ]; then DASHBOARD_BIND=0.0.0.0; else DASHBOARD_BIND=127.0.0.1; fi
   if [ "$MEMORY_MODE" = honcho ]; then
     echo "LLM provider for the memory service:"
     echo "  1) OpenAI   2) Other OpenAI-compatible (OpenRouter, vLLM, etc.)"
@@ -80,6 +83,7 @@ write_env() {
   cat > .env <<ENV
 API_SERVER_KEY=$(gen_secret)
 DASHBOARD_USER=admin
+DASHBOARD_BIND=$DASHBOARD_BIND
 DASHBOARD_PASSWORD=$(openssl rand -base64 18 | tr -dc A-Za-z0-9 | cut -c1-20)
 HONCHO_DB_PASSWORD=$(gen_secret)
 HERMES_TAG=latest
@@ -157,14 +161,18 @@ main() {
   say "Smoke test"
   ./scripts/smoke-test.sh || warn "Some checks failed - see above. Logs: docker compose logs"
   if [ "$MEMORY_MODE" = honcho ]; then docker compose exec -T hermes hermes memory status || true; fi
+  if [ "$DASHBOARD_BIND" = 0.0.0.0 ]; then
+    ip=$(hostname -I | awk '{print $1}')
+    where="http://${ip}:9119   (LAN; plain HTTP, so keep it on a trusted network)"
+  else
+    where="http://localhost:9119 after: ssh -L 9119:127.0.0.1:9119 <user>@<this-server>"
+  fi
   cat <<DONE
 
-Agent OS is running. Ports are bound to localhost only.
-From your own computer, open a tunnel:
-  ssh -L 9119:127.0.0.1:9119 -L 8642:127.0.0.1:8642 <user>@<this-server>
-then browse to http://localhost:9119  (pick the "Suburban Cyber" theme in the dashboard).
-Dashboard login:  admin / $(grep ^DASHBOARD_PASSWORD= .env | cut -d= -f2)
-(also stored in $(pwd)/.env)
+Agent OS is running.
+Dashboard: $where
+Login:     admin / $(grep ^DASHBOARD_PASSWORD= .env | cut -d= -f2)   (also in $(pwd)/.env)
+Pick the "Suburban Cyber" theme in the dashboard. The agent API (8642) stays on localhost.
 DONE
 }
 main
