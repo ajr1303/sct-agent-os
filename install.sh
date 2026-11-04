@@ -79,6 +79,8 @@ write_env() {
   umask 077
   cat > .env <<ENV
 API_SERVER_KEY=$(gen_secret)
+DASHBOARD_USER=admin
+DASHBOARD_PASSWORD=$(openssl rand -base64 18 | tr -dc A-Za-z0-9 | cut -c1-20)
 HONCHO_DB_PASSWORD=$(gen_secret)
 HERMES_TAG=latest
 HERMES_HOME_DIR=./data/hermes
@@ -161,6 +163,8 @@ Agent OS is running. Ports are bound to localhost only.
 From your own computer, open a tunnel:
   ssh -L 9119:127.0.0.1:9119 -L 8642:127.0.0.1:8642 <user>@<this-server>
 then browse to http://localhost:9119  (pick the "Suburban Cyber" theme in the dashboard).
+Dashboard login:  admin / $(grep ^DASHBOARD_PASSWORD= .env | cut -d= -f2)
+(also stored in $(pwd)/.env)
 DONE
 }
 main
