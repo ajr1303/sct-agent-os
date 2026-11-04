@@ -94,6 +94,9 @@ ENV
   mkdir -p data/hermes/dashboard-themes backups
   if [ "$MEMORY_MODE" = honcho ]; then write_honcho_env; write_honcho_json; fi
   cp templates/dashboard-themes/*.yaml data/hermes/dashboard-themes/
+  # container runs as a different user; umask 077 above would make these unreadable to it
+  chmod 755 data/hermes data/hermes/dashboard-themes
+  chmod 644 data/hermes/dashboard-themes/*.yaml
 }
 
 emit_model_block() { # emit_model_block PREFIX MODEL
