@@ -133,6 +133,7 @@ write_honcho_json() {
 hermes_first_run() {
   say "Hermes first-time setup (pick your model/provider and messaging)"
   docker compose run --rm -it hermes setup <"$TTY" || warn "hermes setup exited non-zero; re-run: docker compose run --rm -it hermes setup"
+  docker compose run --rm hermes config set dashboard.theme suburban-cyber || warn "could not set default theme; pick it in the dashboard"
   if [ "$MEMORY_MODE" = honcho ]; then
     docker compose run --rm hermes plugins install honcho || warn "honcho plugin install failed"
   fi
