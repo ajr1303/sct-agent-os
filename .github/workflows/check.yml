@@ -9,7 +9,7 @@ jobs:
         run: shellcheck -S warning get.sh install.sh scripts/*.sh
       - name: compose config
         run: |
-          echo "API_SERVER_KEY=x" > .env
+          printf "API_SERVER_KEY=x\nDASHBOARD_PASSWORD=x\n" > .env
           docker compose config -q
           docker compose --profile memory config -q
       - name: yaml themes parse
