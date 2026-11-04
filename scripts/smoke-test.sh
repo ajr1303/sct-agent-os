@@ -6,7 +6,7 @@ ok()  { echo "  [ok]   $1"; }
 bad() { echo "  [FAIL] $1"; fail=1; }
 # Dashboard needs HERMES_DASHBOARD=1 plus an auth provider; any HTTP answer (200 or a login redirect) means it is up.
 dash=000
-for i in $(seq 1 45); do
+for _ in $(seq 1 45); do
   dash=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9119/ 2>/dev/null || true)
   [ "$dash" != "000" ] && break
   sleep 2
