@@ -206,10 +206,12 @@
       }
       return null;
     }
+    function homeHref() { return "/" + (location.search || ""); }
     function markActive() {
       try {
         var el = document.getElementById("sc-overview-nav"); if (!el) return;
-        var on = location.pathname === "/" || location.pathname === "/overview";
+        el.setAttribute("href", homeHref());           // keep profile query current, target the tiled landing page
+        var on = location.pathname === "/";
         el.style.borderLeft = on ? "2px solid var(--color-primary,#25c9ee)" : "2px solid transparent";
         el.style.background = on ? "var(--color-accent,rgba(37,201,238,.08))" : "";
       } catch (e) {}
@@ -222,8 +224,8 @@
         var tmplLabel = norm(tmpl.textContent);
         var clone = tmpl.cloneNode(true);
         clone.id = "sc-overview-nav";
-        clone.setAttribute("href", "/overview");
-        try { clone.href = "/overview"; } catch (e) {}
+        clone.setAttribute("href", homeHref());
+        try { clone.href = homeHref(); } catch (e) {}
         var w = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT, null);
         var n;
         while ((n = w.nextNode())) { if (norm(n.nodeValue) === tmplLabel) { n.nodeValue = "Overview"; break; } }
