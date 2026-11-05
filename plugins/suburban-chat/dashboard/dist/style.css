@@ -1,23 +1,31 @@
-.scc-wrap{display:flex;flex-direction:column;height:calc(100dvh - 3.6rem);min-height:0}
+.scc-wrap{display:flex;flex-direction:row;height:calc(100dvh - 3.6rem);min-height:0}
+/* conversation rail */
+.scc-rail{width:256px;flex-shrink:0;border-right:1px solid var(--color-border,rgba(255,255,255,.1));display:flex;flex-direction:column;min-height:0}
+.scc-newbtn{margin:14px;padding:10px 14px;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;background:var(--color-primary,#25c9ee);color:var(--color-primary-foreground,#04202a);border:1px solid var(--color-primary,#25c9ee);border-radius:10px;cursor:pointer}
+.scc-sesslist{flex:1;min-height:0;overflow-y:auto;padding:0 8px 12px}
+.scc-railempty{padding:16px;opacity:.5;font-size:12px}
+.scc-sess{display:block;width:100%;text-align:left;padding:10px 12px;margin-bottom:4px;background:transparent;border:1px solid transparent;border-radius:9px;color:inherit;cursor:pointer}
+.scc-sess:hover{background:var(--color-card,rgba(255,255,255,.04))}
+.scc-sess-active{background:var(--color-accent,rgba(37,201,238,.1));border-color:var(--color-primary,#25c9ee)}
+.scc-sess-t{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scc-sess-m{font-size:11px;opacity:.5;margin-top:2px}
+/* main column */
+.scc-main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
 .scc-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 22px;border-bottom:1px solid var(--color-border,rgba(255,255,255,.1));flex-shrink:0}
 .scc-agentchip{display:flex;align-items:center;gap:10px}
 .scc-agentname{font-size:15px;font-weight:600}
-.scc-actions{display:flex;align-items:center;gap:12px}
 .scc-conn{font-size:11px;text-transform:uppercase;letter-spacing:.06em;padding:3px 9px;border:1px solid currentColor;opacity:.85}
 .scc-conn.scc-ready{color:var(--color-success,#4ade80)}
 .scc-conn.scc-connecting{color:var(--color-warning,#ffbd38)}
 .scc-conn.scc-error,.scc-conn.scc-closed{color:var(--color-destructive,#ff7a73)}
-.scc-btn{padding:6px 14px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;border:1px solid var(--color-border,rgba(255,255,255,.22));background:transparent;color:inherit;cursor:pointer;border-radius:8px}
-.scc-btn:hover{border-color:var(--color-primary,#25c9ee);color:var(--color-primary,#25c9ee)}
-/* scroll area with centered column */
+/* scroll + centered column */
 .scc-scroll{flex:1;min-height:0;overflow-y:auto;padding:24px 22px}
 .scc-inner{max-width:820px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
-/* message rows */
 .scc-msg{display:flex;gap:12px;align-items:flex-start}
 .scc-msg.scc-user{flex-direction:row-reverse}
 .scc-col{display:flex;flex-direction:column;gap:4px;max-width:76%}
 .scc-msg.scc-user .scc-col{align-items:flex-end}
-.scc-av{flex-shrink:0;width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;letter-spacing:.02em}
+.scc-av{flex-shrink:0;width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600}
 .scc-av-agent{background:var(--color-primary,#25c9ee);color:var(--color-primary-foreground,#04202a)}
 .scc-av-user{background:var(--color-card,rgba(255,255,255,.08));border:1px solid var(--color-border,rgba(255,255,255,.2));font-size:10px;text-transform:uppercase}
 .scc-av-sm{width:28px;height:28px;font-size:11px}
@@ -30,15 +38,14 @@
 .scc-pending{opacity:.5}
 .scc-typing{letter-spacing:2px;animation:scc-pulse 1.2s ease-in-out infinite}
 @keyframes scc-pulse{0%,100%{opacity:.35}50%{opacity:.85}}
-/* empty state */
 .scc-empty{margin:12vh auto 0;text-align:center;opacity:.85;max-width:360px;display:flex;flex-direction:column;align-items:center;gap:8px}
 .scc-empty-av{width:52px;height:52px;border-radius:50%;background:var(--color-primary,#25c9ee);color:var(--color-primary-foreground,#04202a);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:600;margin-bottom:4px}
 .scc-empty-t{font-size:17px;font-weight:600}
 .scc-empty-s{font-size:13px;opacity:.65}
-/* input */
 .scc-inputbar{flex-shrink:0;padding:14px 22px;border-top:1px solid var(--color-border,rgba(255,255,255,.1))}
 .scc-inputinner{max-width:820px;margin:0 auto;display:flex;gap:10px;align-items:flex-end}
 .scc-input{flex:1;resize:none;max-height:160px;min-height:44px;padding:12px 15px;font:inherit;font-size:14px;color:inherit;background:var(--color-card,rgba(255,255,255,.04));border:1px solid var(--color-border,rgba(255,255,255,.18));border-radius:12px;outline:none}
 .scc-input:focus{border-color:var(--color-primary,#25c9ee)}
 .scc-send{padding:0 22px;height:44px;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;background:var(--color-primary,#25c9ee);color:var(--color-primary-foreground,#04202a);border:1px solid var(--color-primary,#25c9ee);border-radius:12px;cursor:pointer}
 .scc-send:disabled{opacity:.4;cursor:default}
+@media (max-width:760px){.scc-rail{width:180px}}
