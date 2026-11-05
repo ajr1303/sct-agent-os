@@ -68,9 +68,9 @@
               var el = all[i];
               if (el.childElementCount > 0) continue;
               if ((el.textContent || "").trim().toLowerCase() !== "chat") continue;
-              if (el.closest && el.closest(".scc-wrap")) continue;
+              if (el.closest && (el.closest(".scc-wrap") || el.closest("aside") || el.closest("nav") || el.closest("a"))) continue;
               var r = el.getBoundingClientRect();
-              if (r.top < 140 && r.left < 520 && el.style.display !== "none") { el.style.display = "none"; hidden.push(el); }
+              if (r.top < 140 && r.left >= 250 && r.left < 640 && el.style.display !== "none") { el.style.display = "none"; hidden.push(el); }
             }
           } catch (e) {}
         }
