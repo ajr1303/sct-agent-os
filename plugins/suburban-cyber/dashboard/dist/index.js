@@ -186,11 +186,15 @@
         if (!/suburban/i.test(document.title)) document.title = BRAND + " Agent OS";
         var all = document.querySelectorAll("a,div,span,h1,h2,p");
         for (var i = 0; i < all.length; i++) {
-          var el = all[i]; if (el.childElementCount > 3) continue;
+          var el = all[i];
+          if (el.querySelector && el.querySelector(".sc-brand-logo")) continue; // already branded
+          if (el.childElementCount > 3) continue;
           var t = norm(el.textContent);
-          if (t !== "hermes agent" && t !== "hermesagent") continue;
+          if (t !== "hermes agent" && t !== "hermesagent" && t !== "suburban cyber") continue;
           var r = el.getBoundingClientRect();
-          if (r.top < 220 && r.left < 360 && r.width < 420) el.textContent = BRAND;
+          if (r.top < 220 && r.left < 360 && r.width < 420) {
+            el.innerHTML = '<span class="sc-brand-logo" role="img" aria-label="Suburban Cyber"></span>';
+          }
         }
       } catch (e) {}
     }
