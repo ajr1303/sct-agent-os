@@ -3,8 +3,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 H=data/hermes
-mkdir -p "$H/dashboard-themes" "$H/plugins"
+mkdir -p "$H/dashboard-themes" "$H/plugins" "$H/brand"
 cp templates/dashboard-themes/*.yaml "$H/dashboard-themes/"
+cp brand/* "$H/brand/"
+chmod 755 "$H/brand"; chmod 644 "$H/brand/"*
 for plug in suburban-cyber suburban-chat; do
   rm -rf "$H/plugins/$plug"
   mkdir -p "$H/plugins/$plug"

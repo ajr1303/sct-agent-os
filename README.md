@@ -151,7 +151,7 @@ Not yet done / known limitations:
 - A **from-scratch one-command install** has not been run end-to-end yet (iterated via in-place updates); that's the next validation.
 - The Overview **"Waiting on you" approvals** panel is **sample data**, clearly tagged — Hermes has no dashboard approvals API, so a real approval queue would be a separate build.
 - "Time saved" / review-schedule lines in the managed card are illustrative until wired to real sources.
-- Dashboard is **HTTP only** (see the LAN note above).
+- A reverse proxy now serves the dashboard and brands the login page; HTTPS termination on that proxy is the next step.
 - The chat is one live conversation at a time; browsing/continuing past conversations is a planned addition.
 
 ## Roadmap

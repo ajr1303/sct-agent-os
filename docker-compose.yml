@@ -7,7 +7,8 @@ services:
     command: gateway run
     ports:
       - "127.0.0.1:8642:8642"
-      - "${DASHBOARD_BIND:-127.0.0.1}:9119:9119"
+    expose:
+      - "9119"
     volumes:
       - ${HERMES_HOME_DIR:-./data/hermes}:/opt/data
     environment:
@@ -19,6 +20,20 @@ services:
       HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: ${DASHBOARD_PASSWORD:?run ./install.sh first}
     mem_limit: ${HERMES_MEM_LIMIT:-3G}
     cpus: 2.0
+
+  # Reverse proxy in front of the dashboard: injects Suburban Cyber branding into the
+  # pre-auth login page (which themes/plugins can't reach) and is the future TLS endpoint.
+  proxy:
+    image: nginx:1.27-alpine
+    container_name: agent-os-proxy
+    restart: unless-stopped
+    depends_on: [hermes]
+    ports:
+      - "${DASHBOARD_BIND:-127.0.0.1}:9119:9119"
+    volumes:
+      - ./templates/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./data/hermes/brand:/srv/brand:ro
+    mem_limit: 128M
 
   honcho-db:
     profiles: ["memory"]
