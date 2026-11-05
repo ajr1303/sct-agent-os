@@ -44,8 +44,14 @@ economy (cheapest), balanced (default), deep (most recall, highest LLM cost).
 
 ## Roadmap
 
-Plugin for the dashboard overview, first-run wizard, remote access, installable ISO.
+Overview page (v0.1 shipped: status, sessions, quick links), approvals and spend panels, first-run wizard, remote access (HTTPS), installable ISO.
 
 ## Licenses
 
 Installer scripts: MIT. Hermes Agent: MIT. Honcho: AGPL-3.0 (not modified or bundled; built from upstream source).
+
+## Updating
+
+```bash
+cd /opt/sct-agent-os && sudo ./scripts/update.sh
+```

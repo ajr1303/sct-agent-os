@@ -1,0 +1,12 @@
+.scagent-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));padding:24px}
+.scagent-wide{grid-column:1/-1}
+.scagent-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--color-border,rgba(255,255,255,.1));font-size:13px}
+.scagent-row:last-child{border-bottom:0}
+.scagent-muted{opacity:.65}
+.scagent-big{font-size:28px;font-weight:600;line-height:1.1}
+.scagent-links{display:flex;flex-wrap:wrap;gap:8px}
+.scagent-links a{padding:6px 12px;border:1px solid var(--color-border,rgba(255,255,255,.2));text-transform:uppercase;letter-spacing:.06em;font-size:12px;text-decoration:none;color:inherit}
+.scagent-links a:hover{border-color:var(--color-primary,#25c9ee);color:var(--color-primary,#25c9ee)}
+.scagent-pill{display:inline-block;padding:2px 8px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;border:1px solid currentColor}
+.scagent-ok{color:var(--color-success,#4ade80)}
+.scagent-bad{color:var(--color-destructive,#ff7a73)}
