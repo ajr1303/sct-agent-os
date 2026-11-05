@@ -158,6 +158,7 @@ main() {
   write_env
   hermes_first_run
   start_stack
+  docker compose exec -T hermes hermes plugins enable suburban-cyber || warn "could not enable suburban-cyber plugin"
   install_cron
   say "Smoke test"
   ./scripts/smoke-test.sh || warn "Some checks failed - see above. Logs: docker compose logs"
