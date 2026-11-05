@@ -40,7 +40,7 @@
         Promise.resolve(SDK.buildWsAuthParam()).then(function (pair) {
           var url = wsProto() + "://" + location.host + "/api/pty?" + encodeURIComponent(pair[0]) + "=" + encodeURIComponent(pair[1]);
           var ws = new WebSocket(url); ws.binaryType = "arraybuffer"; wsRef.current = ws;
-          ws.onopen = function () { try { ws.send("RESIZE 120 40"); } catch (e) {} setStatus("ready"); };
+          ws.onopen = function () { setStatus("ready"); };
           ws.onclose = function () { setStatus("closed"); };
           ws.onerror = function () { setStatus("error"); };
         }).catch(function () { setStatus("error"); });
