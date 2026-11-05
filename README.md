@@ -1,57 +1,175 @@
 # Suburban Cyber Agent OS
 
-A branded layer on top of [Hermes Agent](https://github.com/NousResearch/hermes-agent) (MIT): installer, dashboard theme, optional [Honcho](https://github.com/plastic-labs/honcho) long-term memory (AGPL-3.0, built unmodified from upstream at a pinned commit).
+A branded, self-hosted **agent operating system** for Suburban Cyber Technologies clients — a thin, maintainable layer on top of the open-source [Hermes Agent](https://github.com/NousResearch/hermes-agent) (MIT). It turns a bare Linux box into a running AI-agent platform with a single command: isolated agent runtime, a branded dashboard, a simplified chat, and optional long-term memory.
 
-## Install (one command)
+> **What this is:** an installer + a dashboard theme + two dashboard plugins. It does **not** fork Hermes. Hermes and [Honcho](https://github.com/plastic-labs/honcho) are pulled from upstream and run unmodified; everything Suburban Cyber adds lives in `plugins/` and `templates/`. That keeps upstream updates cheap and the custom surface small.
 
-On a fresh Linux server (Ubuntu/Debian recommended), as a sudo user:
+---
+
+## Quick start
+
+On a fresh Linux server (Ubuntu/Debian recommended), as a user with sudo:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ajr1303/sct-agent-os/main/get.sh | sudo bash
 ```
 
-It installs git and Docker if missing, clones to `/opt/sct-agent-os`, and walks you through setup. Re-running updates the checkout.
+That one command:
 
-Options: `curl ... | sudo bash -s -- --memory basic` (skip Honcho) or `--memory honcho`.
+1. Installs `git` and Docker if they're missing (Docker's official convenience script).
+2. Clones this repo to `/opt/sct-agent-os`.
+3. Runs `install.sh`, which checks the machine, asks a few questions, writes config, pulls the Hermes image, builds Honcho (if memory is enabled), starts everything, installs the theme + plugins, and enables them.
+
+**Options** (append after `bash`):
+
+```bash
+curl -fsSL .../get.sh | sudo bash -s -- --memory basic   # skip Honcho long-term memory
+curl -fsSL .../get.sh | sudo bash -s -- --memory honcho  # force Honcho on
+curl -fsSL .../get.sh | sudo bash -s -- --yes            # accept defaults, non-interactive
+```
+
+Re-running the command updates the checkout in place. For routine updates, prefer `sudo ./scripts/update.sh` (see [Updating](#updating)).
+
+---
+
+## What you get
+
+| Area | Detail |
+|---|---|
+| **Agent runtime** | One isolated Hermes instance in Docker. API server on `127.0.0.1:8642`, dashboard on `9119`. |
+| **Branding** | Suburban Cyber logo in the sidebar, "Suburban Cyber" wordmark, dark-cyan theme, renamed nav (Overview, Scheduled Jobs, Agents). |
+| **Overview page** | Landing page with live gateway status, sessions, token usage, AI spend, your agents, recent activity, and a managed-service card. |
+| **Chat** | The raw Hermes terminal is replaced by a clean, bubble-style chatbot. |
+| **Memory (optional)** | Honcho long-term memory (Postgres + pgvector + deriver), wired into Hermes. |
+| **Operations** | Watchdog cron (every 5 min), nightly database backup (03:30, 14-day retention), a smoke test, and an in-place updater. |
+
+---
 
 ## Requirements
 
 | | Minimum | Recommended |
 |---|---|---|
-| RAM | 4 GB | 8 GB |
+| OS | Linux (x86_64) | Ubuntu 22.04+ / Debian 12+ |
+| RAM | 4 GB | 8 GB (needed for Honcho memory) |
 | vCPU | 2 | 4 |
 | Free disk | 20 GB | 40 GB |
+| Network | Outbound HTTPS to Docker Hub, GitHub, and your LLM provider | |
 
-(Estimates, not yet benchmarked.)
+Thresholds are enforced by the installer's preflight check. RAM/disk numbers are conservative estimates, not yet load-benchmarked.
 
-## Using it
+---
 
-Ports bind to localhost only. From your computer:
+## Using the dashboard
+
+Ports bind to `127.0.0.1` by default. The installer asks whether to also expose the dashboard on your LAN.
+
+**Localhost / SSH tunnel (default):**
 
 ```bash
-ssh -L 9119:127.0.0.1:9119 -L 8642:127.0.0.1:8642 user@server
+ssh -L 9119:127.0.0.1:9119 user@server
+# then open http://localhost:9119
 ```
 
-Open http://localhost:9119 and choose the **Suburban Cyber** theme.
+**LAN access:** choose "anyone on my network" during install (or set `DASHBOARD_BIND=0.0.0.0` in `.env` and `docker compose up -d`), then browse to `http://<server-ip>:9119`.
 
-## Memory presets
+**Login:** the installer generates a random dashboard password (user `admin`) and prints it at the end; it's also stored in `/opt/sct-agent-os/.env` as `DASHBOARD_PASSWORD`. Change it there and restart to rotate.
 
-economy (cheapest), balanced (default), deep (most recall, highest LLM cost).
+> The dashboard is served over plain HTTP. On a LAN that's fine for internal use; for anything exposed beyond a trusted network, put it behind HTTPS (reverse proxy or Tailscale) first. This is on the roadmap.
 
-## Status
+---
 
-**v0.2 - untested.** Not yet verified end to end: the `/api/health` smoke check on the Docker image, Honcho with non-OpenAI providers, and `hermes setup` ordering. Report issues on GitHub.
+## Adding LLM providers and agents
 
-## Roadmap
+The installer configures one model/provider to start. To add more and assign them per agent, use the dashboard (all native Hermes features):
 
-Overview page (v0.1 shipped: status, sessions, quick links), approvals and spend panels, first-run wizard, remote access (HTTPS), installable ISO.
+1. **Keys** tab → add your provider API keys (Anthropic, OpenAI, OpenRouter, …). These are written to `/opt/data/.env` inside the container.
+2. **Models** tab → see the models those keys unlock.
+3. **Agents** tab (Hermes "profiles") → create or edit an agent and pick its model/provider.
 
-## Licenses
+The Overview page's spend and token tiles populate from real usage once agents start running on a billed model.
 
-Installer scripts: MIT. Hermes Agent: MIT. Honcho: AGPL-3.0 (not modified or bundled; built from upstream source).
+---
+
+## Memory (Honcho)
+
+With `--memory honcho` (the default when RAM ≥ 8 GB), the stack adds:
+
+- `honcho-db` — Postgres 16 + pgvector.
+- `honcho-api` — Honcho API, built from a pinned upstream commit.
+- `honcho-deriver` — the background worker that derives long-term memory.
+
+Honcho is configured to use **your** LLM provider for all nine of its model slots (deriver, summary, both dream stages, and five dialectic levels) plus embeddings — see `install.sh` / `templates/honcho.json.tmpl`. A cost preset (economy / balanced / deep) tunes how often and how deeply memory is derived.
+
+Honcho is built unmodified from upstream source at a pinned commit; its AGPL-3.0 license applies to Honcho itself, not to this installer or your agent configuration.
+
+---
 
 ## Updating
 
 ```bash
 cd /opt/sct-agent-os && sudo ./scripts/update.sh
 ```
+
+Pulls the latest repo, re-syncs the theme and plugins with correct permissions, restarts Hermes, and re-enables the plugins. Then hard-refresh the dashboard (Ctrl+Shift+R).
+
+> Note: `update.sh` pulls a new copy of itself; if the update script *itself* changed, run it a second time so the new logic takes effect.
+
+---
+
+## Repository layout
+
+```
+get.sh                      One-line bootstrap (installs Docker/git, clones, runs install.sh)
+install.sh                  Interactive installer (preflight, config, first run, cron, smoke test)
+docker-compose.yml          Hermes + optional Honcho (db/api/deriver) under a "memory" profile
+scripts/
+  sync-branding.sh          Copies themes + plugins into the Hermes data dir with correct perms
+  update.sh                 In-place update + restart
+  watchdog.sh               Restarts stopped/unhealthy containers (cron, every 5 min)
+  backup.sh                 Nightly pg_dump of Honcho (cron, 03:30, 14-day retention)
+  smoke-test.sh             Post-install health checks
+templates/
+  dashboard-themes/         suburban-cyber.yaml (dark) + suburban-cyber-light.yaml
+  honcho.json.tmpl          Hermes↔Honcho wiring
+  honcho-init.sql           pgvector extension
+plugins/
+  suburban-cyber/           Overview page, branding, logo, nav rename (dashboard plugin)
+  suburban-chat/            Bubble chat that replaces the terminal (dashboard plugin)
+docs/ARCHITECTURE.md        How the layer works, incl. the chat integration
+```
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the plugins hook into the Hermes dashboard and how the bubble chat talks to the gateway.
+
+---
+
+## Status
+
+**v0.3 — working, validated by in-place updates on a test VM.** Verified live: install/start, theme, branding/logo, nav renames, Overview with real data, and the bubble chat (send + render round-trip) on Hermes v0.22.7.
+
+Not yet done / known limitations:
+
+- A **from-scratch one-command install** has not been run end-to-end yet (iterated via in-place updates); that's the next validation.
+- The Overview **"Waiting on you" approvals** panel is **sample data**, clearly tagged — Hermes has no dashboard approvals API, so a real approval queue would be a separate build.
+- "Time saved" / review-schedule lines in the managed card are illustrative until wired to real sources.
+- Dashboard is **HTTP only** (see the LAN note above).
+- The chat is one live conversation at a time; browsing/continuing past conversations is a planned addition.
+
+## Roadmap
+
+- First-run setup wizard in the dashboard.
+- Remote access with HTTPS (reverse proxy / Tailscale) and cloud-init for hosted clients.
+- Multi-conversation history in the chat.
+- Real approval queue + per-client managed-service config.
+- Uninstall path and an installable ISO.
+
+---
+
+## Licenses
+
+| Component | License | Notes |
+|---|---|---|
+| Suburban Cyber installer, scripts, plugins, themes | MIT | This repository |
+| Hermes Agent | MIT | Pulled as an upstream Docker image, unmodified |
+| Honcho | AGPL-3.0 | Built from upstream source at a pinned commit, unmodified |
+
+© 2026 Suburban Cyber Technologies LLC.
