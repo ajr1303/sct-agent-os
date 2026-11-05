@@ -6,7 +6,7 @@
   "version": "0.1.0",
   "tab": {
     "path": "/overview",
-    "position": "end"
+    "override": "/"
   },
   "slots": [
     "header-left"
