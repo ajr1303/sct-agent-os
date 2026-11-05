@@ -177,26 +177,72 @@
       console.info(TAG, "registered, sdk=" + (SDK.sdkVersion || "?"));
     } catch (e) { try { console.error(TAG, "register failed", e); } catch (e2) {} }
 
-    // Branding: rename split wordmark + tab title.
-    try {
-      function norm(x) { return (x || "").replace(/\s+/g, " ").trim().toLowerCase(); }
-      function rebrand() {
-        try {
-          if (!/suburban/i.test(document.title)) document.title = BRAND + " Agent OS";
-          var all = document.querySelectorAll("a,div,span,h1,h2,p");
-          for (var i = 0; i < all.length; i++) {
-            var el = all[i]; if (el.childElementCount > 3) continue;
-            var t = norm(el.textContent);
-            if (t !== "hermes agent" && t !== "hermesagent") continue;
-            var r = el.getBoundingClientRect();
-            if (r.top < 220 && r.left < 360 && r.width < 420) el.textContent = BRAND;
-          }
-        } catch (e) {}
+    // Branding + nav injection. Isolated so nothing here can block registration.
+    function norm(x) { return (x || "").replace(/\s+/g, " ").trim().toLowerCase(); }
+    var NAV_LABELS = { chat:1, sessions:1, files:1, models:1, logs:1, cron:1, skills:1, plugins:1, config:1 };
+
+    function rebrand() {
+      try {
+        if (!/suburban/i.test(document.title)) document.title = BRAND + " Agent OS";
+        var all = document.querySelectorAll("a,div,span,h1,h2,p");
+        for (var i = 0; i < all.length; i++) {
+          var el = all[i]; if (el.childElementCount > 3) continue;
+          var t = norm(el.textContent);
+          if (t !== "hermes agent" && t !== "hermesagent") continue;
+          var r = el.getBoundingClientRect();
+          if (r.top < 220 && r.left < 360 && r.width < 420) el.textContent = BRAND;
+        }
+      } catch (e) {}
+    }
+
+    function findNavTemplate() {
+      var links = document.querySelectorAll("a[href]");
+      for (var i = 0; i < links.length; i++) {
+        var t = norm(links[i].textContent);
+        if (NAV_LABELS[t]) {
+          var r = links[i].getBoundingClientRect();
+          if (r.left < 360) return links[i];
+        }
       }
+      return null;
+    }
+    function markActive() {
+      try {
+        var el = document.getElementById("sc-overview-nav"); if (!el) return;
+        var on = location.pathname === "/" || location.pathname === "/overview";
+        el.style.borderLeft = on ? "2px solid var(--color-primary,#25c9ee)" : "2px solid transparent";
+        el.style.background = on ? "var(--color-accent,rgba(37,201,238,.08))" : "";
+      } catch (e) {}
+    }
+    function injectNav() {
+      try {
+        if (document.getElementById("sc-overview-nav")) { markActive(); return; }
+        var tmpl = findNavTemplate();
+        if (!tmpl || !tmpl.parentElement) return;
+        var tmplLabel = norm(tmpl.textContent);
+        var clone = tmpl.cloneNode(true);
+        clone.id = "sc-overview-nav";
+        clone.setAttribute("href", "/overview");
+        try { clone.href = "/overview"; } catch (e) {}
+        var w = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT, null);
+        var n;
+        while ((n = w.nextNode())) { if (norm(n.nodeValue) === tmplLabel) { n.nodeValue = "Overview"; break; } }
+        tmpl.parentElement.insertBefore(clone, tmpl.parentElement.firstChild);
+        markActive();
+        console.info(TAG, "nav item injected");
+      } catch (e) {}
+    }
+
+    function tick() { rebrand(); injectNav(); }
+    try {
       var mo = new MutationObserver(function () {
-        if (rebrand._p) return; rebrand._p = setTimeout(function () { rebrand._p = null; rebrand(); }, 120);
+        if (tick._p) return; tick._p = setTimeout(function () { tick._p = null; tick(); }, 120);
       });
-      if (document.body) { mo.observe(document.body, { childList: true, subtree: true, characterData: true }); rebrand(); setTimeout(rebrand, 500); setTimeout(rebrand, 1500); }
+      if (document.body) {
+        mo.observe(document.body, { childList: true, subtree: true, characterData: true });
+        window.addEventListener("popstate", markActive);
+        tick(); setTimeout(tick, 500); setTimeout(tick, 1500);
+      }
     } catch (e) {}
   });
 })();
