@@ -34,7 +34,7 @@
       var i0 = useState(""), input = i0[0], setInput = i0[1];
       var p0 = useState([]), pending = p0[0], setPending = p0[1];
       var an0 = useState("Agent"), agentName = an0[0], setAgentName = an0[1];
-      var wsRef = useRef(null), sidRef = useRef(null), scrollRef = useRef(null), baseRef = useRef(null);
+      var wsRef = useRef(null), sidRef = useRef(null), scrollRef = useRef(null), baseRef = useRef(null), atBottomRef = useRef(true);
 
       // Hide the shell's redundant "Chat" page title while this page is mounted.
       useEffect(function () {
@@ -102,7 +102,8 @@
         return function () { alive = false; clearInterval(t); };
       }, []);
 
-      useEffect(function () { try { var el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight; } catch (e) {} });
+      useEffect(function () { try { var el = scrollRef.current; if (el && atBottomRef.current) el.scrollTop = el.scrollHeight; } catch (e) {} });
+      function onScroll(e) { try { var el = e.target; atBottomRef.current = (el.scrollHeight - el.scrollTop - el.clientHeight) < 60; } catch (x) {} }
 
       function send() {
         var text = (input || "").trim(); if (!text) return;
@@ -155,7 +156,7 @@
           h("div", { className: "scc-actions" },
             h("span", { className: "scc-conn scc-" + status }, connLabel),
             h("button", { className: "scc-btn", onClick: newChat }, "New chat"))),
-        h("div", { className: "scc-scroll", ref: scrollRef },
+        h("div", { className: "scc-scroll", ref: scrollRef, onScroll: onScroll },
           h("div", { className: "scc-inner" },
             rows.length === 0
               ? h("div", { className: "scc-empty" },
