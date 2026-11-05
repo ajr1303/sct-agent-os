@@ -239,7 +239,29 @@
       } catch (e) {}
     }
 
-    function tick() { rebrand(); injectNav(); }
+    // Rename nav items + page titles: Cron -> Scheduled Jobs, Profiles -> Agents,
+    // and the leftover "Sessions" page title on the Overview landing -> Overview.
+    function relabel() {
+      try {
+        var w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+        var n;
+        while ((n = w.nextNode())) {
+          var t = norm(n.nodeValue);
+          if (t !== "cron" && t !== "profiles" && t !== "sessions") continue;
+          var el = n.parentElement; if (!el) continue;
+          if (el.id === "sc-overview-nav" || (el.closest && el.closest("#sc-overview-nav"))) continue;
+          var r = el.getBoundingClientRect(); if (!r.width) continue;
+          var inSidebar = r.left < 240;
+          var inHeader = r.top < 150 && r.left >= 240 && r.width < 700;
+          if (!inSidebar && !inHeader) continue;
+          if (t === "cron") n.nodeValue = "Scheduled Jobs";
+          else if (t === "profiles") n.nodeValue = "Agents";
+          else if (t === "sessions" && inHeader && location.pathname === "/") n.nodeValue = "Overview";
+        }
+      } catch (e) {}
+    }
+
+    function tick() { rebrand(); injectNav(); relabel(); }
     try {
       var mo = new MutationObserver(function () {
         if (tick._p) return; tick._p = setTimeout(function () { tick._p = null; tick(); }, 120);
