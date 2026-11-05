@@ -1,12 +1,18 @@
-.scagent-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));padding:24px}
-.scagent-wide{grid-column:1/-1}
-.scagent-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--color-border,rgba(255,255,255,.1));font-size:13px}
-.scagent-row:last-child{border-bottom:0}
-.scagent-muted{opacity:.65}
-.scagent-big{font-size:28px;font-weight:600;line-height:1.1}
+.scagent-wrap{padding:24px;display:flex;flex-direction:column;gap:20px}
+.scagent-hero{border:1px solid var(--color-border,rgba(255,255,255,.12));border-left:3px solid var(--color-primary,#25c9ee);padding:18px 20px}
+.scagent-hero-title{font-size:22px;font-weight:600;letter-spacing:.01em}
+.scagent-hero-sub{opacity:.65;font-size:13px;margin-top:4px}
+.scagent-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.scagent-card{border:1px solid var(--color-border,rgba(255,255,255,.12));background:var(--color-card,rgba(255,255,255,.02))}
+.scagent-card-h{padding:10px 14px;border-bottom:1px solid var(--color-border,rgba(255,255,255,.12));text-transform:uppercase;letter-spacing:.07em;font-size:12px;opacity:.8}
+.scagent-card-b{padding:14px}
+.scagent-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 0;font-size:13px}
+.scagent-big{font-size:30px;font-weight:600;line-height:1.1;color:var(--color-primary,#25c9ee)}
+.scagent-muted{opacity:.6;font-size:12px}
 .scagent-links{display:flex;flex-wrap:wrap;gap:8px}
-.scagent-links a{padding:6px 12px;border:1px solid var(--color-border,rgba(255,255,255,.2));text-transform:uppercase;letter-spacing:.06em;font-size:12px;text-decoration:none;color:inherit}
+.scagent-links a{padding:6px 12px;border:1px solid var(--color-border,rgba(255,255,255,.22));text-transform:uppercase;letter-spacing:.06em;font-size:12px;text-decoration:none;color:inherit}
 .scagent-links a:hover{border-color:var(--color-primary,#25c9ee);color:var(--color-primary,#25c9ee)}
 .scagent-pill{display:inline-block;padding:2px 8px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;border:1px solid currentColor}
 .scagent-ok{color:var(--color-success,#4ade80)}
 .scagent-bad{color:var(--color-destructive,#ff7a73)}
+.scagent-foot{opacity:.5;font-size:11px}
