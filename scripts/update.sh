@@ -9,4 +9,5 @@ for plug in suburban-cyber suburban-chat; do
   docker compose exec -T hermes hermes plugins enable "$plug" || true
 done
 docker compose restart hermes
+docker compose restart proxy
 echo "Updated. Hard-refresh the dashboard (Ctrl+Shift+R)."
