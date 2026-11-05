@@ -24,3 +24,5 @@
 .scc-input:focus{border-color:var(--color-primary,#25c9ee)}
 .scc-send{padding:0 20px;height:42px;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;background:var(--color-primary,#25c9ee);color:var(--color-primary-foreground,#04202a);border:1px solid var(--color-primary,#25c9ee);border-radius:10px;cursor:pointer}
 .scc-send:disabled{opacity:.4;cursor:default}
+.scc-typing{opacity:.6;letter-spacing:2px;animation:scc-pulse 1.2s ease-in-out infinite}
+@keyframes scc-pulse{0%,100%{opacity:.35}50%{opacity:.8}}
