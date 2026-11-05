@@ -84,19 +84,20 @@
       try { console.error(TAG, "register failed", e); } catch (e2) {}
     }
 
-    // ---- Branding: rename sidebar wordmark + tab title. Isolated so it can never block registration.
+    // ---- Branding: rename the sidebar wordmark + tab title. Isolated so it can never block registration.
     try {
-      var applied = false;
+      function norm(x){ return (x || "").replace(/\s+/g, " ").trim().toLowerCase(); }
       function rebrand() {
         try {
-          if (/hermes/i.test(document.title)) document.title = BRAND + " Agent OS";
-          var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
-          var node;
-          while ((node = walker.nextNode())) {
-            if (!/^\s*hermes\s+agent\s*$/i.test(node.nodeValue)) continue;
-            var el = node.parentElement; if (!el) continue;
+          if (!/suburban/i.test(document.title)) document.title = BRAND + " Agent OS";
+          var all = document.querySelectorAll("a,div,span,h1,h2,p");
+          for (var i = 0; i < all.length; i++) {
+            var el = all[i];
+            if (el.childElementCount > 3) continue;
+            var t = norm(el.textContent);
+            if (t !== "hermes agent" && t !== "hermesagent") continue;
             var r = el.getBoundingClientRect();
-            if (r.left < 320 && r.top < 180) { node.nodeValue = BRAND; applied = true; }
+            if (r.top < 220 && r.left < 360 && r.width < 420) { el.textContent = BRAND; }
           }
         } catch (e) {}
       }
@@ -107,6 +108,8 @@
       if (document.body) {
         mo.observe(document.body, { childList: true, subtree: true, characterData: true });
         rebrand();
+        setTimeout(rebrand, 400);
+        setTimeout(rebrand, 1200);
       }
       console.info(TAG, "branding active");
     } catch (e) {
