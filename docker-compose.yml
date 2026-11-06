@@ -94,10 +94,14 @@ services:
     mem_limit: 1G
 
   # Bundled agent-orchestration control plane (our own fresh Paperclip, never a
-  # migration). Under the "control-plane" profile. Runs HEADLESS: local_trusted
-  # mode (no login), reachable only on the compose network — the dashboard is the
-  # only cockpit. Single-container build with embedded DB (quickstart topology).
+  # migration). Under the "control-plane" profile. Reachable only on the compose
+  # network — the dashboard is the cockpit. Single-container build, embedded DB.
   # NOTE: builds from source (Node monorepo) — the first build is heavy.
+  #
+  # Must run "authenticated" with a LAN bind: local_trusted forces a loopback
+  # bind (container-local only), which the connectors service can't reach across
+  # containers. Private exposure keeps it off the public internet. Agent/attention
+  # reads need a board API key (authenticated mode); health is open for the bridge.
   paperclip:
     profiles: ["control-plane"]
     build:
@@ -111,16 +115,23 @@ services:
     environment:
       HOST: "0.0.0.0"
       PAPERCLIP_HOME: "/paperclip"
-      # Headless: only Agent OS (over the compose network) talks to it.
-      PAPERCLIP_DEPLOYMENT_MODE: "local_trusted"
+      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
+      PAPERCLIP_BIND: "lan"
       PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
       PAPERCLIP_PUBLIC_URL: "http://paperclip:3100"
+      PAPERCLIP_ALLOWED_HOSTNAMES: "paperclip,localhost,127.0.0.1"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?run ./install.sh first}
       PAPERCLIP_TOOL_ACTION_SIGNING_SECRET: ${PAPERCLIP_TOOL_ACTION_SIGNING_SECRET:?run ./install.sh first}
     volumes:
       - paperclip-data:/paperclip
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3100/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
     expose:
       - "3100"
     mem_limit: 2G
