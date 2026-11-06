@@ -880,13 +880,10 @@ def orchestration_overview(_auth=Depends(require_auth)):
         out["errors"].append("No company found in Paperclip yet.")
         return out
     try:
-        ag = _pc_get("/api/companies/" + str(cid) + "/managed-agent-profiles")
-        items = ag.get("profiles") if isinstance(ag, dict) else None
-        if items is None:
-            items = ag.get("data") if isinstance(ag, dict) else None
-        if items is None:
-            items = ag if isinstance(ag, list) else []
-        out["agents"] = [{"id": a.get("id"), "name": a.get("name") or a.get("displayName") or a.get("agentName") or "Agent",
+        ag = _pc_get("/api/companies/" + str(cid) + "/agents")
+        items = ag if isinstance(ag, list) else (ag.get("agents") or ag.get("data") or [])
+        out["agents"] = [{"id": a.get("id"),
+                          "name": a.get("name") or a.get("agentName") or a.get("displayName") or "Agent",
                           "status": a.get("status") or a.get("state")} for a in items][:50]
     except Exception as e:
         out["errors"].append("agents: " + str(e)[:120])
