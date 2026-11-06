@@ -15,8 +15,11 @@
     var hooks = SDK.hooks || {};
     var useState = hooks.useState, useEffect = hooks.useEffect;
 
-    function api(path) {
-      return fetch("/api/connectors" + path, { credentials: "same-origin" }).then(function (r) {
+    function api(path, opts) {
+      opts = opts || {};
+      opts.credentials = "same-origin";
+      opts.headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
+      return fetch("/api/connectors" + path, opts).then(function (r) {
         return r.text().then(function (txt) {
           var j = {}; try { j = txt ? JSON.parse(txt) : {}; } catch (e) {}
           if (!r.ok) throw new Error((j && j.error) || ("HTTP " + r.status));
