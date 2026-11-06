@@ -20,5 +20,9 @@ for plug in suburban-cyber suburban-chat suburban-mail suburban-bookings suburba
 done
 docker compose restart hermes
 docker compose restart proxy
+# Ensure the periodic update-check cron exists (for installs that predate it).
+if command -v crontab >/dev/null 2>&1 && ! crontab -l 2>/dev/null | grep -q 'check-updates.sh'; then
+  { crontab -l 2>/dev/null; echo "17 */6 * * * $(pwd)/scripts/check-updates.sh # agent-os-managed"; } | crontab - && echo "Added update-check to cron"
+fi
 ./scripts/check-updates.sh 2>/dev/null || true   # refresh update status (clears the banner)
 echo "Updated to $(cat VERSION 2>/dev/null). Hard-refresh the dashboard (Ctrl+Shift+R)."
