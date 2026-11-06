@@ -87,10 +87,11 @@ DASHBOARD_BIND=$DASHBOARD_BIND
 DASHBOARD_PASSWORD=$(openssl rand -base64 18 | tr -dc A-Za-z0-9 | cut -c1-20)
 HONCHO_DB_PASSWORD=$(gen_secret)
 CONNECTORS_KEY=$(openssl rand -base64 32 | tr '+/' '-_')
+N8N_ENCRYPTION_KEY=$(openssl rand -hex 32)
 HERMES_TAG=latest
 HERMES_HOME_DIR=./data/hermes
 HERMES_MEM_LIMIT=3G
-COMPOSE_PROFILES=$([ "$MEMORY_MODE" = honcho ] && echo memory || echo "")
+COMPOSE_PROFILES=$([ "$MEMORY_MODE" = honcho ] && echo "memory,automation" || echo "automation")
 ENV
   mkdir -p data/hermes/dashboard-themes backups
   if [ "$MEMORY_MODE" = honcho ]; then write_honcho_env; write_honcho_json; fi
@@ -159,7 +160,7 @@ main() {
   write_env
   hermes_first_run
   start_stack
-  for plug in suburban-cyber suburban-chat suburban-mail suburban-bookings; do docker compose exec -T hermes hermes plugins enable "$plug" || warn "could not enable $plug plugin"; done
+  for plug in suburban-cyber suburban-chat suburban-mail suburban-bookings suburban-automations; do docker compose exec -T hermes hermes plugins enable "$plug" || warn "could not enable $plug plugin"; done
   install_cron
   say "Smoke test"
   ./scripts/smoke-test.sh || warn "Some checks failed - see above. Logs: docker compose logs"

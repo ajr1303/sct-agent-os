@@ -15,7 +15,7 @@ fi
 ./scripts/sync-branding.sh
 docker compose build connectors
 docker compose up -d
-for plug in suburban-cyber suburban-chat suburban-mail suburban-bookings; do
+for plug in suburban-cyber suburban-chat suburban-mail suburban-bookings suburban-automations; do
   docker compose exec -T hermes hermes plugins enable "$plug" || true
 done
 docker compose restart hermes

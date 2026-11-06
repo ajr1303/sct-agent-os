@@ -42,6 +42,7 @@ Re-running the command updates the checkout in place. For routine updates, prefe
 | **Chat** | The raw Hermes terminal is replaced by a clean, bubble-style chatbot. |
 | **Mailboxes** | Connect multiple email accounts (Gmail, Microsoft 365, any hosted-domain IMAP) and see combined unread/preview in the dashboard. Credentials encrypted at rest. |
 | **Bookings** | Connect a scheduling app (Cal.com, Calendly, Acuity, Setmore, or a Google/Microsoft iCal link) and see combined upcoming appointments. Credentials encrypted at rest. |
+| **Automations** | A bundled, self-hosted **n8n** engine (`automation` profile). The dashboard shows workflow + run status and opens the n8n builder in one click; local workflows run off the token meter. |
 | **Memory (optional)** | Honcho long-term memory (Postgres + pgvector + deriver), wired into Hermes. |
 | **Operations** | Watchdog cron (every 5 min), nightly database backup (03:30, 14-day retention), a smoke test, and an in-place updater. |
 
@@ -119,6 +120,18 @@ Each account is verified with a live API call before it's saved, credentials are
 
 > **Scope note:** this reads upcoming appointments across providers. Native OAuth sign-in for Google/Microsoft, and booking/reschedule actions for agents, are later additions.
 
+## Automations (bundled n8n)
+
+Agent OS ships its **own fresh [n8n](https://n8n.io) instance** (the `automation` compose profile, on by default). It is never a migration of an existing instance — it starts empty on a dedicated volume with its own encryption key.
+
+- **Builder:** n8n runs on port `5678` (bound to the same address as the dashboard). The **Automations** page opens it in one click.
+- **At a glance:** once you create an n8n API key (n8n › Settings › n8n API) and paste it into the Automations page, the dashboard shows your workflows (active/inactive), recent run status, and counts — read through n8n's public API via the connectors service, so the key stays server-side.
+- **Why local automations:** scheduled jobs, data moves, and glue work run on your server instead of going through the model on every step — that's the token-saving layer.
+
+To run without n8n, remove `automation` from `COMPOSE_PROFILES` in `.env` and `docker compose up -d`.
+
+> First run: open the builder once to create your owner account and the API key. Auto-provisioning that key (so the engine is zero-touch) is a planned enhancement. Native TLS/subdomain + single sign-on for n8n land with the HTTPS roadmap item.
+
 ## Memory (Honcho)
 
 With `--memory honcho` (the default when RAM ≥ 8 GB), the stack adds:
@@ -169,6 +182,7 @@ plugins/
   suburban-chat/            Bubble chat that replaces the terminal (dashboard plugin)
   suburban-mail/            Mailboxes page: connect email accounts, combined inbox (dashboard plugin)
   suburban-bookings/        Bookings page: connect a scheduling app, upcoming appointments (dashboard plugin)
+  suburban-automations/     Automations page: embedded n8n status, workflows, one-click open (dashboard plugin)
 docs/ARCHITECTURE.md        How the layer works, incl. the chat integration
 ```
 
@@ -186,7 +200,8 @@ Not yet done / known limitations:
 - The Overview **"Waiting on you" approvals** panel is **sample data**, clearly tagged — Hermes has no dashboard approvals API, so a real approval queue would be a separate build.
 - "Time saved" / review-schedule lines in the managed card are illustrative until wired to real sources.
 - A reverse proxy now serves the dashboard and brands the login page; HTTPS termination on that proxy is the next step.
-- The **Mailboxes** email connector is newly added (IMAP-based, multi-account); pending first end-to-end verification on the test VM. OAuth sign-in and agent send/triage actions are not built yet.
+- The **Mailboxes** email connector (IMAP, multi-account) and **Bookings** connector (Cal.com / Calendly / Acuity / Setmore / iCal) are verified live. OAuth sign-in and agent send/triage/booking actions are not built yet.
+- The bundled **n8n** automation engine runs on its own port with its own login (TLS/subdomain + SSO pending the HTTPS work); the API key that powers the dashboard view is pasted once (auto-provisioning planned).
 
 ## Roadmap
 

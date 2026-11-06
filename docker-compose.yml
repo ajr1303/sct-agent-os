@@ -48,11 +48,44 @@ services:
       CONNECTORS_KEY: ${CONNECTORS_KEY:?run ./install.sh first}
       HERMES_AUTH_URL: "http://hermes:9119/api/auth/me"
       CONNECTORS_DB: "/data/connectors.db"
+      N8N_INTERNAL_URL: "http://n8n:5678"
     volumes:
       - connectors-data:/data
     expose:
       - "8000"
     mem_limit: 256M
+
+  # Bundled automation engine (our own fresh n8n — never a migration of anyone's).
+  # Runs under the "automation" profile. Reached directly on :5678 for the editor
+  # (one-click "Open builder"); the dashboard reads workflow/run status through
+  # n8n's public API via the connectors service (internal, http://n8n:5678).
+  n8n:
+    profiles: ["automation"]
+    image: n8nio/n8n:${N8N_TAG:-latest}
+    container_name: agent-os-n8n
+    restart: unless-stopped
+    ports:
+      - "${DASHBOARD_BIND:-127.0.0.1}:5678:5678"
+    environment:
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?run ./install.sh first}
+      N8N_HOST: "0.0.0.0"
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: "http"
+      # Login cookie must be allowed over plain HTTP on a LAN IP (no TLS yet).
+      N8N_SECURE_COOKIE: "false"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_HIRING_BANNER_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      GENERIC_TIMEZONE: ${N8N_TIMEZONE:-America/New_York}
+    volumes:
+      - n8n-data:/home/node/.n8n
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5678/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    mem_limit: 1G
 
   honcho-db:
     profiles: ["memory"]
@@ -113,3 +146,4 @@ services:
 volumes:
   honcho-pgdata:
   connectors-data:
+  n8n-data:

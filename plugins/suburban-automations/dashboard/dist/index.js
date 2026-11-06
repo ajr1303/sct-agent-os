@@ -1,0 +1,221 @@
+(function () {
+  "use strict";
+  var TAG = "[suburban-automations]";
+
+  function whenReady(cb, tries) {
+    tries = tries || 0;
+    var P = window.__HERMES_PLUGINS__, S = window.__HERMES_PLUGIN_SDK__;
+    if (P && S && S.React) { cb(P, S); return; }
+    if (tries > 200) { try { console.warn(TAG, "SDK not ready"); } catch (e) {} return; }
+    setTimeout(function () { whenReady(cb, tries + 1); }, 50);
+  }
+
+  whenReady(function (PLUGINS, SDK) {
+    var h = SDK.React.createElement;
+    var hooks = SDK.hooks || {};
+    var useState = hooks.useState, useEffect = hooks.useEffect;
+
+    function api(path, opts) {
+      opts = opts || {};
+      opts.credentials = "same-origin";
+      opts.headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
+      return fetch("/api/connectors" + path, opts).then(function (r) {
+        return r.text().then(function (txt) {
+          var j = {}; try { j = txt ? JSON.parse(txt) : {}; } catch (e) {}
+          if (!r.ok) throw new Error((j && j.error) || ("HTTP " + r.status));
+          return j;
+        });
+      });
+    }
+
+    // n8n editor runs on :5678 of whatever host the dashboard is on.
+    function n8nUrl() { return location.protocol + "//" + location.hostname + ":5678/"; }
+    function openN8n() { try { window.open(n8nUrl(), "_blank", "noopener"); } catch (e) {} }
+
+    function whenStr(iso) {
+      try {
+        var d = new Date(iso); if (isNaN(d.getTime())) return "";
+        var secs = Math.floor((Date.now() - d.getTime()) / 1000);
+        if (secs < 60) return secs + "s ago";
+        if (secs < 3600) return Math.floor(secs / 60) + "m ago";
+        if (secs < 86400) return Math.floor(secs / 3600) + "h ago";
+        return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      } catch (e) { return ""; }
+    }
+
+    function Automations() {
+      var s;
+      s = useState(null);  var status = s[0], setStatus = s[1];
+      s = useState(null);  var wf = s[0], setWf = s[1];
+      s = useState(null);  var ex = s[0], setEx = s[1];
+      s = useState("");    var apiKey = s[0], setApiKey = s[1];
+      s = useState(false); var busy = s[0], setBusy = s[1];
+      s = useState(null);  var err = s[0], setErr = s[1];
+
+      function loadData() {
+        api("/automations/workflows").then(setWf).catch(function () { setWf(null); });
+        api("/automations/executions").then(setEx).catch(function () { setEx(null); });
+      }
+      function loadStatus() {
+        return api("/automations/status").then(function (st) {
+          setStatus(st);
+          if (st.connected) loadData();
+          return st;
+        }).catch(function (e) { setErr(String(e.message || e)); });
+      }
+      useEffect(function () {
+        loadStatus();
+        var t = setInterval(loadStatus, 30000);
+        return function () { clearInterval(t); };
+      }, []);
+
+      function connect(e) {
+        if (e) e.preventDefault();
+        setErr(null);
+        if (!apiKey.trim()) { setErr("Paste the n8n API key."); return; }
+        setBusy(true);
+        api("/automations/connect", { method: "POST", body: JSON.stringify({ api_key: apiKey }) })
+          .then(function () { setBusy(false); setApiKey(""); loadStatus(); })
+          .catch(function (e2) { setBusy(false); setErr(String(e2.message || e2)); });
+      }
+      function disconnect() {
+        api("/automations/connection", { method: "DELETE" }).then(function () { setWf(null); setEx(null); loadStatus(); }).catch(function () {});
+      }
+
+      var up = status ? status.n8n_up : null;
+      var connected = status ? status.connected : false;
+
+      function header() {
+        return h("div", { className: "sa-top" },
+          h("div", null,
+            h("div", { className: "sa-h1" }, "Automations"),
+            h("div", { className: "sa-sub" }, "Your own n8n automation engine — build workflows once and let them run locally, off the token meter.")),
+          h("div", { className: "sa-top-right" },
+            h("span", { className: "sa-status" },
+              up == null ? h("span", null, h("span", { className: "sa-dot sa-mut" }), "checking…")
+                : up ? h("span", null, h("span", { className: "sa-dot sa-ok" }), "Engine running")
+                : h("span", null, h("span", { className: "sa-dot sa-bad" }), "Engine starting…")),
+            h("button", { className: "sa-btn sa-primary", disabled: !up, onClick: openN8n }, "Open builder ↗")));
+      }
+
+      // not connected yet -> onboarding
+      function connectPanel() {
+        return h("div", { className: "sa-panel" },
+          h("div", { className: "sa-panel-h" }, "CONNECT YOUR AUTOMATION ENGINE"),
+          h("div", { className: "sa-steps" },
+            h("div", { className: "sa-step" }, h("span", { className: "sa-num" }, "1"),
+              h("span", null, h("b", null, "Open the builder"), " above. First time, create your owner account.")),
+            h("div", { className: "sa-step" }, h("span", { className: "sa-num" }, "2"),
+              h("span", null, "In n8n go to ", h("b", null, "Settings › n8n API"), " and create an API key.")),
+            h("div", { className: "sa-step" }, h("span", { className: "sa-num" }, "3"),
+              h("span", null, "Paste the key here so this dashboard can show what's running."))),
+          h("form", { className: "sa-connect", onSubmit: connect },
+            h("input", { className: "sa-input", type: "password", value: apiKey, placeholder: "n8n API key",
+              autoComplete: "new-password", onChange: function (e) { setApiKey(e.target.value); } }),
+            h("button", { className: "sa-btn sa-primary", type: "submit", disabled: busy }, busy ? "Connecting…" : "Connect")),
+          err ? h("div", { className: "sa-msg sa-err" }, err) : null);
+      }
+
+      function statCard(label, val, accent) {
+        return h("div", { className: "sa-stat" },
+          h("div", { className: "sa-stat-val" + (accent ? " sa-accent" : "") }, val),
+          h("div", { className: "sa-stat-label" }, label));
+      }
+
+      // connected -> workflows + executions
+      function dashboard() {
+        var wfs = wf && wf.workflows ? wf.workflows : [];
+        var exs = ex && ex.executions ? ex.executions : [];
+        return h("div", { className: "sa-cols" },
+          h("div", { className: "sa-col" },
+            h("div", { className: "sa-stats" },
+              statCard("Workflows", wf ? String(wf.count) : "—"),
+              statCard("Active", wf ? String(wf.active) : "—", true)),
+            h("div", { className: "sa-panel" },
+              h("div", { className: "sa-panel-h" }, "WORKFLOWS"),
+              wf == null ? h("div", { className: "sa-empty" }, "Loading…")
+                : wfs.length === 0 ? h("div", { className: "sa-empty" }, "No workflows yet. Open the builder to create one.")
+                : h("div", { className: "sa-list" }, wfs.map(function (w, i) {
+                    return h("div", { className: "sa-wf", key: i },
+                      h("span", { className: "sa-wf-name" }, w.name),
+                      h("span", { className: "sa-wf-state " + (w.active ? "on" : "off") }, w.active ? "active" : "inactive"));
+                  })))),
+          h("div", { className: "sa-col" },
+            h("div", { className: "sa-panel" },
+              h("div", { className: "sa-panel-h" }, "RECENT RUNS"),
+              ex == null ? h("div", { className: "sa-empty" }, "Loading…")
+                : exs.length === 0 ? h("div", { className: "sa-empty" }, "No runs yet.")
+                : h("div", { className: "sa-list" }, exs.map(function (r, i) {
+                    var st = (r.status || "").toLowerCase();
+                    var cls = st === "success" ? "ok" : (st === "error" || st === "crashed" ? "bad" : "mut");
+                    return h("div", { className: "sa-run", key: i },
+                      h("span", { className: "sa-run-dot sa-" + cls }),
+                      h("span", { className: "sa-run-name" }, r.workflow),
+                      h("span", { className: "sa-run-status " + cls }, r.status || "—"),
+                      h("span", { className: "sa-run-time" }, whenStr(r.started)));
+                  }))),
+            h("div", { className: "sa-managed" },
+              h("div", { className: "sa-managed-row" }, h("span", { className: "sa-muted" }, "Engine"), h("span", null, "n8n (bundled)")),
+              h("div", { className: "sa-managed-row" }, h("span", { className: "sa-muted" }, "API key"), h("span", null, "connected")),
+              h("button", { className: "sa-btn sa-ghost sa-dc", onClick: disconnect }, "Disconnect"))));
+      }
+
+      return h("div", { className: "sa-wrap" },
+        header(),
+        up === false ? h("div", { className: "sa-note" }, "The automation engine is still starting — this can take a minute after a deploy. The status dot turns green when it's ready.") : null,
+        (up && !connected) ? connectPanel() : null,
+        connected ? dashboard() : null,
+        h("div", { className: "sa-foot" }, "Local automations run on your server, not through the model — use them for scheduled jobs, data moves, and glue work to save tokens.")
+      );
+    }
+
+    try { PLUGINS.register("suburban-automations", Automations); console.info(TAG, "registered"); }
+    catch (e) { try { console.error(TAG, "register failed", e); } catch (e2) {} }
+
+    // ---- Inject an "Automations" nav item ----
+    function norm(x) { return (x || "").replace(/\s+/g, " ").trim().toLowerCase(); }
+    var NAV_LABELS = { chat: 1, sessions: 1, files: 1, models: 1, logs: 1, cron: 1, skills: 1, plugins: 1, config: 1, overview: 1, mailboxes: 1, bookings: 1 };
+    function navTemplate() {
+      var links = document.querySelectorAll("a[href]");
+      for (var i = 0; i < links.length; i++) {
+        var t = norm(links[i].textContent);
+        if (NAV_LABELS[t]) { var r = links[i].getBoundingClientRect(); if (r.left < 360) return links[i]; }
+      }
+      return null;
+    }
+    function href() { return "/automations" + (location.search || ""); }
+    function markActive() {
+      try {
+        var el = document.getElementById("sa-nav"); if (!el) return;
+        el.setAttribute("href", href());
+        var on = location.pathname === "/automations";
+        el.style.borderLeft = on ? "2px solid var(--color-primary,#25c9ee)" : "2px solid transparent";
+        el.style.background = on ? "var(--color-accent,rgba(37,201,238,.08))" : "";
+      } catch (e) {}
+    }
+    function injectNav() {
+      try {
+        if (document.getElementById("sa-nav")) { markActive(); return; }
+        var tmpl = navTemplate(); if (!tmpl || !tmpl.parentElement) return;
+        var tmplLabel = norm(tmpl.textContent);
+        var clone = tmpl.cloneNode(true);
+        clone.id = "sa-nav";
+        clone.setAttribute("href", href()); try { clone.href = href(); } catch (e) {}
+        var w = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT, null), n;
+        while ((n = w.nextNode())) { if (norm(n.nodeValue) === tmplLabel) { n.nodeValue = "Automations"; break; } }
+        if (tmpl.nextSibling) tmpl.parentElement.insertBefore(clone, tmpl.nextSibling);
+        else tmpl.parentElement.appendChild(clone);
+        markActive();
+      } catch (e) {}
+    }
+    function tick() { injectNav(); }
+    try {
+      var mo = new MutationObserver(function () { if (tick._p) return; tick._p = setTimeout(function () { tick._p = null; tick(); }, 150); });
+      if (document.body) {
+        mo.observe(document.body, { childList: true, subtree: true });
+        window.addEventListener("popstate", markActive);
+        tick(); setTimeout(tick, 500); setTimeout(tick, 1500);
+      }
+    } catch (e) {}
+  });
+})();

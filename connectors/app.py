@@ -84,6 +84,14 @@ def get_db():
             created_at TEXT NOT NULL
         )
     """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS automation (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            base_url TEXT NOT NULL,
+            secret BLOB NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
     return con
 
 
@@ -570,6 +578,121 @@ def bookings_summary(_auth=Depends(require_auth)):
         accounts.append(acc)
     combined.sort(key=lambda x: x["start"])
     return {"account_count": len(accounts), "accounts": accounts, "next": combined[:8]}
+
+
+# ===========================================================================
+# AUTOMATIONS (bundled n8n)
+# The dashboard reads workflow/run status through n8n's public API. The API key
+# is stored encrypted here; n8n is reached internally (never exposed to browser).
+# ===========================================================================
+N8N_INTERNAL_URL = os.environ.get("N8N_INTERNAL_URL", "http://n8n:5678").rstrip("/")
+
+
+def _n8n_up():
+    try:
+        return _http_get(N8N_INTERNAL_URL + "/healthz").status_code == 200
+    except Exception:
+        return False
+
+
+def _n8n_conn():
+    with closing(get_db()) as con:
+        row = con.execute("SELECT base_url, secret FROM automation ORDER BY id DESC LIMIT 1").fetchone()
+    if not row:
+        return None
+    return {"base_url": row[0].rstrip("/"), "api_key": fernet.decrypt(row[1]).decode()}
+
+
+def _n8n_api(path, params=None):
+    conn = _n8n_conn()
+    if not conn:
+        raise PermissionError("No n8n API key connected yet.")
+    r = _http_get(conn["base_url"] + path, headers={"X-N8N-API-KEY": conn["api_key"]}, params=params or {})
+    if r.status_code in (401, 403):
+        raise PermissionError("n8n rejected the stored API key.")
+    r.raise_for_status()
+    return r.json()
+
+
+class N8nConnect(BaseModel):
+    api_key: str
+
+
+@app.get("/automations/status")
+def automations_status(_auth=Depends(require_auth)):
+    try:
+        connected = bool(_n8n_conn())
+    except Exception:
+        connected = False
+    return {"n8n_up": _n8n_up(), "connected": connected}
+
+
+@app.post("/automations/connect")
+def automations_connect(c: N8nConnect, _auth=Depends(require_auth)):
+    key = (c.api_key or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="Enter the n8n API key.")
+    try:
+        r = _http_get(N8N_INTERNAL_URL + "/api/v1/workflows",
+                      headers={"X-N8N-API-KEY": key}, params={"limit": 1})
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Could not reach n8n: " + str(e)[:140])
+    if r.status_code in (401, 403):
+        raise HTTPException(status_code=400, detail="n8n rejected that API key. Copy it from n8n › Settings › n8n API.")
+    try:
+        r.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="n8n returned an error: " + str(e)[:140])
+    with closing(get_db()) as con:
+        con.execute("DELETE FROM automation")
+        con.execute("INSERT INTO automation (base_url, secret, created_at) VALUES (?,?,?)",
+                    (N8N_INTERNAL_URL, fernet.encrypt(key.encode()), _now().isoformat()))
+        con.commit()
+    return {"ok": True}
+
+
+@app.delete("/automations/connection")
+def automations_disconnect(_auth=Depends(require_auth)):
+    with closing(get_db()) as con:
+        con.execute("DELETE FROM automation")
+        con.commit()
+    return {"ok": True}
+
+
+@app.get("/automations/workflows")
+def automations_workflows(_auth=Depends(require_auth)):
+    try:
+        data = _n8n_api("/api/v1/workflows", params={"limit": 100})
+    except PermissionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Could not reach n8n: " + str(e)[:140])
+    wfs = data.get("data") or []
+    out = [{"id": w.get("id"), "name": w.get("name") or "Workflow", "active": bool(w.get("active"))} for w in wfs]
+    return {"count": len(out), "active": sum(1 for w in out if w["active"]), "workflows": out}
+
+
+@app.get("/automations/executions")
+def automations_executions(_auth=Depends(require_auth)):
+    try:
+        wfdata = _n8n_api("/api/v1/workflows", params={"limit": 100})
+        exdata = _n8n_api("/api/v1/executions", params={"limit": 15})
+    except PermissionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Could not reach n8n: " + str(e)[:140])
+    names = {}
+    for w in (wfdata.get("data") or []):
+        names[str(w.get("id"))] = w.get("name")
+    out = []
+    for ex in (exdata.get("data") or []):
+        out.append({
+            "id": ex.get("id"),
+            "workflow": names.get(str(ex.get("workflowId"))) or "Workflow",
+            "status": ex.get("status") or ("success" if ex.get("finished") else "running"),
+            "started": ex.get("startedAt"),
+        })
+    return {"executions": out}
 
 
 @app.exception_handler(HTTPException)
