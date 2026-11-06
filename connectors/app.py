@@ -811,9 +811,14 @@ def orchestration_disconnect(_auth=Depends(require_auth)):
     return {"ok": True}
 
 
+AGENT_ROLES = {"ceo", "cto", "cmo", "cfo", "security", "engineer",
+               "designer", "pm", "qa", "devops", "researcher", "general"}
+
+
 class AgentCreate(BaseModel):
     name: str
     instructions: str = ""
+    role: str = "general"
 
 
 @app.post("/orchestration/agents")
@@ -845,7 +850,10 @@ def create_agent(a: AgentCreate, _auth=Depends(require_auth)):
     }
     if a.instructions.strip():
         adapter_config["instructions"] = a.instructions.strip()
-    body = {"name": name, "adapterType": "hermes_gateway", "adapterConfig": adapter_config}
+    role = (a.role or "general").strip().lower()
+    if role not in AGENT_ROLES:
+        role = "general"
+    body = {"name": name, "role": role, "adapterType": "hermes_gateway", "adapterConfig": adapter_config}
 
     try:
         with httpx.Client(timeout=45.0, follow_redirects=True) as c:
@@ -862,6 +870,24 @@ def create_agent(a: AgentCreate, _auth=Depends(require_auth)):
     except Exception:
         data = {}
     return {"ok": True, "agent": {"id": data.get("id"), "name": data.get("name") or name}}
+
+
+@app.delete("/orchestration/agents/{aid}")
+def delete_agent(aid: str, _auth=Depends(require_auth)):
+    key = _pc_key()
+    if not key:
+        raise HTTPException(status_code=400, detail="Connect Paperclip first (board API key).")
+    try:
+        with httpx.Client(timeout=30.0, follow_redirects=True) as c:
+            r = c.request("DELETE", PAPERCLIP_URL + "/api/agents/" + aid,
+                          headers={"Authorization": "Bearer " + key})
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Could not reach Paperclip: " + str(e)[:140])
+    if r.status_code in (401, 403):
+        raise HTTPException(status_code=400, detail="Paperclip rejected the request (auth).")
+    if r.status_code >= 400:
+        raise HTTPException(status_code=400, detail="Paperclip could not delete the agent: " + r.text[:200])
+    return {"ok": True}
 
 
 @app.get("/orchestration/overview")
@@ -884,7 +910,8 @@ def orchestration_overview(_auth=Depends(require_auth)):
         items = ag if isinstance(ag, list) else (ag.get("agents") or ag.get("data") or [])
         out["agents"] = [{"id": a.get("id"),
                           "name": a.get("name") or a.get("agentName") or a.get("displayName") or "Agent",
-                          "status": a.get("status") or a.get("state")} for a in items][:50]
+                          "status": a.get("status") or a.get("state"),
+                          "role": a.get("role")} for a in items][:50]
     except Exception as e:
         out["errors"].append("agents: " + str(e)[:120])
     try:

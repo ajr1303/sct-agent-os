@@ -52,8 +52,10 @@
       s = useState(false); var showCreate = s[0], setShowCreate = s[1];
       s = useState("");   var cName = s[0], setCName = s[1];
       s = useState("");   var cInstr = s[0], setCInstr = s[1];
+      s = useState("general"); var cRole = s[0], setCRole = s[1];
       s = useState(false); var cBusy = s[0], setCBusy = s[1];
       s = useState(null); var cErr = s[0], setCErr = s[1];
+      s = useState(null); var delId = s[0], setDelId = s[1];
 
       function load() {
         api("/orchestration/status").then(function (st) {
@@ -84,10 +86,12 @@
         setCErr(null);
         if (!cName.trim()) { setCErr("Enter an agent name."); return; }
         setCBusy(true);
-        api("/orchestration/agents", { method: "POST", body: JSON.stringify({ name: cName, instructions: cInstr }) })
-          .then(function () { setCBusy(false); setShowCreate(false); setCName(""); setCInstr(""); load(); })
+        api("/orchestration/agents", { method: "POST", body: JSON.stringify({ name: cName, instructions: cInstr, role: cRole }) })
+          .then(function () { setCBusy(false); setShowCreate(false); setCName(""); setCInstr(""); setCRole("general"); load(); })
           .catch(function (e2) { setCBusy(false); setCErr(String(e2.message || e2)); });
       }
+      function delAgent(id) { setDelId(null); api("/orchestration/agents/" + id, { method: "DELETE" }).then(function () { load(); }).catch(function () {}); }
+      var ROLES = [["general", "General"], ["ceo", "CEO"], ["cto", "CTO"], ["cmo", "CMO"], ["cfo", "CFO"], ["security", "Security"], ["engineer", "Engineer"], ["designer", "Designer"], ["pm", "PM"], ["qa", "QA"], ["devops", "DevOps"], ["researcher", "Researcher"]];
 
       var up = status ? status.paperclip_up : null;
       var mode = status ? status.mode : null;
@@ -145,11 +149,14 @@
             h("span", null, "MANAGED AGENTS"),
             h("button", { className: "so-btn so-primary so-sm", onClick: function () { setShowCreate(!showCreate); setCErr(null); } }, showCreate ? "Close" : "+ Create agent")),
           showCreate ? h("form", { className: "so-createform", onSubmit: createAgent },
-            h("input", { className: "so-input", value: cName, placeholder: "Agent name (e.g. Front Desk)",
-              onChange: function (e) { setCName(e.target.value); } }),
+            h("div", { className: "so-createrow" },
+              h("input", { className: "so-input", value: cName, placeholder: "Agent name (e.g. Front Desk)",
+                onChange: function (e) { setCName(e.target.value); } }),
+              h("select", { className: "so-input so-rolesel", value: cRole, onChange: function (e) { setCRole(e.target.value); } },
+                ROLES.map(function (r) { return h("option", { key: r[0], value: r[0] }, r[1]); }))),
             h("textarea", { className: "so-input so-ta", value: cInstr, placeholder: "Instructions (optional) — what should this agent do?",
               onChange: function (e) { setCInstr(e.target.value); } }),
-            h("div", { className: "so-createhint" }, "Creates a Paperclip-managed agent that runs on your Hermes engine."),
+            h("div", { className: "so-createhint" }, "Creates a Paperclip-managed agent that runs on your Hermes engine. Pick CEO to make it your lead."),
             cErr ? h("div", { className: "so-msg so-err" }, cErr) : null,
             h("div", { className: "so-createactions" },
               h("button", { type: "submit", className: "so-btn so-primary", disabled: cBusy }, cBusy ? "Creating…" : "Create agent"))) : null,
@@ -157,9 +164,16 @@
             : (ov.errors && ov.errors.length) ? h("div", { className: "so-empty" }, "Paperclip: " + ov.errors.join("; "))
             : agents.length === 0 ? h("div", { className: "so-empty" }, "No managed agents yet. Use + Create agent to make one.")
             : h("div", { className: "so-list" }, agents.map(function (a, i) {
-                return h("div", { className: "so-agent", key: i },
+                return h("div", { className: "so-agent", key: a.id || i },
                   h("span", { className: "so-agent-name" }, a.name),
-                  a.status ? h("span", { className: "so-agent-state" }, String(a.status)) : null);
+                  h("span", { className: "so-agent-right" },
+                    a.role ? h("span", { className: "so-agent-role" + (a.role === "ceo" ? " ceo" : "") }, String(a.role).toUpperCase()) : null,
+                    a.status ? h("span", { className: "so-agent-state" }, String(a.status)) : null,
+                    delId === a.id
+                      ? h("span", { className: "so-confirm" },
+                          h("button", { className: "so-x", onClick: function () { delAgent(a.id); } }, "Delete"),
+                          h("button", { className: "so-x so-x-mut", onClick: function () { setDelId(null); } }, "Cancel"))
+                      : h("button", { className: "so-iconbtn", title: "Delete agent", onClick: function () { setDelId(a.id); } }, "✕")));
               }))) : null,
 
         up && connected && mode === "external" ? h("div", { className: "so-note so-obs" },
