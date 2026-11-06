@@ -118,12 +118,19 @@ services:
       PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
       PAPERCLIP_BIND: "lan"
       PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
-      PAPERCLIP_PUBLIC_URL: "http://paperclip:3100"
-      PAPERCLIP_ALLOWED_HOSTNAMES: "paperclip,localhost,127.0.0.1"
+      # The URL you reach the Paperclip UI at in a browser (used for auth cookies).
+      # Set to your LAN URL in .env, e.g. http://10.100.50.250:3100.
+      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://paperclip:3100}"
+      # Must include "paperclip" (the internal name the dashboard bridge uses) plus
+      # the host you browse to. Override in .env to add your LAN IP.
+      PAPERCLIP_ALLOWED_HOSTNAMES: "${PAPERCLIP_ALLOWED_HOSTNAMES:-paperclip,localhost,127.0.0.1}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?run ./install.sh first}
       PAPERCLIP_TOOL_ACTION_SIGNING_SECRET: ${PAPERCLIP_TOOL_ACTION_SIGNING_SECRET:?run ./install.sh first}
+    # Published so you can open the Paperclip UI once to create a board API key.
+    ports:
+      - "${DASHBOARD_BIND:-127.0.0.1}:3100:3100"
     volumes:
       - paperclip-data:/paperclip
     healthcheck:

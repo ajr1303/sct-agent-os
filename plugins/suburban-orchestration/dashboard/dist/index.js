@@ -36,16 +36,22 @@
       return found ? sum : null;
     }
 
+    function pcUrl() { return location.protocol + "//" + location.hostname + ":3100/"; }
+    function openPc() { try { window.open(pcUrl(), "_blank", "noopener"); } catch (e) {} }
+
     function Orchestration() {
       var s;
       s = useState(null); var status = s[0], setStatus = s[1];
       s = useState(null); var ov = s[0], setOv = s[1];
+      s = useState("");   var apiKey = s[0], setApiKey = s[1];
+      s = useState(false); var busy = s[0], setBusy = s[1];
+      s = useState(null); var err = s[0], setErr = s[1];
 
       function load() {
         api("/orchestration/status").then(function (st) {
           setStatus(st);
-          if (st.paperclip_up) api("/orchestration/overview").then(setOv).catch(function () {});
-        }).catch(function () { setStatus({ paperclip_up: false }); });
+          if (st.connected) api("/orchestration/overview").then(setOv).catch(function () {});
+        }).catch(function () { setStatus({ paperclip_up: false, connected: false }); });
       }
       useEffect(function () {
         load();
@@ -53,8 +59,22 @@
         return function () { clearInterval(t); };
       }, []);
 
+      function connect(e) {
+        if (e) e.preventDefault();
+        setErr(null);
+        if (!apiKey.trim()) { setErr("Paste the Paperclip board API key."); return; }
+        setBusy(true);
+        api("/orchestration/connect", { method: "POST", body: JSON.stringify({ api_key: apiKey }) })
+          .then(function () { setBusy(false); setApiKey(""); load(); })
+          .catch(function (e2) { setBusy(false); setErr(String(e2.message || e2)); });
+      }
+      function disconnect() {
+        api("/orchestration/connection", { method: "DELETE" }).then(function () { setOv(null); load(); }).catch(function () {});
+      }
+
       var up = status ? status.paperclip_up : null;
       var mode = status ? status.mode : null;
+      var connected = status ? status.connected : false;
       var agents = ov && ov.agents ? ov.agents : [];
       var att = ov ? attentionCount(ov.attention) : null;
 
@@ -80,14 +100,33 @@
           "The orchestration control plane isn't running. It's an opt-in profile (it builds Paperclip from source on first start). Enable it with the ",
           h("code", null, "control-plane"), " compose profile, then redeploy.") : null,
 
-        up ? h("div", { className: "so-stats" },
+        // running but no key yet -> one-time connect flow
+        up && !connected ? h("div", { className: "so-panel" },
+          h("div", { className: "so-panel-h" }, "CONNECT THE CONTROL PLANE"),
+          h("div", { className: "so-steps" },
+            h("div", { className: "so-step" }, h("span", { className: "so-num" }, "1"),
+              h("span", null, h("b", null, "Open Paperclip"), " below. First time, create your owner account.")),
+            h("div", { className: "so-step" }, h("span", { className: "so-num" }, "2"),
+              h("span", null, "In Paperclip, create a ", h("b", null, "board API key"), " (Settings) and copy it.")),
+            h("div", { className: "so-step" }, h("span", { className: "so-num" }, "3"),
+              h("span", null, "Paste it here so the dashboard can read your agents and approvals."))),
+          h("div", { className: "so-connect" },
+            h("button", { type: "button", className: "so-btn", onClick: openPc }, "Open Paperclip ↗"),
+            h("form", { className: "so-keyform", onSubmit: connect },
+              h("input", { className: "so-input", type: "password", value: apiKey, placeholder: "Paperclip board API key",
+                autoComplete: "new-password", onChange: function (e) { setApiKey(e.target.value); } }),
+              h("button", { className: "so-btn so-primary", type: "submit", disabled: busy }, busy ? "Connecting…" : "Connect"))),
+          err ? h("div", { className: "so-msg so-err" }, err) : null) : null,
+
+        up && connected ? h("div", { className: "so-stats" },
           stat("Managed agents", ov ? String(agents.length) : "—"),
           stat("Waiting on you", att == null ? "—" : String(att), true),
           stat("Mode", mode === "external" ? "External" : "Bundled")) : null,
 
-        up ? h("div", { className: "so-panel" },
+        up && connected ? h("div", { className: "so-panel" },
           h("div", { className: "so-panel-h" }, "MANAGED AGENTS"),
           ov == null ? h("div", { className: "so-empty" }, "Loading…")
+            : (ov.errors && ov.errors.length) ? h("div", { className: "so-empty" }, "Paperclip: " + ov.errors.join("; "))
             : agents.length === 0 ? h("div", { className: "so-empty" }, "No managed agents yet. Agents you create in Agent OS will register here.")
             : h("div", { className: "so-list" }, agents.map(function (a, i) {
                 return h("div", { className: "so-agent", key: i },
@@ -95,8 +134,12 @@
                   a.status ? h("span", { className: "so-agent-state" }, String(a.status)) : null);
               }))) : null,
 
-        up && mode === "external" ? h("div", { className: "so-note so-obs" },
+        up && connected && mode === "external" ? h("div", { className: "so-note so-obs" },
           "Observe-only: this is pointed at an existing Paperclip instance. Agent OS reads status here but does not approve, act, or change anything — use Paperclip directly for those.") : null,
+
+        up && connected ? h("div", { className: "so-managed-foot" },
+          h("button", { className: "so-btn so-ghost", onClick: openPc }, "Open Paperclip ↗"),
+          h("button", { className: "so-btn so-ghost", onClick: disconnect }, "Disconnect key")) : null,
 
         h("div", { className: "so-explain" },
           h("div", { className: "so-explain-h" }, "HOW IT FITS"),

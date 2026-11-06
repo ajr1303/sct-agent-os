@@ -158,9 +158,11 @@ The model is **one cockpit, two engines**:
 
 - **Hermes** is the engine room — where an agent actually runs (model, tools, chat, sessions).
 - **Paperclip** is the management office — it drives agents, it doesn't run them. It ships a Hermes adapter for exactly this.
-- **The Agent OS dashboard is the only cockpit.** Paperclip runs **headless** (`local_trusted` mode, reachable only on the compose network, never exposed), so there's no second login and no separate UI to learn.
+- **The Agent OS dashboard is the cockpit.** Paperclip runs in `authenticated` mode with a private LAN bind (off the public internet).
 
 The **Orchestration** page surfaces Paperclip's managed agents and "waiting on you" items. This first release is **read-only**; the unified "create an agent → wire Hermes runtime + Paperclip record in one flow" is the next phase.
+
+**One-time setup:** because Paperclip runs authenticated, the dashboard reads it with a **board API key**. Open Paperclip once (published on `:3100`, bound to the same address as the dashboard), create your owner account and a board key, and paste it into the Orchestration page — same pattern as the n8n key. After that the dashboard is the cockpit. Set `PAPERCLIP_PUBLIC_URL` and add your LAN host to `PAPERCLIP_ALLOWED_HOSTNAMES` in `.env` so the browser can reach the UI. (Auto-provisioning the key so this stays fully zero-touch is a planned enhancement.)
 
 **Connect-to-existing (optional):** a lab already running Paperclip can point the bridge at it instead of the bundled one — set `PAPERCLIP_URL` (and `PAPERCLIP_API_KEY`, `PAPERCLIP_COMPANY_ID`) in `.env`. That path is **observe-only by design**: the bridge is GET-only, so Agent OS reads status but never approves, acts, or changes anything on an instance it doesn't own.
 

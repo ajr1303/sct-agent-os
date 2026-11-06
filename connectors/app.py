@@ -92,6 +92,13 @@ def get_db():
             created_at TEXT NOT NULL
         )
     """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS orchestration (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            secret BLOB NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
     return con
 
 
@@ -708,8 +715,24 @@ PAPERCLIP_API_KEY = os.environ.get("PAPERCLIP_API_KEY", "").strip()
 PAPERCLIP_COMPANY_ID = os.environ.get("PAPERCLIP_COMPANY_ID", "").strip()
 
 
+def _pc_stored_key():
+    with closing(get_db()) as con:
+        row = con.execute("SELECT secret FROM orchestration ORDER BY id DESC LIMIT 1").fetchone()
+    if row:
+        try:
+            return fernet.decrypt(row[0]).decode()
+        except Exception:
+            return None
+    return None
+
+
+def _pc_key():
+    return _pc_stored_key() or PAPERCLIP_API_KEY or ""
+
+
 def _pc_headers():
-    return {"Authorization": "Bearer " + PAPERCLIP_API_KEY} if PAPERCLIP_API_KEY else {}
+    key = _pc_key()
+    return {"Authorization": "Bearer " + key} if key else {}
 
 
 def _pc_get(path):
@@ -746,9 +769,44 @@ def _pc_company_id():
     return None
 
 
+class PcConnect(BaseModel):
+    api_key: str
+
+
 @app.get("/orchestration/status")
 def orchestration_status(_auth=Depends(require_auth)):
-    return {"paperclip_up": _pc_up(), "mode": _pc_mode()}
+    return {"paperclip_up": _pc_up(), "mode": _pc_mode(), "connected": bool(_pc_key())}
+
+
+@app.post("/orchestration/connect")
+def orchestration_connect(c: PcConnect, _auth=Depends(require_auth)):
+    key = (c.api_key or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="Enter the Paperclip board API key.")
+    try:
+        r = _http_get(PAPERCLIP_URL + "/api/companies", headers={"Authorization": "Bearer " + key})
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Could not reach Paperclip: " + str(e)[:140])
+    if r.status_code in (401, 403):
+        raise HTTPException(status_code=400, detail="Paperclip rejected that board API key. Copy a company board key from Paperclip › Settings.")
+    try:
+        r.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Paperclip returned an error: " + str(e)[:140])
+    with closing(get_db()) as con:
+        con.execute("DELETE FROM orchestration")
+        con.execute("INSERT INTO orchestration (secret, created_at) VALUES (?,?)",
+                    (fernet.encrypt(key.encode()), _now().isoformat()))
+        con.commit()
+    return {"ok": True}
+
+
+@app.delete("/orchestration/connection")
+def orchestration_disconnect(_auth=Depends(require_auth)):
+    with closing(get_db()) as con:
+        con.execute("DELETE FROM orchestration")
+        con.commit()
+    return {"ok": True}
 
 
 @app.get("/orchestration/overview")
