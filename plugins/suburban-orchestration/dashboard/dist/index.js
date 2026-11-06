@@ -120,7 +120,16 @@
           .then(function () { setCBusy(false); setShowCreate(false); setCName(""); setCInstr(""); setCRole("general"); load(); })
           .catch(function (e2) { setCBusy(false); setCErr(String(e2.message || e2)); });
       }
-      function delAgent(id) { setDelId(null); api("/orchestration/agents/" + id, { method: "DELETE" }).then(function () { load(); }).catch(function () {}); }
+      function delAgent(a) {
+        setDelId(null);
+        api("/orchestration/agents/" + a.id, { method: "DELETE" })
+          .then(function () {
+            // Also remove the matching Hermes profile for unified agents (best-effort).
+            try { if (hapi.deleteProfile && a.name) Promise.resolve(hapi.deleteProfile(a.name)).catch(function () {}); } catch (e) {}
+            load();
+          })
+          .catch(function (e2) { setCErr("Delete failed: " + String(e2.message || e2)); load(); });
+      }
       var ROLES = [["general", "General"], ["ceo", "CEO"], ["cto", "CTO"], ["cmo", "CMO"], ["cfo", "CFO"], ["security", "Security"], ["engineer", "Engineer"], ["designer", "Designer"], ["pm", "PM"], ["qa", "QA"], ["devops", "DevOps"], ["researcher", "Researcher"]];
 
       var up = status ? status.paperclip_up : null;
@@ -206,7 +215,7 @@
                     a.status ? h("span", { className: "so-agent-state" }, String(a.status)) : null,
                     delId === a.id
                       ? h("span", { className: "so-confirm" },
-                          h("button", { className: "so-x", onClick: function () { delAgent(a.id); } }, "Delete"),
+                          h("button", { className: "so-x", onClick: function () { delAgent(a); } }, "Delete"),
                           h("button", { className: "so-x so-x-mut", onClick: function () { setDelId(null); } }, "Cancel"))
                       : h("button", { className: "so-iconbtn", title: "Delete agent", onClick: function () { setDelId(a.id); } }, "✕")));
               }))) : null,

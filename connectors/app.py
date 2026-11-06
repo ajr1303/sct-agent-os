@@ -877,10 +877,15 @@ def delete_agent(aid: str, _auth=Depends(require_auth)):
     key = _pc_key()
     if not key:
         raise HTTPException(status_code=400, detail="Connect Paperclip first (board API key).")
+    headers = {"Authorization": "Bearer " + key}
     try:
         with httpx.Client(timeout=30.0, follow_redirects=True) as c:
-            r = c.request("DELETE", PAPERCLIP_URL + "/api/agents/" + aid,
-                          headers={"Authorization": "Bearer " + key})
+            # Paperclip requires an agent to be terminated before it can be deleted.
+            try:
+                c.post(PAPERCLIP_URL + "/api/agents/" + aid + "/terminate", headers=headers)
+            except Exception:
+                pass
+            r = c.request("DELETE", PAPERCLIP_URL + "/api/agents/" + aid, headers=headers)
     except Exception as e:
         raise HTTPException(status_code=502, detail="Could not reach Paperclip: " + str(e)[:140])
     if r.status_code in (401, 403):
