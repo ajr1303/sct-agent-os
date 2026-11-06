@@ -35,6 +35,25 @@ services:
       - ./data/hermes/brand:/srv/brand:ro
     mem_limit: 128M
 
+  # Connectors service: stores the user's connected accounts (email first; bookings
+  # and the Paperclip bridge reuse it) and talks to them. Reached by the dashboard
+  # through the proxy at /api/connectors/. Authorizes each call against Hermes.
+  connectors:
+    build: ./connectors
+    image: agent-os/connectors:0.1
+    container_name: agent-os-connectors
+    restart: unless-stopped
+    depends_on: [hermes]
+    environment:
+      CONNECTORS_KEY: ${CONNECTORS_KEY:?run ./install.sh first}
+      HERMES_AUTH_URL: "http://hermes:9119/api/auth/me"
+      CONNECTORS_DB: "/data/connectors.db"
+    volumes:
+      - connectors-data:/data
+    expose:
+      - "8000"
+    mem_limit: 256M
+
   honcho-db:
     profiles: ["memory"]
     image: pgvector/pgvector:pg16
@@ -93,3 +112,4 @@ services:
 
 volumes:
   honcho-pgdata:
+  connectors-data:

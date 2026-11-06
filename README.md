@@ -40,6 +40,7 @@ Re-running the command updates the checkout in place. For routine updates, prefe
 | **Branding** | Suburban Cyber logo in the sidebar, "Suburban Cyber" wordmark, dark-cyan theme, renamed nav (Overview, Scheduled Jobs, Agents). |
 | **Overview page** | Landing page with live gateway status, sessions, token usage, AI spend, your agents, recent activity, and a managed-service card. |
 | **Chat** | The raw Hermes terminal is replaced by a clean, bubble-style chatbot. |
+| **Mailboxes** | Connect multiple email accounts (Gmail, Microsoft 365, any hosted-domain IMAP) and see combined unread/preview in the dashboard. Credentials encrypted at rest. |
 | **Memory (optional)** | Honcho long-term memory (Postgres + pgvector + deriver), wired into Hermes. |
 | **Operations** | Watchdog cron (every 5 min), nightly database backup (03:30, 14-day retention), a smoke test, and an in-place updater. |
 
@@ -90,6 +91,19 @@ The Overview page's spend and token tiles populate from real usage once agents s
 
 ---
 
+## Connecting email
+
+The **Mailboxes** page lets a user connect one or more email accounts:
+
+- **Google / Gmail**, **Microsoft 365 / Outlook**, **Yahoo**, **iCloud** — pick the provider and the IMAP host/port are prefilled. Use an **app password** (not the normal account password) where the provider requires one.
+- **Other (hosted domain)** — enter your own IMAP host (often `mail.yourdomain.com`).
+
+Each account is verified by a live IMAP login before it's saved. Passwords are encrypted at rest with Fernet (key in `.env` as `CONNECTORS_KEY`) and are never displayed again or returned by the API. The dashboard shows combined unread counts and a short preview per mailbox.
+
+Under the hood this is a small **connectors** service (`connectors/`) behind the reverse proxy at `/api/connectors/`. It authorizes every request by validating the dashboard session cookie against Hermes, so there's no second login. The same service is the foundation for the upcoming bookings and Paperclip connectors.
+
+> **Scope note:** this first release uses IMAP, which works for Google, Microsoft 365, and hosted domains today. Native one-click OAuth sign-in (and outbound send/triage actions for agents) are the next additions.
+
 ## Memory (Honcho)
 
 With `--memory honcho` (the default when RAM ≥ 8 GB), the stack adds:
@@ -132,9 +146,13 @@ templates/
   dashboard-themes/         suburban-cyber.yaml (dark) + suburban-cyber-light.yaml
   honcho.json.tmpl          Hermes↔Honcho wiring
   honcho-init.sql           pgvector extension
+connectors/
+  app.py                    Connectors service (FastAPI): mailboxes + IMAP, encrypted storage, Hermes-cookie auth
+  Dockerfile, requirements.txt
 plugins/
   suburban-cyber/           Overview page, branding, logo, nav rename (dashboard plugin)
   suburban-chat/            Bubble chat that replaces the terminal (dashboard plugin)
+  suburban-mail/            Mailboxes page: connect email accounts, combined inbox (dashboard plugin)
 docs/ARCHITECTURE.md        How the layer works, incl. the chat integration
 ```
 
@@ -152,7 +170,7 @@ Not yet done / known limitations:
 - The Overview **"Waiting on you" approvals** panel is **sample data**, clearly tagged — Hermes has no dashboard approvals API, so a real approval queue would be a separate build.
 - "Time saved" / review-schedule lines in the managed card are illustrative until wired to real sources.
 - A reverse proxy now serves the dashboard and brands the login page; HTTPS termination on that proxy is the next step.
-- The chat is one live conversation at a time; browsing/continuing past conversations is a planned addition.
+- The **Mailboxes** email connector is newly added (IMAP-based, multi-account); pending first end-to-end verification on the test VM. OAuth sign-in and agent send/triage actions are not built yet.
 
 ## Roadmap
 
