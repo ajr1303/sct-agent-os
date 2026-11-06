@@ -103,6 +103,21 @@
           h("a", { href: orchHref(), className: "sc-link sc-wait-cta" }, "Review in Orchestration →"));
       }
 
+      // Unified agent view: prefer the Paperclip-managed roster (with roles),
+      // enriched with the model from the matching Hermes profile; fall back to
+      // Hermes profiles when the control plane isn't connected.
+      var useManaged = !!(pcOv && pcOv.paperclip_up && pcOv.company_id && Array.isArray(pcOv.agents));
+      var managedAgents = useManaged ? pcOv.agents : null;
+      function slug(x) { return String(x || "").toLowerCase().replace(/\s+/g, "-"); }
+      function hermesModelFor(nm) {
+        var list = agents || [], n = slug(nm);
+        for (var i = 0; i < list.length; i++) { if (slug(pick(list[i], ["name", "display_name"])) === n) return pick(list[i], ["model"]); }
+        return null;
+      }
+      var agentTileLabel = useManaged ? "Agents" : "Active agents";
+      var agentTileVal = useManaged ? String(managedAgents.length) : (status ? String(activeAgents != null ? activeAgents : 0) : "—");
+      var agentTileSub = useManaged ? "Managed by Paperclip" : "Running right now";
+
       return h("div", { className: "sc-wrap" },
         h("div", { className: "sc-top" },
           h("div", null,
@@ -114,29 +129,42 @@
         h("div", { className: "sc-stats" },
           Stat("Sessions, 14 days", analytics ? String(tot.total_sessions || 0) : "—", "Conversations and automations"),
           Stat("Tokens, 14 days", analytics ? fmtNum(tokens) : "—", "Input + output"),
-          Stat("Active agents", status ? String(activeAgents != null ? activeAgents : 0) : "—", "Running right now", true),
+          Stat(agentTileLabel, agentTileVal, agentTileSub, true),
           Stat("AI spend, 14 days", analytics ? fmtCost(tot.total_estimated_cost) : "—", "Estimated from usage")),
 
         h("div", { className: "sc-cols" },
           h("div", { className: "sc-col" },
             Panel("Waiting on you", "Agents ask before they send, publish or delete.", waitingBody()),
-            Panel("Your agents", agents == null ? "" : agents.length + " configured",
-              agents == null
-                ? h("div", { className: "sc-empty" }, "Loading…")
-                : agents.length === 0
-                  ? h("div", { className: "sc-empty" }, "No agents yet. Create one in the Agents tab.")
-                  : agents.map(function (ag, i) {
-                      var name = pick(ag, ["display_name", "name", "bot_title"]) || "Agent";
-                      var desc = pick(ag, ["description", "description_auto"]) || "Agent profile";
-                      var model = pick(ag, ["model"]);
-                      return h("div", { className: "sc-agentrow", key: i },
-                        h("div", null,
-                          h("div", { className: "sc-agentname" }, name),
-                          h("div", { className: "sc-agentdesc" }, String(desc).slice(0, 80))),
-                        h("div", { className: "sc-agentmeta" },
-                          model ? h("span", { className: "sc-tag" }, model) : null,
-                          h("span", { className: "sc-skill" }, (ag.skill_count != null ? ag.skill_count : 0) + " skills")));
-                    }))
+            useManaged
+              ? Panel("Your agents", managedAgents.length + " managed",
+                  managedAgents.length === 0
+                    ? h("div", { className: "sc-empty" }, h("span", null, "No managed agents yet. ", h("a", { href: orchHref(), className: "sc-link" }, "Create one in Orchestration →")))
+                    : managedAgents.map(function (a, i) {
+                        var model = hermesModelFor(a.name);
+                        return h("div", { className: "sc-agentrow", key: a.id || i },
+                          h("div", null,
+                            h("div", { className: "sc-agentname" }, a.name),
+                            h("div", { className: "sc-agentdesc" }, (a.role ? String(a.role).toUpperCase() : "AGENT") + (a.status ? " · " + a.status : ""))),
+                          h("div", { className: "sc-agentmeta" },
+                            model ? h("span", { className: "sc-tag" }, model) : null));
+                      }))
+              : Panel("Your agents", agents == null ? "" : agents.length + " configured",
+                  agents == null
+                    ? h("div", { className: "sc-empty" }, "Loading…")
+                    : agents.length === 0
+                      ? h("div", { className: "sc-empty" }, "No agents yet. Create one in the Agents tab.")
+                      : agents.map(function (ag, i) {
+                          var name = pick(ag, ["display_name", "name", "bot_title"]) || "Agent";
+                          var desc = pick(ag, ["description", "description_auto"]) || "Agent profile";
+                          var model = pick(ag, ["model"]);
+                          return h("div", { className: "sc-agentrow", key: i },
+                            h("div", null,
+                              h("div", { className: "sc-agentname" }, name),
+                              h("div", { className: "sc-agentdesc" }, String(desc).slice(0, 80))),
+                            h("div", { className: "sc-agentmeta" },
+                              model ? h("span", { className: "sc-tag" }, model) : null,
+                              h("span", { className: "sc-skill" }, (ag.skill_count != null ? ag.skill_count : 0) + " skills")));
+                        }))
           ),
           h("div", { className: "sc-col" },
             Panel("Activity log", "Live from your gateway",
