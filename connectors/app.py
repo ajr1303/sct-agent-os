@@ -103,6 +103,27 @@ def imap_connect(host: str, port: int, use_ssl: bool, user: str, password: str):
     return M
 
 
+def imap_error_message(e):
+    """Turn a raw imaplib error (often a bytes repr) into a human message."""
+    raw = e.args[0] if getattr(e, "args", None) else e
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", "ignore")
+    raw = str(raw).strip()
+    low = raw.lower()
+    if "application-specific password" in low or "app password" in low or "185833" in raw:
+        return ("Google rejected the password. Gmail needs an App Password, not your normal "
+                "password — create one at myaccount.google.com (Security › App passwords) "
+                "and paste the 16-character code.")
+    if "basic authentication" in low or "basic auth" in low or "disabled" in low:
+        return ("The provider blocked basic password sign-in. Enable IMAP and create an app "
+                "password in your mail account, then use that code here.")
+    if ("authenticationfailed" in low or "authentication failed" in low
+            or "invalid credentials" in low or "login failed" in low or "auth" in low):
+        return "Login failed — check the email address and password (use an app password where required)."
+    raw = raw.replace("[ALERT]", "").strip()
+    return "Mailbox rejected the login: " + raw[:200]
+
+
 def _hdr(value):
     if not value:
         return ""
@@ -172,7 +193,7 @@ def add_mailbox(m: MailboxIn, _auth=Depends(require_auth)):
         except Exception:
             pass
     except imaplib.IMAP4.error as e:
-        raise HTTPException(status_code=400, detail=f"IMAP login rejected: {str(e)[:160]}")
+        raise HTTPException(status_code=400, detail=imap_error_message(e))
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not connect: {str(e)[:160]}")
 
