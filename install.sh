@@ -81,6 +81,22 @@ collect_answers() {
 write_env() {
   say "Writing configuration"
   umask 077
+  # Detect the address users will reach this box at, and RAM-gate heavy profiles.
+  local ram_kb lan_ip pc_host profs
+  ram_kb=$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+  lan_ip=$(hostname -I 2>/dev/null | awk '{print $1}'); [ -n "$lan_ip" ] || lan_ip="127.0.0.1"
+  if [ "$DASHBOARD_BIND" != "127.0.0.1" ]; then pc_host="$lan_ip"; else pc_host="localhost"; fi
+  if [ -n "$PROFILES_OVERRIDE" ]; then
+    profs="$PROFILES_OVERRIDE"
+  else
+    profs=""; [ "$MEMORY_MODE" = honcho ] && profs="memory"
+    [ "$ram_kb" -ge 5000000 ]  && profs="${profs:+$profs,}automation"      # n8n (~1 GB)
+    [ "$ram_kb" -ge 12000000 ] && profs="${profs:+$profs,}control-plane"   # Paperclip (heavy source build)
+  fi
+  case ",$profs," in
+    *,control-plane,*) say "Paperclip (control-plane) enabled — first start builds it from source (several minutes, heavy)." ;;
+    *) [ -z "$PROFILES_OVERRIDE" ] && warn "Paperclip (control-plane) skipped — it needs ~12 GB RAM. Enable later by adding control-plane to COMPOSE_PROFILES in .env and running 'docker compose up -d'." ;;
+  esac
   cat > .env <<ENV
 API_SERVER_KEY=$(gen_secret)
 DASHBOARD_USER=admin
@@ -94,7 +110,9 @@ PAPERCLIP_TOOL_ACTION_SIGNING_SECRET=$(openssl rand -hex 32)
 HERMES_TAG=latest
 HERMES_HOME_DIR=./data/hermes
 HERMES_MEM_LIMIT=3G
-COMPOSE_PROFILES=$([ -n "$PROFILES_OVERRIDE" ] && echo "$PROFILES_OVERRIDE" || { [ "$MEMORY_MODE" = honcho ] && echo "memory,automation,control-plane" || echo "automation,control-plane"; })
+PAPERCLIP_PUBLIC_URL=http://${pc_host}:3100
+PAPERCLIP_ALLOWED_HOSTNAMES=paperclip,localhost,127.0.0.1,${lan_ip}
+COMPOSE_PROFILES=${profs}
 ENV
   mkdir -p data/hermes/dashboard-themes backups
   if [ "$MEMORY_MODE" = honcho ]; then write_honcho_env; write_honcho_json; fi

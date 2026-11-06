@@ -14,6 +14,13 @@ if [ -f .env ]; then
   # (The profile itself stays opt-in — enabling it triggers a heavy source build.)
   grep -q '^BETTER_AUTH_SECRET=' .env || { echo "BETTER_AUTH_SECRET=$(openssl rand -hex 32)" >> .env; echo "Added BETTER_AUTH_SECRET to .env"; }
   grep -q '^PAPERCLIP_TOOL_ACTION_SIGNING_SECRET=' .env || { echo "PAPERCLIP_TOOL_ACTION_SIGNING_SECRET=$(openssl rand -hex 32)" >> .env; echo "Added PAPERCLIP_TOOL_ACTION_SIGNING_SECRET to .env"; }
+  # Paperclip UI address (needed for the one-time board-key setup over the LAN).
+  if ! grep -q '^PAPERCLIP_PUBLIC_URL=' .env; then
+    _ip=$(hostname -I 2>/dev/null | awk '{print $1}'); [ -n "$_ip" ] || _ip="127.0.0.1"
+    echo "PAPERCLIP_PUBLIC_URL=http://${_ip}:3100" >> .env
+    grep -q '^PAPERCLIP_ALLOWED_HOSTNAMES=' .env || echo "PAPERCLIP_ALLOWED_HOSTNAMES=paperclip,localhost,127.0.0.1,${_ip}" >> .env
+    echo "Added PAPERCLIP_PUBLIC_URL/ALLOWED_HOSTNAMES to .env (detected ${_ip} — edit if wrong)"
+  fi
   # Ensure the bundled automation engine (n8n) profile is active.
   if grep -q '^COMPOSE_PROFILES=' .env; then
     cur=$(grep '^COMPOSE_PROFILES=' .env | head -1 | cut -d= -f2-)

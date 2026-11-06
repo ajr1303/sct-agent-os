@@ -61,7 +61,7 @@ Base OS: Linux (x86_64), Ubuntu 22.04+ / Debian 12+ recommended. Outbound HTTPS 
 | **+ Control plane** | `control-plane` | +2–3 GB | +5 GB (plus a heavier first build) | adds the bundled Paperclip orchestrator |
 | **Full (hosted client)** | all | 16 GB | 60 GB | everything |
 
-Thresholds are enforced by the installer's preflight check. Numbers are conservative estimates, not yet load-benchmarked. The `control-plane` profile builds Paperclip from source on first start — budget extra time and build RAM.
+The installer **auto-selects profiles by available RAM**: lean under ~5 GB, `+automation` (n8n) at ~5 GB, `+memory` (Honcho) at ~7 GB, `+control-plane` (Paperclip) at ~12 GB. Override with `--profiles "..."`. This keeps a small box from attempting the heavy Paperclip source build and failing; add `control-plane` to `COMPOSE_PROFILES` in `.env` later to enable it on a bigger box. The installer also writes `PAPERCLIP_PUBLIC_URL`/`PAPERCLIP_ALLOWED_HOSTNAMES` from the detected host IP so the Paperclip board-key setup works over the LAN. Numbers are conservative estimates, not yet load-benchmarked.
 
 ### Compose profiles
 
