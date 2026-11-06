@@ -35,6 +35,8 @@
 .so-x-mut{border-color:var(--color-border,rgba(255,255,255,.2));color:inherit;opacity:.7}
 .so-createrow{display:flex;gap:10px}
 .so-rolesel{max-width:150px}
+.so-field{display:flex;flex-direction:column;gap:5px}
+.so-flabel{font-size:11px;letter-spacing:.06em;text-transform:uppercase;opacity:.6}
 @media (max-width:600px){.so-createrow{flex-direction:column}.so-rolesel{max-width:none}}
 .so-explain{border:1px solid var(--color-border,rgba(255,255,255,.12));background:var(--color-card,rgba(255,255,255,.02));padding:16px}
 .so-explain-h{font-size:12px;letter-spacing:.07em;font-weight:600;margin-bottom:10px}

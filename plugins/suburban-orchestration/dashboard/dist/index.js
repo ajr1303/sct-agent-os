@@ -14,6 +14,7 @@
     var h = SDK.React.createElement;
     var hooks = SDK.hooks || {};
     var useState = hooks.useState, useEffect = hooks.useEffect;
+    var hapi = SDK.api || {};
 
     function api(path, opts) {
       opts = opts || {};
@@ -53,6 +54,8 @@
       s = useState("");   var cName = s[0], setCName = s[1];
       s = useState("");   var cInstr = s[0], setCInstr = s[1];
       s = useState("general"); var cRole = s[0], setCRole = s[1];
+      s = useState("");   var cModel = s[0], setCModel = s[1];
+      s = useState([]);   var modelOpts = s[0], setModelOpts = s[1];
       s = useState(false); var cBusy = s[0], setCBusy = s[1];
       s = useState(null); var cErr = s[0], setCErr = s[1];
       s = useState(null); var delId = s[0], setDelId = s[1];
@@ -65,6 +68,22 @@
       }
       useEffect(function () {
         load();
+        try {
+          Promise.resolve(hapi.getModelOptions && hapi.getModelOptions()).then(function (m) {
+            if (!m || !m.providers) return;
+            var opts = [];
+            m.providers.forEach(function (p) {
+              if (!p.authenticated) return;
+              (p.models || []).forEach(function (md) {
+                var id = (md && (md.id || md.slug || md.name)) || md;
+                if (typeof id !== "string") return;
+                opts.push({ v: p.slug + "|" + id, label: p.name + " · " + id });
+              });
+            });
+            setModelOpts(opts);
+            if (opts.length) setCModel(opts[0].v);
+          }).catch(function () {});
+        } catch (e) {}
         var t = setInterval(load, 30000);
         return function () { clearInterval(t); };
       }, []);
@@ -84,9 +103,20 @@
       function createAgent(e) {
         if (e) e.preventDefault();
         setCErr(null);
-        if (!cName.trim()) { setCErr("Enter an agent name."); return; }
+        var nm = cName.trim();
+        if (!nm) { setCErr("Enter an agent name."); return; }
         setCBusy(true);
-        api("/orchestration/agents", { method: "POST", body: JSON.stringify({ name: cName, instructions: cInstr, role: cRole }) })
+        // 1) Create the Hermes runtime profile (this is the agent in the Agents tab,
+        //    with the chosen model). createProfile sets the model inline.
+        var parts = (cModel || "").split("|");
+        var provider = parts[0], model = parts[1];
+        var profileBody = (provider && model) ? { name: nm, provider: provider, model: model } : { name: nm };
+        Promise.resolve(hapi.createProfile ? hapi.createProfile(profileBody) : null)
+          .then(function (res) {
+            if (res && res.ok === false) throw new Error(res.error || res.message || "Could not create the Hermes profile.");
+            // 2) Register it in Paperclip for management (role, org, approvals).
+            return api("/orchestration/agents", { method: "POST", body: JSON.stringify({ name: nm, instructions: cInstr, role: cRole }) });
+          })
           .then(function () { setCBusy(false); setShowCreate(false); setCName(""); setCInstr(""); setCRole("general"); load(); })
           .catch(function (e2) { setCBusy(false); setCErr(String(e2.message || e2)); });
       }
@@ -154,9 +184,14 @@
                 onChange: function (e) { setCName(e.target.value); } }),
               h("select", { className: "so-input so-rolesel", value: cRole, onChange: function (e) { setCRole(e.target.value); } },
                 ROLES.map(function (r) { return h("option", { key: r[0], value: r[0] }, r[1]); }))),
+            modelOpts.length
+              ? h("label", { className: "so-field" }, h("span", { className: "so-flabel" }, "Model"),
+                  h("select", { className: "so-input", value: cModel, onChange: function (e) { setCModel(e.target.value); } },
+                    modelOpts.map(function (o) { return h("option", { key: o.v, value: o.v }, o.label); })))
+              : h("div", { className: "so-createhint" }, "No connected models found — add a provider key in the Keys tab, then the agent will use the default model."),
             h("textarea", { className: "so-input so-ta", value: cInstr, placeholder: "Instructions (optional) — what should this agent do?",
               onChange: function (e) { setCInstr(e.target.value); } }),
-            h("div", { className: "so-createhint" }, "Creates a Paperclip-managed agent that runs on your Hermes engine. Pick CEO to make it your lead."),
+            h("div", { className: "so-createhint" }, "Creates the agent in your Agents tab (Hermes, with this model) and registers it in Paperclip with the role. Pick CEO to make it your lead."),
             cErr ? h("div", { className: "so-msg so-err" }, cErr) : null,
             h("div", { className: "so-createactions" },
               h("button", { type: "submit", className: "so-btn so-primary", disabled: cBusy }, cBusy ? "Creating…" : "Create agent"))) : null,
