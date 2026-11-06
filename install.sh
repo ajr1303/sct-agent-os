@@ -14,7 +14,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-MIN_RAM_KB=3500000; REC_RAM_KB=7000000; MIN_DISK_GB=20; REC_DISK_GB=40
+# Agent OS installs the FULL stack (Hermes + Honcho memory + n8n + Paperclip).
+# One spec, sized for the whole thing with headroom to grow — 16 GB / 4 vCPU / 60 GB.
+FULL_RAM_KB=15000000; REC_RAM_KB=16000000; MIN_DISK_GB=60; REC_DISK_GB=80
+SUBSET_RAM_KB=3500000   # floor when an advanced operator passes --profiles
 TTY=/dev/tty; [ -r "$TTY" ] || TTY=/dev/stdin
 say()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[33m!  %s\033[0m\n' "$*"; }
@@ -33,17 +36,19 @@ preflight() {
   docker info >/dev/null 2>&1 || die "Docker daemon not reachable (run as root or add your user to the docker group)."
   command -v openssl >/dev/null || die "openssl not found."
   local ram disk; ram=$(awk '/MemTotal/{print $2}' /proc/meminfo); disk=$(df -BG --output=avail . | tail -1 | tr -dc 0-9)
-  [ "$ram" -ge "$MIN_RAM_KB" ] || die "Need at least 4 GB RAM (found $((ram/1024)) MB)."
+  if [ -n "$PROFILES_OVERRIDE" ]; then
+    # Advanced: operator chose a specific subset, so only enforce a basic floor.
+    [ "$ram" -ge "$SUBSET_RAM_KB" ] || die "Need at least 4 GB RAM (found $((ram/1024)) MB)."
+  else
+    [ "$ram" -ge "$FULL_RAM_KB" ] || die "Agent OS needs 16 GB RAM for the full stack (found ~$((ram/1024/1024)) GB). Use a larger server, or re-run with --profiles for a subset (advanced)."
+  fi
   [ "$disk" -ge "$MIN_DISK_GB" ] || die "Need at least ${MIN_DISK_GB} GB free disk (found ${disk} GB)."
-  [ "$ram" -ge "$REC_RAM_KB" ]  || warn "Under 8 GB RAM: Honcho memory will be tight."
-  [ "$disk" -ge "$REC_DISK_GB" ] || warn "Under ${REC_DISK_GB} GB free disk."
-  for p in 8642 9119; do
+  [ "$disk" -ge "$REC_DISK_GB" ] || warn "Under ${REC_DISK_GB} GB free disk — tight for image builds + growth."
+  for p in 8642 9119 5678 3100; do
     (exec 3<>/dev/tcp/127.0.0.1/$p) 2>/dev/null && die "Port $p already in use." || true
   done
   curl -fsS -o /dev/null --max-time 8 https://github.com || die "Cannot reach github.com."
-  if [ "$MEMORY_MODE" = auto ]; then
-    if [ "$ram" -ge "$REC_RAM_KB" ]; then MEMORY_MODE=honcho; else MEMORY_MODE=basic; fi
-  fi
+  [ "$MEMORY_MODE" = auto ] && MEMORY_MODE=honcho
   echo "Memory mode: $MEMORY_MODE"
 }
 
@@ -81,22 +86,13 @@ collect_answers() {
 write_env() {
   say "Writing configuration"
   umask 077
-  # Detect the address users will reach this box at, and RAM-gate heavy profiles.
-  local ram_kb lan_ip pc_host profs
-  ram_kb=$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+  # Detect the address users reach this box at. The full stack is the default;
+  # --profiles is an advanced subset override (preflight relaxes RAM for it).
+  local lan_ip pc_host profs
   lan_ip=$(hostname -I 2>/dev/null | awk '{print $1}'); [ -n "$lan_ip" ] || lan_ip="127.0.0.1"
   if [ "$DASHBOARD_BIND" != "127.0.0.1" ]; then pc_host="$lan_ip"; else pc_host="localhost"; fi
-  if [ -n "$PROFILES_OVERRIDE" ]; then
-    profs="$PROFILES_OVERRIDE"
-  else
-    profs=""; [ "$MEMORY_MODE" = honcho ] && profs="memory"
-    [ "$ram_kb" -ge 5000000 ]  && profs="${profs:+$profs,}automation"      # n8n (~1 GB)
-    [ "$ram_kb" -ge 12000000 ] && profs="${profs:+$profs,}control-plane"   # Paperclip (heavy source build)
-  fi
-  case ",$profs," in
-    *,control-plane,*) say "Paperclip (control-plane) enabled — first start builds it from source (several minutes, heavy)." ;;
-    *) [ -z "$PROFILES_OVERRIDE" ] && warn "Paperclip (control-plane) skipped — it needs ~12 GB RAM. Enable later by adding control-plane to COMPOSE_PROFILES in .env and running 'docker compose up -d'." ;;
-  esac
+  if [ -n "$PROFILES_OVERRIDE" ]; then profs="$PROFILES_OVERRIDE"; else profs="memory,automation,control-plane"; fi
+  case ",$profs," in *,control-plane,*) say "Building the full stack — Paperclip compiles from source on first start (several minutes)." ;; esac
   cat > .env <<ENV
 API_SERVER_KEY=$(gen_secret)
 DASHBOARD_USER=admin

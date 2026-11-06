@@ -20,12 +20,13 @@ That one command:
 2. Clones this repo to `/opt/sct-agent-os`.
 3. Runs `install.sh`, which checks the machine, asks a few questions, writes config, pulls the Hermes image, builds Honcho (if memory is enabled), starts everything, installs the theme + plugins, and enables them.
 
+By default this installs the **full stack** and requires a 16 GB+ box (see [Requirements](#requirements)).
+
 **Options** (append after `bash`):
 
 ```bash
-curl -fsSL .../get.sh | sudo bash -s -- --memory basic   # skip Honcho long-term memory
-curl -fsSL .../get.sh | sudo bash -s -- --memory honcho  # force Honcho on
-curl -fsSL .../get.sh | sudo bash -s -- --yes            # accept defaults, non-interactive
+curl -fsSL .../get.sh | sudo bash -s -- --yes                       # accept defaults, non-interactive
+curl -fsSL .../get.sh | sudo bash -s -- --profiles "automation"     # advanced: install a subset (dev boxes)
 ```
 
 Re-running the command updates the checkout in place. For routine updates, prefer `sudo ./scripts/update.sh` (see [Updating](#updating)).
@@ -51,28 +52,29 @@ Re-running the command updates the checkout in place. For routine updates, prefe
 
 ## Requirements
 
-Base OS: Linux (x86_64), Ubuntu 22.04+ / Debian 12+ recommended. Outbound HTTPS to Docker Hub, GitHub, and your LLM provider. The stack scales with the **compose profiles** you enable, so size the box to the tier:
+Agent OS installs the **full stack** — Hermes runtime, branded dashboard, connectors, Honcho memory, the n8n automation engine, and the Paperclip orchestrator — as one system. It isn't a pick-and-choose install; the installer sizes for the whole thing and **refuses to install on a box that can't run it**, rather than quietly degrading. One spec, with headroom to grow:
 
-| Tier | Profiles | RAM | Disk | What's included |
-|---|---|---|---|---|
-| **Lean** | *(none)* | 4 GB | 20 GB | Hermes + dashboard + connectors (email, bookings) |
-| **+ Memory** | `memory` | 8 GB | 30 GB | adds Honcho long-term memory |
-| **+ Automation** | `automation` | +1 GB | +5 GB | adds the bundled n8n engine |
-| **+ Control plane** | `control-plane` | +2–3 GB | +5 GB (plus a heavier first build) | adds the bundled Paperclip orchestrator |
-| **Full (hosted client)** | all | 16 GB | 60 GB | everything |
+| | Minimum | Recommended |
+|---|---|---|
+| OS | Linux x86_64 | Ubuntu 22.04+ / Debian 12+ |
+| RAM | **16 GB** | 32 GB |
+| vCPU | 4 | 8 |
+| Free disk | **60 GB** | 80 GB+ |
+| Network | Outbound HTTPS to Docker Hub, GitHub, and your LLM provider | |
 
-The installer **auto-selects profiles by available RAM**: lean under ~5 GB, `+automation` (n8n) at ~5 GB, `+memory` (Honcho) at ~7 GB, `+control-plane` (Paperclip) at ~12 GB. Override with `--profiles "..."`. This keeps a small box from attempting the heavy Paperclip source build and failing; add `control-plane` to `COMPOSE_PROFILES` in `.env` later to enable it on a bigger box. The installer also writes `PAPERCLIP_PUBLIC_URL`/`PAPERCLIP_ALLOWED_HOSTNAMES` from the detected host IP so the Paperclip board-key setup works over the LAN. Numbers are conservative estimates, not yet load-benchmarked.
+The installer's preflight enforces this and stops early if the box is too small. It also writes `PAPERCLIP_PUBLIC_URL` / `PAPERCLIP_ALLOWED_HOSTNAMES` from the detected host IP so Paperclip's one-time board-key setup works over the LAN out of the box. Numbers are conservative estimates, not yet load-benchmarked.
 
-### Compose profiles
+> **Advanced / development:** `--profiles "..."` installs a subset instead of the full stack (and relaxes the RAM floor to 4 GB). This is an escape hatch for dev boxes, not the supported product shape — a client install is always the full stack.
 
-The stack is one `docker-compose.yml`; profiles decide what runs. They're stored in `COMPOSE_PROFILES` in `.env`:
+### What's in the stack (compose profiles)
 
-- *(empty)* — **lean**: Hermes + dashboard/proxy + connectors.
+The stack is one `docker-compose.yml`; `COMPOSE_PROFILES` in `.env` records what runs (all of them, by default):
+
 - `memory` — Honcho long-term memory.
 - `automation` — the bundled n8n engine.
 - `control-plane` — the bundled Paperclip orchestrator (headless).
 
-Combine them comma-separated (e.g. `COMPOSE_PROFILES=memory,automation,control-plane`), then `docker compose up -d`. Or set them at install time:
+Hermes + dashboard/proxy + connectors always run. A full install sets `COMPOSE_PROFILES=memory,automation,control-plane`; `docker compose up -d` applies changes. The advanced subset form at install time:
 
 ```bash
 curl -fsSL .../get.sh | sudo bash -s -- --profiles "automation,control-plane" --yes
@@ -178,14 +180,13 @@ Model selection lives on the Hermes side (`createProfile` sets it inline); Paper
 
 The long-term model is **managed hosting**: Suburban Cyber spins up the full stack per client on an individual VPS. Each client gets their own box and their own isolated stack — nothing is shared.
 
-A per-client provision is a non-interactive install with the tier and LAN exposure chosen up front:
+A per-client provision is just the standard non-interactive install on a 16 GB+ VPS — the full stack is the default:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ajr1303/sct-agent-os/main/get.sh \
-  | sudo bash -s -- --profiles "memory,automation,control-plane" --memory honcho --yes
+curl -fsSL https://raw.githubusercontent.com/ajr1303/sct-agent-os/main/get.sh | sudo bash -s -- --yes
 ```
 
-The installer generates all per-client secrets (dashboard password, API/encryption keys, Paperclip secrets), prints the dashboard login, and brings the stack up. Point DNS/TLS at the proxy per the HTTPS roadmap item, and you have a client instance.
+The installer checks the box meets spec, generates all per-client secrets (dashboard password, API/encryption keys, Paperclip secrets), sets Paperclip's LAN URL from the host IP, prints the dashboard login, and brings the full stack up. Point DNS/TLS at the proxy per the HTTPS roadmap item, and you have a client instance.
 
 ## Memory (Honcho)
 
@@ -259,7 +260,7 @@ Not yet done / known limitations:
 - The **Mailboxes** email connector (IMAP, multi-account) and **Bookings** connector (Cal.com / Calendly / Acuity / Setmore / iCal) are verified live. OAuth sign-in and agent send/triage/booking actions are not built yet.
 - The bundled **n8n** automation engine runs on its own port with its own login (TLS/subdomain + SSO pending the HTTPS work); the API key that powers the dashboard view is pasted once (auto-provisioning planned).
 - The bundled **Paperclip** control plane (`control-plane` profile) builds from source and runs headless. The unified create-agent flow (Hermes profile + Paperclip role, with model/role pickers), agent delete, and the Overview's real "waiting on you" + managed-agent roster are all working and verified on the test VM. **Activate-and-run** (executing work on a paused agent through the gateway) is the next phase.
-- **Compose profiles** (lean / memory / automation / control-plane) and a scriptable per-client install (`--profiles`) are in place; requirement tiers are estimates, not yet load-benchmarked.
+- The installer is **full-stack-or-nothing**: it requires 16 GB / 60 GB and refuses a too-small box rather than degrading (`--profiles` is an advanced subset escape hatch). A from-scratch one-command install has **not yet been run end-to-end on a fresh box** — that's the next validation (everything so far was verified via in-place updates).
 
 ## Roadmap
 
