@@ -43,7 +43,7 @@ Re-running the command updates the checkout in place. For routine updates, prefe
 | **Mailboxes** | Connect multiple email accounts (Gmail, Microsoft 365, any hosted-domain IMAP) and see combined unread/preview in the dashboard. Credentials encrypted at rest. |
 | **Bookings** | Connect a scheduling app (Cal.com, Calendly, Acuity, Setmore, or a Google/Microsoft iCal link) and see combined upcoming appointments. Credentials encrypted at rest. |
 | **Automations** | A bundled, self-hosted **n8n** engine (`automation` profile). The dashboard shows workflow + run status and opens the n8n builder in one click; local workflows run off the token meter. |
-| **Orchestration** | A bundled, headless **Paperclip** control plane (`control-plane` profile). The dashboard surfaces Paperclip-managed agents and "waiting on you" items. Read-only today; one-flow create/manage next. |
+| **Orchestration** | A bundled, headless **Paperclip** control plane (`control-plane` profile). **Create an agent in one flow** (name + model + role) — it provisions the Hermes runtime profile *and* the Paperclip record together. Lists/deletes managed agents; the Overview's "waiting on you" reads Paperclip's real approvals. |
 | **Memory (optional)** | Honcho long-term memory (Postgres + pgvector + deriver), wired into Hermes. |
 | **Operations** | Watchdog cron (every 5 min), nightly database backup (03:30, 14-day retention), a smoke test, and an in-place updater. |
 
@@ -160,13 +160,19 @@ The model is **one cockpit, two engines**:
 - **Paperclip** is the management office — it drives agents, it doesn't run them. It ships a Hermes adapter for exactly this.
 - **The Agent OS dashboard is the cockpit.** Paperclip runs in `authenticated` mode with a private LAN bind (off the public internet).
 
-The **Orchestration** page surfaces Paperclip's managed agents and "waiting on you" items. This first release is **read-only**; the unified "create an agent → wire Hermes runtime + Paperclip record in one flow" is the next phase.
+The **Orchestration** page is the unified cockpit:
+
+- **Create an agent in one flow** — name + **model** + **role** (CEO, CTO, …). This provisions a real **Hermes profile** with your chosen model (so it appears in the Agents tab and works in Chat) *and* registers a linked **Paperclip** record with the role. The same agent shows up in both the Agents tab (configure) and Orchestration (manage).
+- **List and delete** managed agents (delete terminates first, then removes both the Paperclip record and the matching Hermes profile).
+- The **Overview's "Waiting on you"** panel reads Paperclip's real attention feed (approvals, decisions, reviews, failed runs, budget alerts, agent errors), and the Overview's agent tile/roster reflects the Paperclip-managed agents with their roles.
+
+Model selection lives on the Hermes side (`createProfile` sets it inline); Paperclip owns role, org, approvals, tasks, and the audit ledger.
 
 **One-time setup:** because Paperclip runs authenticated, the dashboard reads it with a **board API key**. Open Paperclip once (published on `:3100`, bound to the same address as the dashboard), create your owner account and a board key, and paste it into the Orchestration page — same pattern as the n8n key. After that the dashboard is the cockpit. Set `PAPERCLIP_PUBLIC_URL` and add your LAN host to `PAPERCLIP_ALLOWED_HOSTNAMES` in `.env` so the browser can reach the UI. (Auto-provisioning the key so this stays fully zero-touch is a planned enhancement.)
 
 **Connect-to-existing (optional):** a lab already running Paperclip can point the bridge at it instead of the bundled one — set `PAPERCLIP_URL` (and `PAPERCLIP_API_KEY`, `PAPERCLIP_COMPANY_ID`) in `.env`. That path is **observe-only by design**: the bridge is GET-only, so Agent OS reads status but never approves, acts, or changes anything on an instance it doesn't own.
 
-> Paperclip builds from source (a Node monorepo) on first start, so the initial `control-plane` build is heavy. Native TLS/SSO and the full create/manage write flow land in later phases.
+> Paperclip builds from source (a Node monorepo) on first start, so the initial `control-plane` build is heavy. Native TLS/SSO is a later phase. The current create flow builds and links agents; **activating a paused agent so it executes work through the Hermes gateway** (runtime model/provider wiring) is the next phase.
 
 ## Hosting clients
 
@@ -232,7 +238,7 @@ plugins/
   suburban-mail/            Mailboxes page: connect email accounts, combined inbox (dashboard plugin)
   suburban-bookings/        Bookings page: connect a scheduling app, upcoming appointments (dashboard plugin)
   suburban-automations/     Automations page: embedded n8n status, workflows, one-click open (dashboard plugin)
-  suburban-orchestration/   Orchestration page: Paperclip-managed agents + attention, read-only (dashboard plugin)
+  suburban-orchestration/   Orchestration page: unified create-agent (Hermes profile + Paperclip role), list/delete (dashboard plugin)
 docs/ARCHITECTURE.md        How the layer works, incl. the chat integration
 ```
 
@@ -252,7 +258,7 @@ Not yet done / known limitations:
 - A reverse proxy now serves the dashboard and brands the login page; HTTPS termination on that proxy is the next step.
 - The **Mailboxes** email connector (IMAP, multi-account) and **Bookings** connector (Cal.com / Calendly / Acuity / Setmore / iCal) are verified live. OAuth sign-in and agent send/triage/booking actions are not built yet.
 - The bundled **n8n** automation engine runs on its own port with its own login (TLS/subdomain + SSO pending the HTTPS work); the API key that powers the dashboard view is pasted once (auto-provisioning planned).
-- The bundled **Paperclip** control plane (`control-plane` profile) is new: it builds from source, runs headless, and the Orchestration page is read-only for now. The unified create/manage-agent write flow is the next phase.
+- The bundled **Paperclip** control plane (`control-plane` profile) builds from source and runs headless. The unified create-agent flow (Hermes profile + Paperclip role, with model/role pickers), agent delete, and the Overview's real "waiting on you" + managed-agent roster are all working and verified on the test VM. **Activate-and-run** (executing work on a paused agent through the gateway) is the next phase.
 - **Compose profiles** (lean / memory / automation / control-plane) and a scriptable per-client install (`--profiles`) are in place; requirement tiers are estimates, not yet load-benchmarked.
 
 ## Roadmap
