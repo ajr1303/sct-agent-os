@@ -3,12 +3,13 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-MEMORY_MODE=auto; ASSUME_YES=0
+MEMORY_MODE=auto; ASSUME_YES=0; PROFILES_OVERRIDE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --memory) MEMORY_MODE="$2"; shift 2;;
+    --profiles) PROFILES_OVERRIDE="$2"; shift 2;;
     --yes|-y) ASSUME_YES=1; shift;;
-    -h|--help) echo "Usage: ./install.sh [--memory auto|honcho|basic] [--yes]"; exit 0;;
+    -h|--help) echo "Usage: ./install.sh [--memory auto|honcho|basic] [--profiles \"automation,control-plane\"] [--yes]"; echo "  Profiles: memory (Honcho), automation (n8n), control-plane (Paperclip). Empty = lean."; exit 0;;
     *) echo "Unknown option: $1"; exit 1;;
   esac
 done
@@ -88,10 +89,12 @@ DASHBOARD_PASSWORD=$(openssl rand -base64 18 | tr -dc A-Za-z0-9 | cut -c1-20)
 HONCHO_DB_PASSWORD=$(gen_secret)
 CONNECTORS_KEY=$(openssl rand -base64 32 | tr '+/' '-_')
 N8N_ENCRYPTION_KEY=$(openssl rand -hex 32)
+BETTER_AUTH_SECRET=$(openssl rand -hex 32)
+PAPERCLIP_TOOL_ACTION_SIGNING_SECRET=$(openssl rand -hex 32)
 HERMES_TAG=latest
 HERMES_HOME_DIR=./data/hermes
 HERMES_MEM_LIMIT=3G
-COMPOSE_PROFILES=$([ "$MEMORY_MODE" = honcho ] && echo "memory,automation" || echo "automation")
+COMPOSE_PROFILES=$([ -n "$PROFILES_OVERRIDE" ] && echo "$PROFILES_OVERRIDE" || { [ "$MEMORY_MODE" = honcho ] && echo "memory,automation,control-plane" || echo "automation,control-plane"; })
 ENV
   mkdir -p data/hermes/dashboard-themes backups
   if [ "$MEMORY_MODE" = honcho ]; then write_honcho_env; write_honcho_json; fi
@@ -160,7 +163,7 @@ main() {
   write_env
   hermes_first_run
   start_stack
-  for plug in suburban-cyber suburban-chat suburban-mail suburban-bookings suburban-automations; do docker compose exec -T hermes hermes plugins enable "$plug" || warn "could not enable $plug plugin"; done
+  for plug in suburban-cyber suburban-chat suburban-mail suburban-bookings suburban-automations suburban-orchestration; do docker compose exec -T hermes hermes plugins enable "$plug" || warn "could not enable $plug plugin"; done
   install_cron
   say "Smoke test"
   ./scripts/smoke-test.sh || warn "Some checks failed - see above. Logs: docker compose logs"

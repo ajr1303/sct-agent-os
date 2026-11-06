@@ -49,6 +49,12 @@ services:
       HERMES_AUTH_URL: "http://hermes:9119/api/auth/me"
       CONNECTORS_DB: "/data/connectors.db"
       N8N_INTERNAL_URL: "http://n8n:5678"
+      # Orchestration bridge target. Bundled Paperclip by default; for the
+      # connect-to-existing path, override PAPERCLIP_URL (+ PAPERCLIP_API_KEY,
+      # PAPERCLIP_COMPANY_ID) in .env. The bridge is read-only (GET) by design.
+      PAPERCLIP_URL: "${PAPERCLIP_URL:-http://paperclip:3100}"
+      PAPERCLIP_API_KEY: "${PAPERCLIP_API_KEY:-}"
+      PAPERCLIP_COMPANY_ID: "${PAPERCLIP_COMPANY_ID:-}"
     volumes:
       - connectors-data:/data
     expose:
@@ -86,6 +92,38 @@ services:
       retries: 10
       start_period: 30s
     mem_limit: 1G
+
+  # Bundled agent-orchestration control plane (our own fresh Paperclip, never a
+  # migration). Under the "control-plane" profile. Runs HEADLESS: local_trusted
+  # mode (no login), reachable only on the compose network — the dashboard is the
+  # only cockpit. Single-container build with embedded DB (quickstart topology).
+  # NOTE: builds from source (Node monorepo) — the first build is heavy.
+  paperclip:
+    profiles: ["control-plane"]
+    build:
+      context: https://github.com/paperclipai/paperclip.git#253bf071f0a496554b61fff897ad3f11afaf8766
+      dockerfile: Dockerfile
+    image: agent-os/paperclip:253bf07
+    container_name: agent-os-paperclip
+    restart: unless-stopped
+    pids_limit: 2048
+    stop_grace_period: 90s
+    environment:
+      HOST: "0.0.0.0"
+      PAPERCLIP_HOME: "/paperclip"
+      # Headless: only Agent OS (over the compose network) talks to it.
+      PAPERCLIP_DEPLOYMENT_MODE: "local_trusted"
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
+      PAPERCLIP_PUBLIC_URL: "http://paperclip:3100"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?run ./install.sh first}
+      PAPERCLIP_TOOL_ACTION_SIGNING_SECRET: ${PAPERCLIP_TOOL_ACTION_SIGNING_SECRET:?run ./install.sh first}
+    volumes:
+      - paperclip-data:/paperclip
+    expose:
+      - "3100"
+    mem_limit: 2G
 
   honcho-db:
     profiles: ["memory"]
@@ -147,3 +185,4 @@ volumes:
   honcho-pgdata:
   connectors-data:
   n8n-data:
+  paperclip-data:

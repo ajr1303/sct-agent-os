@@ -43,6 +43,7 @@ Re-running the command updates the checkout in place. For routine updates, prefe
 | **Mailboxes** | Connect multiple email accounts (Gmail, Microsoft 365, any hosted-domain IMAP) and see combined unread/preview in the dashboard. Credentials encrypted at rest. |
 | **Bookings** | Connect a scheduling app (Cal.com, Calendly, Acuity, Setmore, or a Google/Microsoft iCal link) and see combined upcoming appointments. Credentials encrypted at rest. |
 | **Automations** | A bundled, self-hosted **n8n** engine (`automation` profile). The dashboard shows workflow + run status and opens the n8n builder in one click; local workflows run off the token meter. |
+| **Orchestration** | A bundled, headless **Paperclip** control plane (`control-plane` profile). The dashboard surfaces Paperclip-managed agents and "waiting on you" items. Read-only today; one-flow create/manage next. |
 | **Memory (optional)** | Honcho long-term memory (Postgres + pgvector + deriver), wired into Hermes. |
 | **Operations** | Watchdog cron (every 5 min), nightly database backup (03:30, 14-day retention), a smoke test, and an in-place updater. |
 
@@ -50,15 +51,32 @@ Re-running the command updates the checkout in place. For routine updates, prefe
 
 ## Requirements
 
-| | Minimum | Recommended |
-|---|---|---|
-| OS | Linux (x86_64) | Ubuntu 22.04+ / Debian 12+ |
-| RAM | 4 GB | 8 GB (needed for Honcho memory) |
-| vCPU | 2 | 4 |
-| Free disk | 20 GB | 40 GB |
-| Network | Outbound HTTPS to Docker Hub, GitHub, and your LLM provider | |
+Base OS: Linux (x86_64), Ubuntu 22.04+ / Debian 12+ recommended. Outbound HTTPS to Docker Hub, GitHub, and your LLM provider. The stack scales with the **compose profiles** you enable, so size the box to the tier:
 
-Thresholds are enforced by the installer's preflight check. RAM/disk numbers are conservative estimates, not yet load-benchmarked.
+| Tier | Profiles | RAM | Disk | What's included |
+|---|---|---|---|---|
+| **Lean** | *(none)* | 4 GB | 20 GB | Hermes + dashboard + connectors (email, bookings) |
+| **+ Memory** | `memory` | 8 GB | 30 GB | adds Honcho long-term memory |
+| **+ Automation** | `automation` | +1 GB | +5 GB | adds the bundled n8n engine |
+| **+ Control plane** | `control-plane` | +2–3 GB | +5 GB (plus a heavier first build) | adds the bundled Paperclip orchestrator |
+| **Full (hosted client)** | all | 16 GB | 60 GB | everything |
+
+Thresholds are enforced by the installer's preflight check. Numbers are conservative estimates, not yet load-benchmarked. The `control-plane` profile builds Paperclip from source on first start — budget extra time and build RAM.
+
+### Compose profiles
+
+The stack is one `docker-compose.yml`; profiles decide what runs. They're stored in `COMPOSE_PROFILES` in `.env`:
+
+- *(empty)* — **lean**: Hermes + dashboard/proxy + connectors.
+- `memory` — Honcho long-term memory.
+- `automation` — the bundled n8n engine.
+- `control-plane` — the bundled Paperclip orchestrator (headless).
+
+Combine them comma-separated (e.g. `COMPOSE_PROFILES=memory,automation,control-plane`), then `docker compose up -d`. Or set them at install time:
+
+```bash
+curl -fsSL .../get.sh | sudo bash -s -- --profiles "automation,control-plane" --yes
+```
 
 ---
 
@@ -132,6 +150,35 @@ To run without n8n, remove `automation` from `COMPOSE_PROFILES` in `.env` and `d
 
 > First run: open the builder once to create your owner account and the API key. Auto-provisioning that key (so the engine is zero-touch) is a planned enhancement. Native TLS/subdomain + single sign-on for n8n land with the HTTPS roadmap item.
 
+## Orchestration (bundled Paperclip)
+
+With the `control-plane` profile, Agent OS bundles its **own fresh [Paperclip](https://github.com/paperclipai/paperclip)** instance — the agent-orchestration layer (org chart, task/issue assignment, schedules, budgets, approvals, audit ledger). It is **not** a migration of any existing instance.
+
+The model is **one cockpit, two engines**:
+
+- **Hermes** is the engine room — where an agent actually runs (model, tools, chat, sessions).
+- **Paperclip** is the management office — it drives agents, it doesn't run them. It ships a Hermes adapter for exactly this.
+- **The Agent OS dashboard is the only cockpit.** Paperclip runs **headless** (`local_trusted` mode, reachable only on the compose network, never exposed), so there's no second login and no separate UI to learn.
+
+The **Orchestration** page surfaces Paperclip's managed agents and "waiting on you" items. This first release is **read-only**; the unified "create an agent → wire Hermes runtime + Paperclip record in one flow" is the next phase.
+
+**Connect-to-existing (optional):** a lab already running Paperclip can point the bridge at it instead of the bundled one — set `PAPERCLIP_URL` (and `PAPERCLIP_API_KEY`, `PAPERCLIP_COMPANY_ID`) in `.env`. That path is **observe-only by design**: the bridge is GET-only, so Agent OS reads status but never approves, acts, or changes anything on an instance it doesn't own.
+
+> Paperclip builds from source (a Node monorepo) on first start, so the initial `control-plane` build is heavy. Native TLS/SSO and the full create/manage write flow land in later phases.
+
+## Hosting clients
+
+The long-term model is **managed hosting**: Suburban Cyber spins up the full stack per client on an individual VPS. Each client gets their own box and their own isolated stack — nothing is shared.
+
+A per-client provision is a non-interactive install with the tier and LAN exposure chosen up front:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ajr1303/sct-agent-os/main/get.sh \
+  | sudo bash -s -- --profiles "memory,automation,control-plane" --memory honcho --yes
+```
+
+The installer generates all per-client secrets (dashboard password, API/encryption keys, Paperclip secrets), prints the dashboard login, and brings the stack up. Point DNS/TLS at the proxy per the HTTPS roadmap item, and you have a client instance.
+
 ## Memory (Honcho)
 
 With `--memory honcho` (the default when RAM ≥ 8 GB), the stack adds:
@@ -183,6 +230,7 @@ plugins/
   suburban-mail/            Mailboxes page: connect email accounts, combined inbox (dashboard plugin)
   suburban-bookings/        Bookings page: connect a scheduling app, upcoming appointments (dashboard plugin)
   suburban-automations/     Automations page: embedded n8n status, workflows, one-click open (dashboard plugin)
+  suburban-orchestration/   Orchestration page: Paperclip-managed agents + attention, read-only (dashboard plugin)
 docs/ARCHITECTURE.md        How the layer works, incl. the chat integration
 ```
 
@@ -202,6 +250,8 @@ Not yet done / known limitations:
 - A reverse proxy now serves the dashboard and brands the login page; HTTPS termination on that proxy is the next step.
 - The **Mailboxes** email connector (IMAP, multi-account) and **Bookings** connector (Cal.com / Calendly / Acuity / Setmore / iCal) are verified live. OAuth sign-in and agent send/triage/booking actions are not built yet.
 - The bundled **n8n** automation engine runs on its own port with its own login (TLS/subdomain + SSO pending the HTTPS work); the API key that powers the dashboard view is pasted once (auto-provisioning planned).
+- The bundled **Paperclip** control plane (`control-plane` profile) is new: it builds from source, runs headless, and the Orchestration page is read-only for now. The unified create/manage-agent write flow is the next phase.
+- **Compose profiles** (lean / memory / automation / control-plane) and a scriptable per-client install (`--profiles`) are in place; requirement tiers are estimates, not yet load-benchmarked.
 
 ## Roadmap
 

@@ -695,6 +695,96 @@ def automations_executions(_auth=Depends(require_auth)):
     return {"executions": out}
 
 
+# ===========================================================================
+# ORCHESTRATION (Paperclip) — READ-ONLY
+# The dashboard surfaces Paperclip's managed agents and "waiting on you" items.
+# This bridge is intentionally GET-only: no writes, approvals, or agent actions,
+# which keeps the connect-to-existing path safe to point at a live instance.
+# Bundled Paperclip runs local_trusted (no key). External instances pass a board
+# API key via Authorization: Bearer.
+# ===========================================================================
+PAPERCLIP_URL = os.environ.get("PAPERCLIP_URL", "http://paperclip:3100").rstrip("/")
+PAPERCLIP_API_KEY = os.environ.get("PAPERCLIP_API_KEY", "").strip()
+PAPERCLIP_COMPANY_ID = os.environ.get("PAPERCLIP_COMPANY_ID", "").strip()
+
+
+def _pc_headers():
+    return {"Authorization": "Bearer " + PAPERCLIP_API_KEY} if PAPERCLIP_API_KEY else {}
+
+
+def _pc_get(path):
+    r = _http_get(PAPERCLIP_URL + path, headers=_pc_headers())
+    if r.status_code in (401, 403):
+        raise PermissionError("Paperclip rejected the request (auth).")
+    r.raise_for_status()
+    return r.json()
+
+
+def _pc_up():
+    try:
+        return _http_get(PAPERCLIP_URL + "/api/health").status_code == 200
+    except Exception:
+        return False
+
+
+def _pc_mode():
+    return "external" if (PAPERCLIP_API_KEY or PAPERCLIP_URL != "http://paperclip:3100") else "bundled"
+
+
+def _pc_company_id():
+    if PAPERCLIP_COMPANY_ID:
+        return PAPERCLIP_COMPANY_ID
+    data = _pc_get("/api/companies")
+    items = data.get("companies") if isinstance(data, dict) else None
+    if items is None:
+        items = data.get("data") if isinstance(data, dict) else None
+    if items is None:
+        items = data if isinstance(data, list) else []
+    if items:
+        c = items[0]
+        return c.get("id") or c.get("companyId")
+    return None
+
+
+@app.get("/orchestration/status")
+def orchestration_status(_auth=Depends(require_auth)):
+    return {"paperclip_up": _pc_up(), "mode": _pc_mode()}
+
+
+@app.get("/orchestration/overview")
+def orchestration_overview(_auth=Depends(require_auth)):
+    if not _pc_up():
+        return {"paperclip_up": False, "mode": _pc_mode(), "agents": [], "attention": None, "note": "control plane not running"}
+    out = {"paperclip_up": True, "mode": _pc_mode(), "company_id": None, "agents": [], "attention": None, "errors": []}
+    try:
+        cid = _pc_company_id()
+        out["company_id"] = cid
+    except PermissionError as e:
+        out["errors"].append(str(e)); return out
+    except Exception as e:
+        out["errors"].append("companies: " + str(e)[:120]); return out
+    if not cid:
+        out["errors"].append("No company found in Paperclip yet.")
+        return out
+    try:
+        ag = _pc_get("/api/companies/" + str(cid) + "/managed-agent-profiles")
+        items = ag.get("profiles") if isinstance(ag, dict) else None
+        if items is None:
+            items = ag.get("data") if isinstance(ag, dict) else None
+        if items is None:
+            items = ag if isinstance(ag, list) else []
+        out["agents"] = [{"id": a.get("id"), "name": a.get("name") or a.get("displayName") or a.get("agentName") or "Agent",
+                          "status": a.get("status") or a.get("state")} for a in items][:50]
+    except Exception as e:
+        out["errors"].append("agents: " + str(e)[:120])
+    try:
+        att = _pc_get("/api/companies/" + str(cid) + "/attention/summary")
+        out["attention"] = att
+    except Exception as e:
+        out["errors"].append("attention: " + str(e)[:120])
+    return out
+
+
 @app.exception_handler(HTTPException)
 def _http_exc(request: Request, exc: HTTPException):
     return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
