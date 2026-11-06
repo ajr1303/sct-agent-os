@@ -54,7 +54,7 @@
       var sb = useState(null), sessions = sb[0], setSessions = sb[1];
       var sc = useState(null), analytics = sc[0], setAnalytics = sc[1];
       var sd = useState(null), agents = sd[0], setAgents = sd[1];
-      var se = useState(SAMPLE.approvals.slice()), approvals = se[0], setApprovals = se[1];
+      var se = useState(null), pcOv = se[0], setPcOv = se[1];
 
       useEffect(function () {
         function load() {
@@ -62,6 +62,11 @@
           var p2 = call("getSessions"); if (p2) p2.then(function (v) { setSessions(toList(v)); }).catch(function () {});
           var p3 = call("getAnalytics", 14); if (p3) p3.then(setAnalytics).catch(function () {});
           var p4 = call("getProfiles"); if (p4) p4.then(function (v) { setAgents(toList(v)); }).catch(function () {});
+          try {
+            fetch("/api/connectors/orchestration/overview", { credentials: "same-origin" })
+              .then(function (r) { return r.ok ? r.json() : null; })
+              .then(function (v) { if (v) setPcOv(v); }).catch(function () {});
+          } catch (e) {}
         }
         load();
         var t = setInterval(load, 20000);
@@ -77,7 +82,26 @@
       var recent = (sessions || []).slice(0, 5);
       var today = new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
 
-      function decide(i) { var n = approvals.slice(); n.splice(i, 1); setApprovals(n); }
+      var ATT_KINDS = [["approval", "Approvals"], ["decision", "Decisions"], ["review", "Reviews"], ["failed_run", "Failed runs"], ["budget_alert", "Budget alerts"], ["agent_error_alert", "Agent errors"], ["blocker_attention", "Blockers"], ["join_request", "Join requests"], ["recovery_action", "Recovery actions"], ["productivity_review", "Productivity reviews"], ["issue_thread_interaction", "Messages"]];
+      function orchHref() { return "/orchestration" + (location.search || ""); }
+      function waitingBody() {
+        if (pcOv == null) return h("div", { className: "sc-empty" }, "Checking the control plane…");
+        if (!pcOv.paperclip_up) return h("div", { className: "sc-empty" }, h("span", null, "Control plane is off. ", h("a", { href: orchHref(), className: "sc-link" }, "Set it up in Orchestration →")));
+        var att = pcOv.attention;
+        if (!att) return h("div", { className: "sc-empty" }, h("span", null, "Connect Paperclip in ", h("a", { href: orchHref(), className: "sc-link" }, "Orchestration →"), " to see approvals here."));
+        var total = att.totalCount || 0;
+        if (total === 0) return h("div", { className: "sc-empty" }, "Nothing waiting. Agents ask here before they send, publish, or delete.");
+        var counts = att.countsBySourceKind || {};
+        var rows = ATT_KINDS.filter(function (k) { return (counts[k[0]] || 0) > 0; }).map(function (k) {
+          return h("div", { className: "sc-wait-row", key: k[0] },
+            h("span", { className: "sc-wait-n" }, counts[k[0]]),
+            h("span", null, k[1]));
+        });
+        return h("div", null,
+          h("div", { className: "sc-wait-total" }, total + " item" + (total === 1 ? "" : "s") + " need your attention"),
+          h("div", { className: "sc-wait-rows" }, rows),
+          h("a", { href: orchHref(), className: "sc-link sc-wait-cta" }, "Review in Orchestration →"));
+      }
 
       return h("div", { className: "sc-wrap" },
         h("div", { className: "sc-top" },
@@ -95,22 +119,7 @@
 
         h("div", { className: "sc-cols" },
           h("div", { className: "sc-col" },
-            Panel(h("span", null, "Waiting on you ", h("span", { className: "sc-pill-sample" }, "sample")),
-              "Agents ask before they send, publish or delete.",
-              approvals.length === 0
-                ? h("div", { className: "sc-empty" }, "Nothing waiting.")
-                : approvals.map(function (ap, i) {
-                    return h("div", { className: "sc-appr", key: i },
-                      h("div", { className: "sc-appr-l" },
-                        h("div", { className: "sc-appr-top" },
-                          h("span", { className: "sc-agent" }, ap.agent.toUpperCase()),
-                          h("span", { className: "sc-risk sc-risk-" + ap.risk }, ap.risk + " risk")),
-                        h("div", { className: "sc-appr-title" }, ap.title),
-                        h("div", { className: "sc-appr-detail" }, ap.detail)),
-                      h("div", { className: "sc-appr-btns" },
-                        h("button", { className: "sc-btn sc-btn-ghost", onClick: function () { decide(i); } }, "Deny"),
-                        h("button", { className: "sc-btn sc-btn-primary", onClick: function () { decide(i); } }, "Approve")));
-                  })),
+            Panel("Waiting on you", "Agents ask before they send, publish or delete.", waitingBody()),
             Panel("Your agents", agents == null ? "" : agents.length + " configured",
               agents == null
                 ? h("div", { className: "sc-empty" }, "Loading…")
