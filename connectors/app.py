@@ -25,6 +25,7 @@ from email.header import decode_header, make_header
 from contextlib import closing
 
 import httpx
+from dateutil import parser as dtparse
 from cryptography.fernet import Fernet
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse
@@ -70,6 +71,15 @@ def get_db():
             imap_port INTEGER NOT NULL,
             use_ssl INTEGER NOT NULL,
             username TEXT NOT NULL,
+            secret BLOB NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS bookings_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            label TEXT,
+            provider TEXT NOT NULL,
             secret BLOB NOT NULL,
             created_at TEXT NOT NULL
         )
@@ -262,6 +272,304 @@ def summary(_auth=Depends(require_auth)):
         boxes.append(box)
 
     return {"total_unread": total_unread, "mailbox_count": len(boxes), "mailboxes": boxes}
+
+
+# ===========================================================================
+# BOOKINGS CONNECTOR
+# Users connect their booking app so agents can see upcoming appointments.
+# Token/key-based providers (no OAuth redirect infra needed) plus a universal
+# iCal URL path that covers Google Calendar and Microsoft/Outlook.
+# ===========================================================================
+BOOKING_PROVIDERS = {
+    "cal_com": {
+        "label": "Cal.com",
+        "fields": [{"key": "api_key", "label": "API key", "type": "password", "placeholder": "cal_live_..."}],
+        "hint": "Cal.com › Settings › Developer › API keys → create a key.",
+    },
+    "calendly": {
+        "label": "Calendly",
+        "fields": [{"key": "token", "label": "Personal access token", "type": "password", "placeholder": "eyJ..."}],
+        "hint": "Calendly › Integrations › API & Webhooks → generate a personal access token.",
+    },
+    "acuity": {
+        "label": "Acuity Scheduling",
+        "fields": [
+            {"key": "user_id", "label": "User ID", "type": "text", "placeholder": "123456"},
+            {"key": "api_key", "label": "API key", "type": "password"},
+        ],
+        "hint": "Acuity › Integrations › API → User ID and API Key.",
+    },
+    "setmore": {
+        "label": "Setmore",
+        "fields": [{"key": "refresh_token", "label": "Refresh token", "type": "password"}],
+        "hint": "Setmore › Settings › Integrations › API/Developer → generate a Refresh Token.",
+    },
+    "ical": {
+        "label": "Google / Microsoft / iCal URL",
+        "fields": [{"key": "ics_url", "label": "Secret iCal (ICS) URL", "type": "text",
+                    "placeholder": "https://calendar.google.com/calendar/ical/.../basic.ics"}],
+        "hint": "Google Calendar › Settings › Secret address in iCal format. Outlook › Publish calendar → ICS link.",
+    },
+}
+
+
+def _now():
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def _to_dt(s):
+    if s is None:
+        return None
+    if isinstance(s, (int, float)):
+        v = float(s)
+        if v > 1e12:
+            v /= 1000.0
+        try: return datetime.datetime.fromtimestamp(v, datetime.timezone.utc)
+        except Exception: return None
+    s = str(s).strip()
+    if not s:
+        return None
+    if s.isdigit():
+        v = float(s)
+        if v > 1e12:
+            v /= 1000.0
+        try: return datetime.datetime.fromtimestamp(v, datetime.timezone.utc)
+        except Exception: return None
+    try:
+        d = dtparse.parse(s)
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=datetime.timezone.utc)
+        return d
+    except Exception:
+        return None
+
+
+def _upcoming(events, now, limit):
+    rows = []
+    for e in events:
+        d = _to_dt(e.get("start"))
+        if d is None:
+            continue
+        if d < now - datetime.timedelta(hours=2):  # keep just-started ones
+            continue
+        e["_dt"] = d
+        rows.append(e)
+    rows.sort(key=lambda x: x["_dt"])
+    return [{"title": e.get("title") or "Appointment", "start": e["_dt"].isoformat(), "who": e.get("who", "")}
+            for e in rows[:limit]]
+
+
+def _http_get(url, **kw):
+    with httpx.Client(timeout=15.0, follow_redirects=True) as c:
+        return c.get(url, **kw)
+
+
+def _names(attendees):
+    try:
+        return ", ".join([a.get("name") or a.get("email") or "" for a in (attendees or []) if a]).strip(", ")
+    except Exception:
+        return ""
+
+
+def fetch_cal_com(secret, now, limit):
+    r = _http_get("https://api.cal.com/v1/bookings", params={"apiKey": secret.get("api_key", "")})
+    if r.status_code in (401, 403):
+        raise PermissionError("Cal.com rejected the API key.")
+    r.raise_for_status()
+    data = r.json()
+    items = data.get("bookings") or data.get("data") or []
+    out = []
+    for b in items:
+        et = b.get("eventType") or {}
+        out.append({"title": b.get("title") or et.get("title") or "Booking",
+                    "start": b.get("startTime") or b.get("start"),
+                    "who": _names(b.get("attendees"))})
+    return _upcoming(out, now, limit)
+
+
+def fetch_calendly(secret, now, limit):
+    h = {"Authorization": "Bearer " + secret.get("token", "")}
+    me = _http_get("https://api.calendly.com/users/me", headers=h)
+    if me.status_code in (401, 403):
+        raise PermissionError("Calendly rejected the personal access token.")
+    me.raise_for_status()
+    uri = (me.json().get("resource") or {}).get("uri")
+    params = {"user": uri, "sort": "start_time:asc", "count": str(max(limit, 10)),
+              "min_start_time": now.strftime("%Y-%m-%dT%H:%M:%SZ")}
+    r = _http_get("https://api.calendly.com/scheduled_events", headers=h, params=params)
+    r.raise_for_status()
+    out = []
+    for ev in r.json().get("collection", []):
+        out.append({"title": ev.get("name") or "Event", "start": ev.get("start_time"), "who": ""})
+    return _upcoming(out, now, limit)
+
+
+def fetch_acuity(secret, now, limit):
+    r = _http_get("https://acuityscheduling.com/api/v1/appointments",
+                  params={"max": str(max(limit, 15)), "minDate": now.strftime("%Y-%m-%d")},
+                  auth=(secret.get("user_id", ""), secret.get("api_key", "")))
+    if r.status_code in (401, 403):
+        raise PermissionError("Acuity rejected the User ID / API key.")
+    r.raise_for_status()
+    out = []
+    for a in (r.json() or []):
+        who = (str(a.get("firstName", "")) + " " + str(a.get("lastName", ""))).strip()
+        out.append({"title": a.get("type") or "Appointment", "start": a.get("datetime"), "who": who})
+    return _upcoming(out, now, limit)
+
+
+_setmore_cache = {}
+
+
+def _setmore_token(rt):
+    import time
+    c = _setmore_cache.get(rt)
+    if c and c[1] > time.time() + 60:
+        return c[0]
+    r = _http_get("https://developer.setmore.com/api/v1/o/oauth2/token", params={"refreshToken": rt})
+    if r.status_code in (401, 403):
+        raise PermissionError("Setmore rejected the refresh token.")
+    r.raise_for_status()
+    tok = ((r.json().get("data") or {}).get("token") or {})
+    at = tok.get("access_token")
+    if not at:
+        raise PermissionError("Setmore did not return an access token for that refresh token.")
+    _setmore_cache[rt] = (at, time.time() + float(tok.get("expires_in") or 3600))
+    return at
+
+
+def fetch_setmore(secret, now, limit):
+    at = _setmore_token(secret.get("refresh_token", ""))
+    h = {"Authorization": "Bearer " + at}
+    params = {"startDate": now.strftime("%d/%m/%Y"),
+              "endDate": (now + datetime.timedelta(days=45)).strftime("%d/%m/%Y")}
+    r = _http_get("https://developer.setmore.com/api/v1/bookings/appointments", headers=h, params=params)
+    r.raise_for_status()
+    data = r.json().get("data") or {}
+    appts = data.get("appointments") or data.get("appointment") or []
+    out = []
+    for a in appts:
+        out.append({"title": a.get("label") or a.get("service_name") or "Appointment",
+                    "start": a.get("start_time") or a.get("startTime"),
+                    "who": a.get("customer_name") or a.get("customer_label") or ""})
+    return _upcoming(out, now, limit)
+
+
+def fetch_ical(secret, now, limit):
+    url = secret.get("ics_url", "")
+    if not url.lower().startswith("http"):
+        raise ValueError("Enter the full https URL of the iCal (ICS) feed.")
+    r = _http_get(url)
+    if r.status_code in (401, 403):
+        raise PermissionError("That calendar URL needs authentication — use the secret/private iCal address.")
+    r.raise_for_status()
+    text = r.text
+    if "BEGIN:VCALENDAR" not in text:
+        raise ValueError("That URL did not return an iCal (ICS) feed.")
+    from icalendar import Calendar
+    cal = Calendar.from_ical(text)
+    out = []
+    for comp in cal.walk("VEVENT"):
+        ds = comp.get("DTSTART")
+        if not ds:
+            continue
+        d = ds.dt
+        if isinstance(d, datetime.datetime):
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=datetime.timezone.utc)
+        else:
+            d = datetime.datetime(d.year, d.month, d.day, tzinfo=datetime.timezone.utc)
+        out.append({"title": str(comp.get("SUMMARY") or "Event"), "start": d.isoformat(), "who": ""})
+    return _upcoming(out, now, limit)
+
+
+BOOKING_FETCH = {
+    "cal_com": fetch_cal_com, "calendly": fetch_calendly, "acuity": fetch_acuity,
+    "setmore": fetch_setmore, "ical": fetch_ical,
+}
+
+
+class BookingIn(BaseModel):
+    label: str = ""
+    provider: str
+    fields: dict = {}
+
+
+@app.get("/bookings/providers")
+def booking_providers(_auth=Depends(require_auth)):
+    return BOOKING_PROVIDERS
+
+
+@app.get("/bookings/accounts")
+def list_bookings(_auth=Depends(require_auth)):
+    with closing(get_db()) as con:
+        rows = con.execute("SELECT id, label, provider FROM bookings_accounts ORDER BY id").fetchall()
+    return [{"id": r[0], "label": r[1], "provider": r[2],
+             "provider_label": (BOOKING_PROVIDERS.get(r[2]) or {}).get("label", r[2])} for r in rows]
+
+
+@app.post("/bookings/accounts")
+def add_booking(b: BookingIn, _auth=Depends(require_auth)):
+    meta = BOOKING_PROVIDERS.get(b.provider)
+    if not meta or b.provider not in BOOKING_FETCH:
+        raise HTTPException(status_code=400, detail="Unknown booking provider.")
+    secret = b.fields or {}
+    for f in meta["fields"]:
+        if not str(secret.get(f["key"], "")).strip():
+            raise HTTPException(status_code=400, detail=f["label"] + " is required.")
+    now = _now()
+    try:
+        BOOKING_FETCH[b.provider](secret, now, 1)  # live validation
+    except PermissionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Could not connect: " + str(e)[:160])
+    with closing(get_db()) as con:
+        con.execute("INSERT INTO bookings_accounts (label, provider, secret, created_at) VALUES (?,?,?,?)",
+                    (b.label.strip() or meta["label"], b.provider,
+                     fernet.encrypt(json.dumps(secret).encode()), now.isoformat()))
+        con.commit()
+        nid = con.execute("SELECT last_insert_rowid()").fetchone()[0]
+    return {"ok": True, "id": nid}
+
+
+@app.delete("/bookings/accounts/{bid}")
+def del_booking(bid: int, _auth=Depends(require_auth)):
+    with closing(get_db()) as con:
+        con.execute("DELETE FROM bookings_accounts WHERE id=?", (bid,))
+        con.commit()
+    return {"ok": True}
+
+
+@app.get("/bookings/summary")
+def bookings_summary(_auth=Depends(require_auth)):
+    now = _now()
+    with closing(get_db()) as con:
+        rows = con.execute("SELECT id, label, provider, secret FROM bookings_accounts ORDER BY id").fetchall()
+    accounts = []
+    combined = []
+    for r in rows:
+        bid, label, provider, secret = r
+        acc = {"id": bid, "label": label, "provider": provider,
+               "provider_label": (BOOKING_PROVIDERS.get(provider) or {}).get("label", provider),
+               "upcoming": [], "error": None}
+        try:
+            sec = json.loads(fernet.decrypt(secret).decode())
+            evs = BOOKING_FETCH[provider](sec, now, 5)
+            acc["upcoming"] = evs
+            for e in evs:
+                combined.append(dict(e, account=label))
+        except PermissionError as e:
+            acc["error"] = str(e)
+        except Exception as e:
+            acc["error"] = str(e)[:160]
+        accounts.append(acc)
+    combined.sort(key=lambda x: x["start"])
+    return {"account_count": len(accounts), "accounts": accounts, "next": combined[:8]}
 
 
 @app.exception_handler(HTTPException)

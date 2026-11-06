@@ -159,7 +159,7 @@ main() {
   write_env
   hermes_first_run
   start_stack
-  for plug in suburban-cyber suburban-chat suburban-mail; do docker compose exec -T hermes hermes plugins enable "$plug" || warn "could not enable $plug plugin"; done
+  for plug in suburban-cyber suburban-chat suburban-mail suburban-bookings; do docker compose exec -T hermes hermes plugins enable "$plug" || warn "could not enable $plug plugin"; done
   install_cron
   say "Smoke test"
   ./scripts/smoke-test.sh || warn "Some checks failed - see above. Logs: docker compose logs"

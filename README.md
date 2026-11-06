@@ -41,6 +41,7 @@ Re-running the command updates the checkout in place. For routine updates, prefe
 | **Overview page** | Landing page with live gateway status, sessions, token usage, AI spend, your agents, recent activity, and a managed-service card. |
 | **Chat** | The raw Hermes terminal is replaced by a clean, bubble-style chatbot. |
 | **Mailboxes** | Connect multiple email accounts (Gmail, Microsoft 365, any hosted-domain IMAP) and see combined unread/preview in the dashboard. Credentials encrypted at rest. |
+| **Bookings** | Connect a scheduling app (Cal.com, Calendly, Acuity, Setmore, or a Google/Microsoft iCal link) and see combined upcoming appointments. Credentials encrypted at rest. |
 | **Memory (optional)** | Honcho long-term memory (Postgres + pgvector + deriver), wired into Hermes. |
 | **Operations** | Watchdog cron (every 5 min), nightly database backup (03:30, 14-day retention), a smoke test, and an in-place updater. |
 
@@ -104,6 +105,20 @@ Under the hood this is a small **connectors** service (`connectors/`) behind the
 
 > **Scope note:** this first release uses IMAP, which works for Google, Microsoft 365, and hosted domains today. Native one-click OAuth sign-in (and outbound send/triage actions for agents) are the next additions.
 
+## Connecting your booking app
+
+The **Bookings** page connects a scheduling tool so agents can see what's on the calendar:
+
+- **Cal.com** — API key (Settings › Developer › API keys).
+- **Calendly** — personal access token (Integrations › API & Webhooks).
+- **Acuity Scheduling** — User ID + API key (Integrations › API).
+- **Setmore** — a Refresh Token (Settings › Integrations › API); the service exchanges it for a short-lived access token automatically.
+- **Google / Microsoft / other** — paste the calendar's **secret iCal (ICS) URL** (Google Calendar › Settings › *Secret address in iCal format*; Outlook › *Publish calendar*). This is the no-OAuth path and covers any calendar that can publish an ICS feed.
+
+Each account is verified with a live API call before it's saved, credentials are Fernet-encrypted at rest, and the dashboard shows combined upcoming appointments. This runs on the same **connectors** service as email (`/api/connectors/bookings/...`).
+
+> **Scope note:** this reads upcoming appointments across providers. Native OAuth sign-in for Google/Microsoft, and booking/reschedule actions for agents, are later additions.
+
 ## Memory (Honcho)
 
 With `--memory honcho` (the default when RAM ≥ 8 GB), the stack adds:
@@ -153,6 +168,7 @@ plugins/
   suburban-cyber/           Overview page, branding, logo, nav rename (dashboard plugin)
   suburban-chat/            Bubble chat that replaces the terminal (dashboard plugin)
   suburban-mail/            Mailboxes page: connect email accounts, combined inbox (dashboard plugin)
+  suburban-bookings/        Bookings page: connect a scheduling app, upcoming appointments (dashboard plugin)
 docs/ARCHITECTURE.md        How the layer works, incl. the chat integration
 ```
 
