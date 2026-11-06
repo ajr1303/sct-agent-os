@@ -55,6 +55,8 @@
       var sc = useState(null), analytics = sc[0], setAnalytics = sc[1];
       var sd = useState(null), agents = sd[0], setAgents = sd[1];
       var se = useState(null), pcOv = se[0], setPcOv = se[1];
+      var sg = useState(null), upd = sg[0], setUpd = sg[1];
+      var sh = useState(0), updBump = sh[0], setUpdBump = sh[1];
 
       useEffect(function () {
         function load() {
@@ -66,6 +68,11 @@
             fetch("/api/connectors/orchestration/overview", { credentials: "same-origin" })
               .then(function (r) { return r.ok ? r.json() : null; })
               .then(function (v) { if (v) setPcOv(v); }).catch(function () {});
+          } catch (e) {}
+          try {
+            fetch("/sct-brand/update-status.json", { cache: "no-store" })
+              .then(function (r) { return r.ok ? r.json() : null; })
+              .then(function (v) { if (v) setUpd(v); }).catch(function () {});
           } catch (e) {}
         }
         load();
@@ -118,7 +125,22 @@
       var agentTileVal = useManaged ? String(managedAgents.length) : (status ? String(activeAgents != null ? activeAgents : 0) : "—");
       var agentTileSub = useManaged ? "Managed by Paperclip" : "Running right now";
 
+      function updDismissed(ver) { try { return localStorage.getItem("sc-upd-dismissed") === ver; } catch (e) { return false; } }
+      function dismissUpd(ver) { try { localStorage.setItem("sc-upd-dismissed", ver); } catch (e) {} setUpdBump(updBump + 1); }
+      function updBanner() {
+        if (!upd || !upd.update_available || updDismissed(upd.latest)) return null;
+        return h("div", { className: "sc-updbar" },
+          h("div", { className: "sc-updbar-l" },
+            h("span", { className: "sc-updbar-dot" }),
+            h("span", null, h("b", null, "Update available"), " — v" + (upd.current || "?") + " → v" + (upd.latest || "?") + ". Run ",
+              h("code", { className: "sc-updcode" }, "sudo ./scripts/update.sh"), " on the server when you're ready.")),
+          h("div", { className: "sc-updbar-r" },
+            upd.notes_url ? h("a", { className: "sc-link", href: upd.notes_url, target: "_blank", rel: "noopener" }, "What's changed") : null,
+            h("button", { className: "sc-updbar-x", onClick: function () { dismissUpd(upd.latest); } }, "Dismiss")));
+      }
+
       return h("div", { className: "sc-wrap" },
+        updBanner(),
         h("div", { className: "sc-top" },
           h("div", null,
             h("div", { className: "sc-date" }, today),

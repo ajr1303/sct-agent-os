@@ -73,3 +73,11 @@
 .sc-wait-row:last-child{border-bottom:0}
 .sc-wait-n{min-width:26px;height:22px;display:inline-flex;align-items:center;justify-content:center;background:var(--color-primary,#25c9ee);color:var(--color-primary-foreground,#04202a);font-weight:700;font-size:12px}
 .sc-wait-cta{display:inline-block;margin-top:12px;font-size:13px}
+/* update-available banner */
+.sc-updbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px;padding:11px 16px;border:1px solid var(--color-primary,#25c9ee);background:var(--color-accent,rgba(37,201,238,.08));font-size:13px}
+.sc-updbar-l{display:flex;align-items:center;gap:10px}
+.sc-updbar-dot{width:8px;height:8px;border-radius:50%;background:var(--color-primary,#25c9ee);flex-shrink:0;box-shadow:0 0 0 3px var(--color-accent,rgba(37,201,238,.15))}
+.sc-updcode{background:var(--color-input,rgba(255,255,255,.08));padding:2px 7px;font-size:12px;font-family:ui-monospace,Menlo,monospace}
+.sc-updbar-r{display:flex;align-items:center;gap:14px;flex-shrink:0}
+.sc-updbar-x{background:transparent;border:1px solid var(--color-border,rgba(255,255,255,.22));color:inherit;opacity:.7;cursor:pointer;font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:5px 11px}
+.sc-updbar-x:hover{opacity:1}

@@ -164,11 +164,13 @@ start_stack() {
 }
 
 install_cron() {
-  say "Installing watchdog and nightly backup"
+  say "Installing watchdog, nightly backup, and update check"
   local here; here=$(pwd)
   { crontab -l 2>/dev/null | grep -v '# agent-os-managed' || true
     echo "*/5 * * * * $here/scripts/watchdog.sh # agent-os-managed"
-    echo "30 3 * * * $here/scripts/backup.sh # agent-os-managed"; } | crontab -
+    echo "30 3 * * * $here/scripts/backup.sh # agent-os-managed"
+    echo "17 */6 * * * $here/scripts/check-updates.sh # agent-os-managed"; } | crontab -
+  ./scripts/check-updates.sh 2>/dev/null || true   # seed the status now
 }
 
 main() {

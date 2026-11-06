@@ -20,4 +20,5 @@ for plug in suburban-cyber suburban-chat suburban-mail suburban-bookings suburba
 done
 docker compose restart hermes
 docker compose restart proxy
-echo "Updated. Hard-refresh the dashboard (Ctrl+Shift+R)."
+./scripts/check-updates.sh 2>/dev/null || true   # refresh update status (clears the banner)
+echo "Updated to $(cat VERSION 2>/dev/null). Hard-refresh the dashboard (Ctrl+Shift+R)."

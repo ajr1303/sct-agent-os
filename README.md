@@ -208,9 +208,15 @@ Honcho is built unmodified from upstream source at a pinned commit; its AGPL-3.0
 cd /opt/sct-agent-os && sudo ./scripts/update.sh
 ```
 
-Pulls the latest repo, re-syncs the theme and plugins with correct permissions, restarts Hermes, and re-enables the plugins. Then hard-refresh the dashboard (Ctrl+Shift+R).
+Pulls the latest repo, re-syncs the theme and plugins with correct permissions, rebuilds local services, restarts, and re-enables the plugins. This updates **everything** — including the pinned versions of Hermes, Honcho, Paperclip, and n8n — because the repo is the single source of truth. Then hard-refresh the dashboard (Ctrl+Shift+R).
 
 > Note: `update.sh` pulls a new copy of itself; if the update script *itself* changed, run it a second time so the new logic takes effect.
+
+### Update notifications (notify-only)
+
+Each install checks for updates on a schedule (`scripts/check-updates.sh`, every 6 hours) and, when a newer release is published, shows an **"Update available" banner on the dashboard Overview** — current → latest, a "what's changed" link, and the one command to run. **Nothing updates automatically**; the customer runs `update.sh` when they're ready.
+
+The release marker is the repo's **`VERSION`** file: bump it (and tag/release) when you cut a release, and every instance's next check surfaces the banner. The check only calls out to GitHub to read that file; it never changes the box. Override the source/notes URLs with `UPDATE_VERSION_URL` / `UPDATE_NOTES_URL` in `.env` if you host your own release channel.
 
 ---
 
