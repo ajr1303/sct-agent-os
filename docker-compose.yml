@@ -55,6 +55,9 @@ services:
       PAPERCLIP_URL: "${PAPERCLIP_URL:-http://paperclip:3100}"
       PAPERCLIP_API_KEY: "${PAPERCLIP_API_KEY:-}"
       PAPERCLIP_COMPANY_ID: "${PAPERCLIP_COMPANY_ID:-}"
+      # Hermes gateway the unified create-agent flow points Paperclip agents at.
+      HERMES_API_URL: "${HERMES_API_URL:-http://hermes:8642}"
+      HERMES_API_KEY: "${API_SERVER_KEY:-}"
     volumes:
       - connectors-data:/data
     expose:

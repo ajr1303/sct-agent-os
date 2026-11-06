@@ -49,6 +49,11 @@
       s = useState("");   var apiKey = s[0], setApiKey = s[1];
       s = useState(false); var busy = s[0], setBusy = s[1];
       s = useState(null); var err = s[0], setErr = s[1];
+      s = useState(false); var showCreate = s[0], setShowCreate = s[1];
+      s = useState("");   var cName = s[0], setCName = s[1];
+      s = useState("");   var cInstr = s[0], setCInstr = s[1];
+      s = useState(false); var cBusy = s[0], setCBusy = s[1];
+      s = useState(null); var cErr = s[0], setCErr = s[1];
 
       function load() {
         api("/orchestration/status").then(function (st) {
@@ -73,6 +78,15 @@
       }
       function disconnect() {
         api("/orchestration/connection", { method: "DELETE" }).then(function () { setOv(null); load(); }).catch(function () {});
+      }
+      function createAgent(e) {
+        if (e) e.preventDefault();
+        setCErr(null);
+        if (!cName.trim()) { setCErr("Enter an agent name."); return; }
+        setCBusy(true);
+        api("/orchestration/agents", { method: "POST", body: JSON.stringify({ name: cName, instructions: cInstr }) })
+          .then(function () { setCBusy(false); setShowCreate(false); setCName(""); setCInstr(""); load(); })
+          .catch(function (e2) { setCBusy(false); setCErr(String(e2.message || e2)); });
       }
 
       var up = status ? status.paperclip_up : null;
@@ -127,10 +141,21 @@
           stat("Mode", mode === "external" ? "External" : "Bundled")) : null,
 
         up && connected ? h("div", { className: "so-panel" },
-          h("div", { className: "so-panel-h" }, "MANAGED AGENTS"),
+          h("div", { className: "so-panel-h so-panel-h-row" },
+            h("span", null, "MANAGED AGENTS"),
+            h("button", { className: "so-btn so-primary so-sm", onClick: function () { setShowCreate(!showCreate); setCErr(null); } }, showCreate ? "Close" : "+ Create agent")),
+          showCreate ? h("form", { className: "so-createform", onSubmit: createAgent },
+            h("input", { className: "so-input", value: cName, placeholder: "Agent name (e.g. Front Desk)",
+              onChange: function (e) { setCName(e.target.value); } }),
+            h("textarea", { className: "so-input so-ta", value: cInstr, placeholder: "Instructions (optional) — what should this agent do?",
+              onChange: function (e) { setCInstr(e.target.value); } }),
+            h("div", { className: "so-createhint" }, "Creates a Paperclip-managed agent that runs on your Hermes engine."),
+            cErr ? h("div", { className: "so-msg so-err" }, cErr) : null,
+            h("div", { className: "so-createactions" },
+              h("button", { type: "submit", className: "so-btn so-primary", disabled: cBusy }, cBusy ? "Creating…" : "Create agent"))) : null,
           ov == null ? h("div", { className: "so-empty" }, "Loading…")
             : (ov.errors && ov.errors.length) ? h("div", { className: "so-empty" }, "Paperclip: " + ov.errors.join("; "))
-            : agents.length === 0 ? h("div", { className: "so-empty" }, "No managed agents yet. Agents you create in Agent OS will register here.")
+            : agents.length === 0 ? h("div", { className: "so-empty" }, "No managed agents yet. Use + Create agent to make one.")
             : h("div", { className: "so-list" }, agents.map(function (a, i) {
                 return h("div", { className: "so-agent", key: i },
                   h("span", { className: "so-agent-name" }, a.name),

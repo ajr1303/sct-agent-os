@@ -41,5 +41,11 @@
 .so-ghost:hover{border-color:var(--color-primary,#25c9ee);color:var(--color-primary,#25c9ee)}
 .so-msg{font-size:13px;padding:9px 12px;margin:0 16px 14px}
 .so-err{color:var(--color-destructive,#ff7a73);border:1px solid var(--color-destructive,#ff7a73)}
+.so-panel-h-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.so-sm{padding:5px 11px;font-size:11px}
+.so-createform{padding:14px 16px;display:flex;flex-direction:column;gap:10px;border-bottom:1px solid var(--color-border,rgba(255,255,255,.08))}
+.so-ta{min-height:70px;resize:vertical}
+.so-createhint{font-size:12px;opacity:.55}
+.so-createactions{display:flex;justify-content:flex-end}
 .so-managed-foot{display:flex;gap:10px;flex-wrap:wrap}
 .so-foot{font-size:11px;opacity:.5;margin-top:4px}

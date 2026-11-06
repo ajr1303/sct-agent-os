@@ -713,6 +713,8 @@ def automations_executions(_auth=Depends(require_auth)):
 PAPERCLIP_URL = os.environ.get("PAPERCLIP_URL", "http://paperclip:3100").rstrip("/")
 PAPERCLIP_API_KEY = os.environ.get("PAPERCLIP_API_KEY", "").strip()
 PAPERCLIP_COMPANY_ID = os.environ.get("PAPERCLIP_COMPANY_ID", "").strip()
+HERMES_API_URL = os.environ.get("HERMES_API_URL", "http://hermes:8642").rstrip("/")
+HERMES_API_KEY = os.environ.get("HERMES_API_KEY", "").strip()
 
 
 def _pc_stored_key():
@@ -807,6 +809,59 @@ def orchestration_disconnect(_auth=Depends(require_auth)):
         con.execute("DELETE FROM orchestration")
         con.commit()
     return {"ok": True}
+
+
+class AgentCreate(BaseModel):
+    name: str
+    instructions: str = ""
+
+
+@app.post("/orchestration/agents")
+def create_agent(a: AgentCreate, _auth=Depends(require_auth)):
+    """Unified create: register a Paperclip-managed agent that runs on our Hermes
+    gateway (adapterType=hermes_gateway). One action wires orchestration + runtime."""
+    name = (a.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Agent name is required.")
+    key = _pc_key()
+    if not key:
+        raise HTTPException(status_code=400, detail="Connect Paperclip first (board API key).")
+    if not HERMES_API_KEY:
+        raise HTTPException(status_code=500, detail="HERMES_API_KEY is not configured on the connectors service.")
+    try:
+        cid = _pc_company_id()
+    except PermissionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Could not reach Paperclip: " + str(e)[:140])
+    if not cid:
+        raise HTTPException(status_code=400, detail="No Paperclip company found yet.")
+
+    adapter_config = {
+        "apiBaseUrl": HERMES_API_URL,
+        "apiKey": HERMES_API_KEY,
+        "dangerouslyAllowInsecureRemoteHttp": True,  # http://hermes:8642 is internal, not loopback
+        "sessionKeyStrategy": "issue",
+    }
+    if a.instructions.strip():
+        adapter_config["instructions"] = a.instructions.strip()
+    body = {"name": name, "adapterType": "hermes_gateway", "adapterConfig": adapter_config}
+
+    try:
+        with httpx.Client(timeout=45.0, follow_redirects=True) as c:
+            r = c.post(PAPERCLIP_URL + "/api/companies/" + str(cid) + "/agents",
+                       headers={"Authorization": "Bearer " + key}, json=body)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Could not reach Paperclip: " + str(e)[:140])
+    if r.status_code in (401, 403):
+        raise HTTPException(status_code=400, detail="Paperclip rejected the request (auth).")
+    if r.status_code >= 400:
+        raise HTTPException(status_code=400, detail="Paperclip could not create the agent: " + r.text[:240])
+    try:
+        data = r.json()
+    except Exception:
+        data = {}
+    return {"ok": True, "agent": {"id": data.get("id"), "name": data.get("name") or name}}
 
 
 @app.get("/orchestration/overview")
