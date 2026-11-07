@@ -91,7 +91,15 @@ write_env() {
   local lan_ip pc_host profs
   lan_ip=$(hostname -I 2>/dev/null | awk '{print $1}'); [ -n "$lan_ip" ] || lan_ip="127.0.0.1"
   if [ "$DASHBOARD_BIND" != "127.0.0.1" ]; then pc_host="$lan_ip"; else pc_host="localhost"; fi
-  if [ -n "$PROFILES_OVERRIDE" ]; then profs="$PROFILES_OVERRIDE"; else profs="memory,automation,control-plane"; fi
+  if [ -n "$PROFILES_OVERRIDE" ]; then
+    profs="$PROFILES_OVERRIDE"
+  elif [ "$MEMORY_MODE" = honcho ]; then
+    profs="memory,automation,control-plane"
+  else
+    # basic memory: no Honcho containers, so don't start the "memory" profile —
+    # honcho.env isn't written and the Honcho services would fail without it.
+    profs="automation,control-plane"
+  fi
   case ",$profs," in *,control-plane,*) say "Building the full stack — Paperclip compiles from source on first start (several minutes)." ;; esac
   cat > .env <<ENV
 API_SERVER_KEY=$(gen_secret)
@@ -166,12 +174,24 @@ start_stack() {
 install_cron() {
   say "Installing watchdog, nightly backup, and update check"
   local here; here=$(pwd)
-  { crontab -l 2>/dev/null | grep -v '# agent-os-managed' || true
-    echo "*/5 * * * * $here/scripts/watchdog.sh # agent-os-managed"
-    echo "30 3 * * * $here/scripts/backup.sh # agent-os-managed"
-    echo "17 */6 * * * $here/scripts/check-updates.sh # agent-os-managed"; } | crontab -
+  if command -v crontab >/dev/null 2>&1; then
+    { crontab -l 2>/dev/null | grep -v '# agent-os-managed' || true
+      echo "*/5 * * * * $here/scripts/watchdog.sh # agent-os-managed"
+      echo "30 3 * * * $here/scripts/backup.sh # agent-os-managed"
+      echo "17 */6 * * * $here/scripts/check-updates.sh # agent-os-managed"; } | crontab - \
+      && say "Scheduled watchdog (5m), backup (3:30am), update check (6h)"
+  else
+    warn "crontab not found - skipping watchdog/backup/update-check schedule."
+    warn "Install cron (apt: cron / dnf: cronie), then re-run: $here/install.sh (or add the 3 jobs in scripts/ by hand)."
+  fi
   ./scripts/check-updates.sh 2>/dev/null || true   # seed the status now
 }
+
+# Enable the Suburban Cyber dashboard plugins on every profile. Delegated to a
+# shared script so install and update stay in lock-step. It waits for Hermes to
+# be ready first (up -d returns before the gateway is), which also fixes the old
+# race where the enable loop silently no-opped on first boot.
+enable_plugins() { ./scripts/enable-plugins.sh || warn "plugin enable reported problems; check: docker compose logs hermes"; }
 
 main() {
   preflight
@@ -179,7 +199,7 @@ main() {
   write_env
   hermes_first_run
   start_stack
-  for plug in suburban-cyber suburban-chat suburban-mail suburban-bookings suburban-automations suburban-orchestration; do docker compose exec -T hermes hermes plugins enable "$plug" || warn "could not enable $plug plugin"; done
+  enable_plugins
   install_cron
   say "Smoke test"
   ./scripts/smoke-test.sh || warn "Some checks failed - see above. Logs: docker compose logs"

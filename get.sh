@@ -11,13 +11,17 @@ AOS_DIR="${AOS_DIR:-/opt/sct-agent-os}"
 
 export DEBIAN_FRONTEND=noninteractive
 need_pkg() { command -v "$1" >/dev/null 2>&1; }
-if ! need_pkg git || ! need_pkg curl; then
-  echo "==> Installing git and curl"
-  if   need_pkg apt-get; then apt-get update -qq && apt-get install -y -qq git curl ca-certificates
-  elif need_pkg dnf;     then dnf install -y -q git curl
-  elif need_pkg yum;     then yum install -y -q git curl
-  else echo "Install git and curl, then re-run."; exit 1; fi
+# git+curl drive this bootstrap; openssl generates every secret in install.sh
+# (preflight aborts without it); a cron daemon runs the watchdog/backup/update jobs.
+if ! need_pkg git || ! need_pkg curl || ! need_pkg openssl || ! need_pkg crontab; then
+  echo "==> Installing prerequisites (git, curl, openssl, cron)"
+  if   need_pkg apt-get; then apt-get update -qq && apt-get install -y -qq git curl ca-certificates openssl cron
+  elif need_pkg dnf;     then dnf install -y -q git curl openssl cronie
+  elif need_pkg yum;     then yum install -y -q git curl openssl cronie
+  else echo "Install git, curl, openssl, and cron, then re-run."; exit 1; fi
 fi
+# Make sure the cron daemon is actually running (Debian: cron, RHEL: crond).
+systemctl enable --now cron >/dev/null 2>&1 || systemctl enable --now crond >/dev/null 2>&1 || true
 if ! need_pkg docker; then
   echo "==> Installing Docker (official convenience script)"
   curl -fsSL https://get.docker.com | sh

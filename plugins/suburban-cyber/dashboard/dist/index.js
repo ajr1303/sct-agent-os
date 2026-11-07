@@ -80,6 +80,9 @@
         return function () { clearInterval(t); };
       }, []);
 
+      // Everything below is wrapped so an unexpected data shape can never blank
+      // the whole page — on a throw we show a retry state, and the 20s poll recovers.
+      try {
       var up = status ? status.gateway_running : null;
       var activeSessions = status ? pick(status, ["active_sessions"]) : null;
       var activeAgents = status ? pick(status, ["active_agents"]) : null;
@@ -210,6 +213,15 @@
         ),
         h("div", { className: "sc-foot" }, "Suburban Cyber Agent OS · built on Hermes Agent (Nous Research)")
       );
+      } catch (e) {
+        try { console.error(TAG, "Overview render failed", e); } catch (e2) {}
+        return h("div", { className: "sc-wrap" },
+          h("div", { className: "sc-top" },
+            h("div", null,
+              h("div", { className: "sc-h1" }, "Today at Suburban Cyber"))),
+          h("div", { className: "sc-empty" },
+            "Something hiccupped loading your dashboard. It will retry automatically — or refresh the page."));
+      }
     }
 
     try { PLUGINS.register("suburban-cyber", Overview); console.info(TAG, "registered, sdk=" + (SDK.sdkVersion || "?")); }

@@ -386,11 +386,42 @@ def _names(attendees):
         return ""
 
 
+def _raise_clean(r, name):
+    """Raise on HTTP error WITHOUT the request URL or body — those can contain a
+    secret (an API key, token, or the secret iCal URL carried as a query param),
+    and httpx's own error string embeds the URL. Never surface that to a client."""
+    if r.status_code >= 400:
+        raise RuntimeError(name + " returned HTTP " + str(r.status_code))
+
+
+def _scrub_secrets(text):
+    """Redact any known secret value from a string before it is returned to a
+    client. Upstream error bodies (e.g. Paperclip echoing the adapterConfig we
+    posted) can contain the Hermes gateway key or the Paperclip board key, which
+    must never leave the box in a response. Values are resolved at call time so
+    this picks up the live globals and the dynamically-read board key."""
+    if not text:
+        return text
+    secrets = [
+        globals().get("HERMES_API_KEY", ""),
+        globals().get("PAPERCLIP_API_KEY", ""),
+        globals().get("CONNECTORS_KEY", ""),
+    ]
+    try:
+        secrets.append(_pc_key())
+    except Exception:
+        pass
+    for s in secrets:
+        if s and len(s) >= 6 and s in text:
+            text = text.replace(s, "[redacted]")
+    return text
+
+
 def fetch_cal_com(secret, now, limit):
     r = _http_get("https://api.cal.com/v1/bookings", params={"apiKey": secret.get("api_key", "")})
     if r.status_code in (401, 403):
         raise PermissionError("Cal.com rejected the API key.")
-    r.raise_for_status()
+    _raise_clean(r, "Cal.com")
     data = r.json()
     items = data.get("bookings") or data.get("data") or []
     out = []
@@ -407,12 +438,12 @@ def fetch_calendly(secret, now, limit):
     me = _http_get("https://api.calendly.com/users/me", headers=h)
     if me.status_code in (401, 403):
         raise PermissionError("Calendly rejected the personal access token.")
-    me.raise_for_status()
+    _raise_clean(me, "Calendly")
     uri = (me.json().get("resource") or {}).get("uri")
     params = {"user": uri, "sort": "start_time:asc", "count": str(max(limit, 10)),
               "min_start_time": now.strftime("%Y-%m-%dT%H:%M:%SZ")}
     r = _http_get("https://api.calendly.com/scheduled_events", headers=h, params=params)
-    r.raise_for_status()
+    _raise_clean(r, "Calendly")
     out = []
     for ev in r.json().get("collection", []):
         out.append({"title": ev.get("name") or "Event", "start": ev.get("start_time"), "who": ""})
@@ -425,7 +456,7 @@ def fetch_acuity(secret, now, limit):
                   auth=(secret.get("user_id", ""), secret.get("api_key", "")))
     if r.status_code in (401, 403):
         raise PermissionError("Acuity rejected the User ID / API key.")
-    r.raise_for_status()
+    _raise_clean(r, "Acuity")
     out = []
     for a in (r.json() or []):
         who = (str(a.get("firstName", "")) + " " + str(a.get("lastName", ""))).strip()
@@ -444,7 +475,7 @@ def _setmore_token(rt):
     r = _http_get("https://developer.setmore.com/api/v1/o/oauth2/token", params={"refreshToken": rt})
     if r.status_code in (401, 403):
         raise PermissionError("Setmore rejected the refresh token.")
-    r.raise_for_status()
+    _raise_clean(r, "Setmore")
     tok = ((r.json().get("data") or {}).get("token") or {})
     at = tok.get("access_token")
     if not at:
@@ -459,7 +490,7 @@ def fetch_setmore(secret, now, limit):
     params = {"startDate": now.strftime("%d/%m/%Y"),
               "endDate": (now + datetime.timedelta(days=45)).strftime("%d/%m/%Y")}
     r = _http_get("https://developer.setmore.com/api/v1/bookings/appointments", headers=h, params=params)
-    r.raise_for_status()
+    _raise_clean(r, "Setmore")
     data = r.json().get("data") or {}
     appts = data.get("appointments") or data.get("appointment") or []
     out = []
@@ -477,7 +508,7 @@ def fetch_ical(secret, now, limit):
     r = _http_get(url)
     if r.status_code in (401, 403):
         raise PermissionError("That calendar URL needs authentication — use the secret/private iCal address.")
-    r.raise_for_status()
+    _raise_clean(r, "The calendar feed")
     text = r.text
     if "BEGIN:VCALENDAR" not in text:
         raise ValueError("That URL did not return an iCal (ICS) feed.")
@@ -864,7 +895,7 @@ def create_agent(a: AgentCreate, _auth=Depends(require_auth)):
     if r.status_code in (401, 403):
         raise HTTPException(status_code=400, detail="Paperclip rejected the request (auth).")
     if r.status_code >= 400:
-        raise HTTPException(status_code=400, detail="Paperclip could not create the agent: " + r.text[:240])
+        raise HTTPException(status_code=400, detail="Paperclip could not create the agent: " + _scrub_secrets(r.text)[:240])
     try:
         data = r.json()
     except Exception:
@@ -891,7 +922,7 @@ def delete_agent(aid: str, _auth=Depends(require_auth)):
     if r.status_code in (401, 403):
         raise HTTPException(status_code=400, detail="Paperclip rejected the request (auth).")
     if r.status_code >= 400:
-        raise HTTPException(status_code=400, detail="Paperclip could not delete the agent: " + r.text[:200])
+        raise HTTPException(status_code=400, detail="Paperclip could not delete the agent: " + _scrub_secrets(r.text)[:200])
     return {"ok": True}
 
 
