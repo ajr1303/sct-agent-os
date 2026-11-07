@@ -23,7 +23,7 @@
       return fetch("/api/connectors" + path, opts).then(function (r) {
         return r.text().then(function (txt) {
           var j = {}; try { j = txt ? JSON.parse(txt) : {}; } catch (e) {}
-          if (!r.ok) throw new Error((j && j.error) || ("HTTP " + r.status));
+          if (!r.ok) throw new Error((j && (j.error || j.detail)) || ("HTTP " + r.status));
           return j;
         });
       });
@@ -59,6 +59,12 @@
       s = useState(false); var cBusy = s[0], setCBusy = s[1];
       s = useState(null); var cErr = s[0], setCErr = s[1];
       s = useState(null); var delId = s[0], setDelId = s[1];
+      s = useState(null); var editId = s[0], setEditId = s[1];
+      s = useState("general"); var eRole = s[0], setERole = s[1];
+      s = useState("");   var eInstr = s[0], setEInstr = s[1];
+      s = useState(false); var eBusy = s[0], setEBusy = s[1];
+      s = useState(false); var eLoad = s[0], setELoad = s[1];
+      s = useState(null); var eErr = s[0], setEErr = s[1];
 
       function load() {
         api("/orchestration/status").then(function (st) {
@@ -129,6 +135,21 @@
             load();
           })
           .catch(function (e2) { setCErr("Delete failed: " + String(e2.message || e2)); load(); });
+      }
+      function openEdit(a) {
+        setDelId(null); setEErr(null); setEditId(a.id);
+        setERole(a.role || "general"); setEInstr(""); setELoad(true);
+        // Pull the current instructions (role we already have from the roster).
+        api("/orchestration/agents/" + a.id)
+          .then(function (d) { setELoad(false); if (d) { setERole(d.role || a.role || "general"); setEInstr(d.instructions || ""); } })
+          .catch(function (e2) { setELoad(false); setEErr("Couldn't load current instructions: " + String(e2.message || e2)); });
+      }
+      function saveEdit(e, a) {
+        if (e) e.preventDefault();
+        setEErr(null); setEBusy(true);
+        api("/orchestration/agents/" + a.id, { method: "PUT", body: JSON.stringify({ role: eRole, instructions: eInstr }) })
+          .then(function () { setEBusy(false); setEditId(null); load(); })
+          .catch(function (e2) { setEBusy(false); setEErr(String(e2.message || e2)); });
       }
       var ROLES = [["general", "General"], ["ceo", "CEO"], ["cto", "CTO"], ["cmo", "CMO"], ["cfo", "CFO"], ["security", "Security"], ["engineer", "Engineer"], ["designer", "Designer"], ["pm", "PM"], ["qa", "QA"], ["devops", "DevOps"], ["researcher", "Researcher"]];
 
@@ -208,16 +229,33 @@
             : (ov.errors && ov.errors.length) ? h("div", { className: "so-empty" }, "Paperclip: " + ov.errors.join("; "))
             : agents.length === 0 ? h("div", { className: "so-empty" }, "No managed agents yet. Use + Create agent to make one.")
             : h("div", { className: "so-list" }, agents.map(function (a, i) {
-                return h("div", { className: "so-agent", key: a.id || i },
-                  h("span", { className: "so-agent-name" }, a.name),
-                  h("span", { className: "so-agent-right" },
-                    a.role ? h("span", { className: "so-agent-role" + (a.role === "ceo" ? " ceo" : "") }, String(a.role).toUpperCase()) : null,
-                    a.status ? h("span", { className: "so-agent-state" }, String(a.status)) : null,
-                    delId === a.id
-                      ? h("span", { className: "so-confirm" },
-                          h("button", { className: "so-x", onClick: function () { delAgent(a); } }, "Delete"),
-                          h("button", { className: "so-x so-x-mut", onClick: function () { setDelId(null); } }, "Cancel"))
-                      : h("button", { className: "so-iconbtn", title: "Delete agent", onClick: function () { setDelId(a.id); } }, "✕")));
+                var isEditing = editId === a.id;
+                return h("div", { className: "so-agentwrap", key: a.id || i },
+                  h("div", { className: "so-agent" },
+                    h("span", { className: "so-agent-name" }, a.name),
+                    h("span", { className: "so-agent-right" },
+                      a.role ? h("span", { className: "so-agent-role" + (a.role === "ceo" ? " ceo" : "") }, String(a.role).toUpperCase()) : null,
+                      a.status ? h("span", { className: "so-agent-state" }, String(a.status)) : null,
+                      delId === a.id
+                        ? h("span", { className: "so-confirm" },
+                            h("button", { className: "so-x", onClick: function () { delAgent(a); } }, "Delete"),
+                            h("button", { className: "so-x so-x-mut", onClick: function () { setDelId(null); } }, "Cancel"))
+                        : h("span", { className: "so-agent-btns" },
+                            h("button", { className: "so-iconbtn", title: "Edit agent", onClick: function () { if (isEditing) { setEditId(null); } else { openEdit(a); } } }, isEditing ? "Close" : "✎"),
+                            h("button", { className: "so-iconbtn", title: "Delete agent", onClick: function () { setEditId(null); setDelId(a.id); } }, "✕")))),
+                  isEditing ? h("form", { className: "so-editform", onSubmit: function (e) { saveEdit(e, a); } },
+                    eLoad ? h("div", { className: "so-createhint" }, "Loading current settings…") : null,
+                    h("label", { className: "so-field" }, h("span", { className: "so-flabel" }, "Role"),
+                      h("select", { className: "so-input", value: eRole, onChange: function (e) { setERole(e.target.value); } },
+                        ROLES.map(function (r) { return h("option", { key: r[0], value: r[0] }, r[1]); }))),
+                    h("label", { className: "so-field" }, h("span", { className: "so-flabel" }, "Instructions"),
+                      h("textarea", { className: "so-input so-ta", value: eInstr, placeholder: "What should this agent do?",
+                        onChange: function (e) { setEInstr(e.target.value); } })),
+                    h("div", { className: "so-createhint" }, "Name and model aren't editable here — model lives on the Hermes profile (Agents tab), and renaming means recreating the agent."),
+                    eErr ? h("div", { className: "so-msg so-err" }, eErr) : null,
+                    h("div", { className: "so-createactions" },
+                      h("button", { type: "submit", className: "so-btn so-primary", disabled: eBusy || eLoad }, eBusy ? "Saving…" : "Save changes"),
+                      h("button", { type: "button", className: "so-btn so-ghost", onClick: function () { setEditId(null); } }, "Cancel"))) : null);
               }))) : null,
 
         up && connected && mode === "external" ? h("div", { className: "so-note so-obs" },
@@ -233,7 +271,7 @@
           h("div", { className: "so-explain-row" }, h("b", null, "Paperclip"), " — the management office. The org chart, task assignment, schedules, budgets, approvals and audit ledger. It drives agents; it doesn't run them."),
           h("div", { className: "so-explain-row" }, h("b", null, "This dashboard"), " — the only cockpit. Paperclip runs headless; you manage everything from here.")),
 
-        h("div", { className: "so-foot" }, "Read-only view (phase 1). Creating and managing agents from one flow is the next phase.")
+        h("div", { className: "so-foot" }, "Create, edit (role + instructions) and remove agents from here. Model lives on the Hermes profile (Agents tab); activating an agent to run work is the next phase.")
       );
     }
 

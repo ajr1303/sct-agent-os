@@ -926,6 +926,79 @@ def delete_agent(aid: str, _auth=Depends(require_auth)):
     return {"ok": True}
 
 
+@app.get("/orchestration/agents/{aid}")
+def get_agent(aid: str, _auth=Depends(require_auth)):
+    """Fetch one agent's editable fields (name, role, instructions) so the
+    dashboard can pre-fill the Edit form. Instructions live on the Paperclip
+    agent's adapterConfig; they are not a secret so Paperclip returns them."""
+    key = _pc_key()
+    if not key:
+        raise HTTPException(status_code=400, detail="Connect Paperclip first (board API key).")
+    try:
+        with httpx.Client(timeout=30.0, follow_redirects=True) as c:
+            r = c.get(PAPERCLIP_URL + "/api/agents/" + aid,
+                      headers={"Authorization": "Bearer " + key})
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Could not reach Paperclip: " + str(e)[:140])
+    if r.status_code in (401, 403):
+        raise HTTPException(status_code=400, detail="Paperclip rejected the request (auth).")
+    if r.status_code == 404:
+        raise HTTPException(status_code=404, detail="Agent not found.")
+    if r.status_code >= 400:
+        raise HTTPException(status_code=400, detail="Paperclip could not read the agent: " + _scrub_secrets(r.text)[:200])
+    try:
+        d = r.json()
+    except Exception:
+        d = {}
+    ac = d.get("adapterConfig") or {}
+    return {
+        "id": d.get("id") or aid,
+        "name": d.get("name"),
+        "role": d.get("role") or "general",
+        "instructions": (ac.get("instructions") if isinstance(ac, dict) else "") or "",
+    }
+
+
+class AgentUpdate(BaseModel):
+    instructions: str | None = None
+    role: str | None = None
+
+
+@app.put("/orchestration/agents/{aid}")
+def update_agent(aid: str, a: AgentUpdate, _auth=Depends(require_auth)):
+    """Edit an existing agent's role and/or instructions. Paperclip PATCH merges
+    adapterConfig (no replaceAdapterConfig flag), so sending only {instructions}
+    preserves the gateway apiBaseUrl/apiKey/flags. Name is intentionally not
+    editable here — it is the key that links this agent to its Hermes profile."""
+    key = _pc_key()
+    if not key:
+        raise HTTPException(status_code=400, detail="Connect Paperclip first (board API key).")
+    body = {}
+    if a.role is not None:
+        role = a.role.strip().lower()
+        if role not in AGENT_ROLES:
+            role = "general"
+        body["role"] = role
+    if a.instructions is not None:
+        # Merge-only patch: just the instructions key goes into adapterConfig.
+        body["adapterConfig"] = {"instructions": a.instructions.strip()}
+    if not body:
+        raise HTTPException(status_code=400, detail="Nothing to update.")
+    try:
+        with httpx.Client(timeout=45.0, follow_redirects=True) as c:
+            r = c.request("PATCH", PAPERCLIP_URL + "/api/agents/" + aid,
+                          headers={"Authorization": "Bearer " + key}, json=body)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Could not reach Paperclip: " + str(e)[:140])
+    if r.status_code in (401, 403):
+        raise HTTPException(status_code=400, detail="Paperclip rejected the request (auth).")
+    if r.status_code == 404:
+        raise HTTPException(status_code=404, detail="Agent not found.")
+    if r.status_code >= 400:
+        raise HTTPException(status_code=400, detail="Paperclip could not update the agent: " + _scrub_secrets(r.text)[:240])
+    return {"ok": True}
+
+
 @app.get("/orchestration/overview")
 def orchestration_overview(_auth=Depends(require_auth)):
     if not _pc_up():

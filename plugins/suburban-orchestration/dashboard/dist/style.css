@@ -21,8 +21,11 @@
 .so-panel-h{font-size:12px;letter-spacing:.07em;font-weight:600;padding:12px 16px;border-bottom:1px solid var(--color-border,rgba(255,255,255,.1))}
 .so-empty{padding:16px;opacity:.55;font-size:13px}
 .so-list{padding:4px 0}
-.so-agent{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 16px;border-bottom:1px solid var(--color-border,rgba(255,255,255,.07))}
-.so-agent:last-child{border-bottom:0}
+.so-agentwrap{border-bottom:1px solid var(--color-border,rgba(255,255,255,.07))}
+.so-agentwrap:last-child{border-bottom:0}
+.so-agent{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 16px}
+.so-agent-btns{display:flex;gap:6px}
+.so-editform{padding:2px 16px 16px;display:flex;flex-direction:column;gap:10px;background:var(--color-card,rgba(255,255,255,.02))}
 .so-agent-name{font-size:14px}
 .so-agent-right{display:flex;align-items:center;gap:8px;flex-shrink:0}
 .so-agent-role{font-size:10px;text-transform:uppercase;letter-spacing:.05em;padding:3px 8px;border:1px solid var(--color-border,rgba(255,255,255,.25));opacity:.7}
@@ -59,6 +62,6 @@
 .so-createform{padding:14px 16px;display:flex;flex-direction:column;gap:10px;border-bottom:1px solid var(--color-border,rgba(255,255,255,.08))}
 .so-ta{min-height:70px;resize:vertical}
 .so-createhint{font-size:12px;opacity:.55}
-.so-createactions{display:flex;justify-content:flex-end}
+.so-createactions{display:flex;justify-content:flex-end;gap:10px}
 .so-managed-foot{display:flex;gap:10px;flex-wrap:wrap}
 .so-foot{font-size:11px;opacity:.5;margin-top:4px}
