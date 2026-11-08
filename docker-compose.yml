@@ -35,6 +35,33 @@ services:
       - ./data/hermes/brand:/srv/brand:ro
     mem_limit: 128M
 
+  # Dedicated TLS terminator for the Hermes gateway runs API (the Paperclip -> Hermes
+  # hop). Kept as its own container on purpose: Paperclip won't run an agent that
+  # reaches a non-loopback host over plain HTTP, so this presents the Hermes runs API
+  # over HTTPS. Isolating it means a missing or bad cert only crash-loops this
+  # container and can never take the dashboard proxy down. Reached internally as
+  # https://hermes-gateway:8443.
+  gateway-tls:
+    # Only needed when Paperclip (control-plane) runs; it's the sole consumer.
+    profiles: ["control-plane"]
+    image: nginx:1.27-alpine
+    container_name: agent-os-gateway-tls
+    restart: unless-stopped
+    depends_on: [hermes]
+    volumes:
+      - ./templates/gateway-tls.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./data/tls/server.crt:/etc/nginx/tls/server.crt:ro
+      - ./data/tls/server.key:/etc/nginx/tls/server.key:ro
+    expose:
+      - "8443"
+    networks:
+      default:
+        # Paperclip connects to https://hermes-gateway:8443; the cert is issued for
+        # this name, so the alias must match the SAN in scripts/gen-tls.sh.
+        aliases:
+          - hermes-gateway
+    mem_limit: 64M
+
   # Connectors service: stores the user's connected accounts (email first; bookings
   # and the Paperclip bridge reuse it) and talks to them. Reached by the dashboard
   # through the proxy at /api/connectors/. Authorizes each call against Hermes.
@@ -56,7 +83,12 @@ services:
       PAPERCLIP_API_KEY: "${PAPERCLIP_API_KEY:-}"
       PAPERCLIP_COMPANY_ID: "${PAPERCLIP_COMPANY_ID:-}"
       # Hermes gateway the unified create-agent flow points Paperclip agents at.
+      # HERMES_GATEWAY_URL is the HTTPS endpoint Paperclip talks to (TLS terminated
+      # by the proxy); plain HTTP here would fail Paperclip's non-loopback safety
+      # check and the agent would never run. HERMES_API_URL stays available for any
+      # direct, non-agent calls.
       HERMES_API_URL: "${HERMES_API_URL:-http://hermes:8642}"
+      HERMES_GATEWAY_URL: "${HERMES_GATEWAY_URL:-https://hermes-gateway:8443}"
       HERMES_API_KEY: "${API_SERVER_KEY:-}"
     volumes:
       - connectors-data:/data
@@ -131,11 +163,15 @@ services:
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?run ./install.sh first}
       PAPERCLIP_TOOL_ACTION_SIGNING_SECRET: ${PAPERCLIP_TOOL_ACTION_SIGNING_SECRET:?run ./install.sh first}
+      # Trust our internal gateway CA so Paperclip accepts the HTTPS Hermes endpoint
+      # (https://hermes-gateway:8443) without disabling TLS verification.
+      NODE_EXTRA_CA_CERTS: "/etc/ssl/agent-os-ca.crt"
     # Published so you can open the Paperclip UI once to create a board API key.
     ports:
       - "${DASHBOARD_BIND:-127.0.0.1}:3100:3100"
     volumes:
       - paperclip-data:/paperclip
+      - ./data/tls/ca.crt:/etc/ssl/agent-os-ca.crt:ro
     healthcheck:
       # Paperclip runs on a Node image that has no curl; probe with node instead
       # (matches the n8n healthcheck). A curl probe reports unhealthy forever and

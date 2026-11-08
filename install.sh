@@ -197,6 +197,8 @@ main() {
   preflight
   collect_answers
   write_env
+  say "Generating internal gateway TLS (Paperclip -> Hermes hop)"
+  ./scripts/gen-tls.sh || warn "gateway TLS generation failed - agents won't run until this is fixed"
   hermes_first_run
   start_stack
   enable_plugins

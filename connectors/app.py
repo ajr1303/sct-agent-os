@@ -745,6 +745,10 @@ PAPERCLIP_URL = os.environ.get("PAPERCLIP_URL", "http://paperclip:3100").rstrip(
 PAPERCLIP_API_KEY = os.environ.get("PAPERCLIP_API_KEY", "").strip()
 PAPERCLIP_COMPANY_ID = os.environ.get("PAPERCLIP_COMPANY_ID", "").strip()
 HERMES_API_URL = os.environ.get("HERMES_API_URL", "http://hermes:8642").rstrip("/")
+# The HTTPS endpoint Paperclip agents talk to. Paperclip refuses to run an agent
+# that reaches a non-loopback host over plain HTTP, so agents must point at the
+# TLS-terminated gateway (proxy alias hermes-gateway), not http://hermes:8642.
+HERMES_GATEWAY_URL = os.environ.get("HERMES_GATEWAY_URL", "https://hermes-gateway:8443").rstrip("/")
 HERMES_API_KEY = os.environ.get("HERMES_API_KEY", "").strip()
 
 
@@ -874,9 +878,10 @@ def create_agent(a: AgentCreate, _auth=Depends(require_auth)):
         raise HTTPException(status_code=400, detail="No Paperclip company found yet.")
 
     adapter_config = {
-        "apiBaseUrl": HERMES_API_URL,
+        # HTTPS gateway (TLS terminated by the proxy, Paperclip trusts our CA). This
+        # passes Paperclip's non-loopback safety check, so no insecure escape hatch.
+        "apiBaseUrl": HERMES_GATEWAY_URL,
         "apiKey": HERMES_API_KEY,
-        "dangerouslyAllowInsecureRemoteHttp": True,  # http://hermes:8642 is internal, not loopback
         "sessionKeyStrategy": "issue",
     }
     if a.instructions.strip():

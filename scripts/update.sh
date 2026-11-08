@@ -23,6 +23,15 @@ if [ -f .env ] && ! grep -q '^CONNECTORS_KEY=' .env; then
 fi
 
 ./scripts/sync-branding.sh
+# Older installs predate openssl as a prerequisite; the gateway TLS certs need it.
+if ! command -v openssl >/dev/null 2>&1; then
+  echo "Installing openssl (needed for the gateway TLS certs)"
+  if   command -v apt-get >/dev/null 2>&1; then sudo apt-get update -qq && sudo apt-get install -y -qq openssl
+  elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y -q openssl
+  elif command -v yum >/dev/null 2>&1; then sudo yum install -y -q openssl
+  else echo "  ! openssl not found and no known package manager; install it, then re-run update."; fi
+fi
+./scripts/gen-tls.sh || echo "  ! gateway TLS generation failed - agents won't run until this is fixed"
 docker compose build connectors
 docker compose up -d
 docker compose restart hermes
