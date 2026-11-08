@@ -150,7 +150,7 @@
           h("div", { className: "st-dhead" },
             h("div", { className: "st-dtitle" }, cur.title || sel),
             h("div", { className: "st-dmeta" },
-              chip((d && d.status) || cur.status),
+              chip(cur.status || (d && d.status)),
               cur.agentName ? h("span", { className: "st-agent" }, cur.agentName) : null,
               h("a", { className: "st-link", href: pcTaskUrl(sel), target: "_blank", rel: "noopener" }, "View in Paperclip ↗"))),
           dLoad && !d ? h("div", { className: "st-empty" }, "Loading…") : null,
