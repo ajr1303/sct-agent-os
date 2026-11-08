@@ -22,8 +22,10 @@ if [ -f .env ] && ! grep -q '^CONNECTORS_KEY=' .env; then
   echo "Added CONNECTORS_KEY to .env"
 fi
 
-./scripts/sync-branding.sh
-# Older installs predate openssl as a prerequisite; the gateway TLS certs need it.
+# Generate the gateway TLS certs FIRST, before any `docker compose` command runs.
+# Docker auto-creates missing bind-mount sources as directories, so the cert files
+# must exist before the stack is (re)created or nginx gets handed directories.
+# Older installs predate openssl as a prerequisite, so ensure it's present.
 if ! command -v openssl >/dev/null 2>&1; then
   echo "Installing openssl (needed for the gateway TLS certs)"
   if   command -v apt-get >/dev/null 2>&1; then sudo apt-get update -qq && sudo apt-get install -y -qq openssl
@@ -32,6 +34,8 @@ if ! command -v openssl >/dev/null 2>&1; then
   else echo "  ! openssl not found and no known package manager; install it, then re-run update."; fi
 fi
 ./scripts/gen-tls.sh || echo "  ! gateway TLS generation failed - agents won't run until this is fixed"
+
+./scripts/sync-branding.sh
 docker compose build connectors
 docker compose up -d
 docker compose restart hermes

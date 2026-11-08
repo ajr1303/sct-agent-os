@@ -19,6 +19,17 @@ CN="hermes-gateway"
 ALT="DNS:hermes-gateway,DNS:proxy,DNS:localhost,IP:127.0.0.1"
 mkdir -p "$TLS_DIR"
 
+# Docker auto-creates a missing bind-mount source as an empty DIRECTORY. If the
+# stack ever came up before these certs existed, data/tls/{ca.crt,server.crt,
+# server.key} are now directories, which (a) make nginx crash-loop and (b) stop
+# openssl from writing the real files over them. Clear any such directories first.
+for f in ca.crt ca.key server.crt server.key server.srl; do
+  if [ -d "$TLS_DIR/$f" ]; then
+    echo "Removing stray directory $TLS_DIR/$f (Docker auto-created it before certs existed)."
+    rm -rf "$TLS_DIR/$f"
+  fi
+done
+
 if ! command -v openssl >/dev/null 2>&1; then
   echo "  ! openssl not found; cannot generate gateway TLS certs. Install openssl and re-run." >&2
   exit 1
