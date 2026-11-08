@@ -12,7 +12,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-AOS_PLUGINS="suburban-cyber suburban-chat suburban-mail suburban-bookings suburban-automations suburban-orchestration"
+AOS_PLUGINS="suburban-cyber suburban-chat suburban-mail suburban-bookings suburban-automations suburban-orchestration suburban-tasks"
 warn() { echo "  ! $*" >&2; }
 
 wait_for_hermes() {

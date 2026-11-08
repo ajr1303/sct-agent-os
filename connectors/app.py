@@ -877,6 +877,16 @@ def create_agent(a: AgentCreate, _auth=Depends(require_auth)):
     if not cid:
         raise HTTPException(status_code=400, detail="No Paperclip company found yet.")
 
+    # Is this the company's first agent? If so, we seed a one-time welcome task
+    # after creating it, so a fresh install immediately shows a real agent run.
+    is_first_agent = False
+    try:
+        existing = _pc_get("/api/companies/" + str(cid) + "/agents")
+        existing_items = existing if isinstance(existing, list) else (existing.get("agents") or existing.get("data") or [])
+        is_first_agent = len(existing_items) == 0
+    except Exception:
+        is_first_agent = False
+
     adapter_config = {
         # HTTPS gateway (TLS terminated by the proxy, Paperclip trusts our CA). This
         # passes Paperclip's non-loopback safety check, so no insecure escape hatch.
@@ -905,7 +915,43 @@ def create_agent(a: AgentCreate, _auth=Depends(require_auth)):
         data = r.json()
     except Exception:
         data = {}
-    return {"ok": True, "agent": {"id": data.get("id"), "name": data.get("name") or name}}
+    new_id = data.get("id")
+    seeded = False
+    if is_first_agent and new_id:
+        seeded = _seed_welcome_task(cid, new_id)
+    return {"ok": True, "agent": {"id": new_id, "name": data.get("name") or name}, "welcome_seeded": seeded}
+
+
+WELCOME_TITLE = "Welcome — meet your agent"
+
+def _company_name(cid):
+    """Best-effort company display name for the welcome message."""
+    try:
+        data = _pc_get("/api/companies")
+        items = data if isinstance(data, list) else (data.get("companies") or data.get("data") or [])
+        for c in items:
+            if (c.get("id") or c.get("companyId")) == cid:
+                return c.get("name") or c.get("displayName") or "your team"
+    except Exception:
+        pass
+    return "your team"
+
+
+def _seed_welcome_task(cid, agent_id):
+    """Create a one-time orientation task for the first agent so a fresh install
+    shows a real agent run immediately. Best-effort: never fails agent creation."""
+    company = _company_name(cid)
+    desc = ("Introduce yourself to the owner of " + company + ". In one short, warm paragraph, "
+            "explain what you can help with here. Then list three specific things you could start "
+            "on this week. Post it as your reply on this task.")
+    body = {"title": WELCOME_TITLE, "description": desc, "assigneeAgentId": agent_id, "priority": "medium"}
+    try:
+        with httpx.Client(timeout=30.0, follow_redirects=True) as c:
+            r = c.post(PAPERCLIP_URL + "/api/companies/" + str(cid) + "/issues",
+                       headers=_pc_headers(), json=body)
+        return r.status_code < 400
+    except Exception:
+        return False
 
 
 @app.delete("/orchestration/agents/{aid}")
@@ -1033,6 +1079,120 @@ def orchestration_overview(_auth=Depends(require_auth)):
         out["attention"] = att
     except Exception as e:
         out["errors"].append("attention: " + str(e)[:120])
+    return out
+
+
+def _norm_comment(c):
+    """Normalize a Paperclip comment into {author, role, text, at} for the Tasks UI."""
+    if not isinstance(c, dict):
+        return {"author": None, "role": "system", "text": str(c)[:6000], "at": None}
+    text = c.get("body") or c.get("content") or c.get("text") or c.get("markdown") or ""
+    if not isinstance(text, str):
+        text = str(text)
+    aid = c.get("authorAgentId") or c.get("agentId")
+    uid = c.get("authorUserId") or c.get("userId")
+    if aid:
+        role = "agent"
+    elif uid:
+        role = "user"
+    else:
+        role = c.get("authorKind") or c.get("kind") or "system"
+    return {"author": c.get("authorName") or c.get("agentName"),
+            "role": role, "agentId": aid, "text": text[:6000],
+            "at": c.get("createdAt") or c.get("at")}
+
+
+@app.get("/orchestration/tasks")
+def list_tasks(agent: str = "", _auth=Depends(require_auth)):
+    """List the company's tasks (issues) with status + assigned agent, for the
+    Tasks page. Read-only; normalizes across Paperclip response shapes."""
+    if not _pc_up():
+        return {"paperclip_up": False, "tasks": []}
+    try:
+        cid = _pc_company_id()
+    except PermissionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Could not reach Paperclip: " + str(e)[:140])
+    if not cid:
+        return {"paperclip_up": True, "company_id": None, "tasks": []}
+    names, slug = {}, None
+    try:
+        ag = _pc_get("/api/companies/" + str(cid) + "/agents")
+        aitems = ag if isinstance(ag, list) else (ag.get("agents") or ag.get("data") or [])
+        for a in aitems:
+            if isinstance(a, dict):
+                names[a.get("id")] = a.get("name") or a.get("displayName") or "Agent"
+    except Exception:
+        pass
+    issues = []
+    for q in ("?view=rows&limit=50", "?limit=50", ""):
+        try:
+            data = _pc_get("/api/companies/" + str(cid) + "/issues" + q)
+            issues = data if isinstance(data, list) else (data.get("issues") or data.get("items") or data.get("rows") or data.get("data") or [])
+            break
+        except Exception:
+            continue
+    tasks = []
+    for i in issues:
+        if not isinstance(i, dict):
+            continue
+        aid = i.get("assigneeAgentId")
+        if agent and aid != agent:
+            continue
+        tasks.append({
+            "key": i.get("humanKey") or i.get("key") or i.get("reference") or i.get("id"),
+            "id": i.get("id"),
+            "title": i.get("title") or "(untitled task)",
+            "status": i.get("status"),
+            "agentId": aid,
+            "agentName": names.get(aid),
+            "updatedAt": i.get("updatedAt") or i.get("lastActivityAt") or i.get("createdAt"),
+        })
+    try:
+        comps = _pc_get("/api/companies")
+        citems = comps if isinstance(comps, list) else (comps.get("companies") or comps.get("data") or [])
+        for c in citems:
+            if isinstance(c, dict) and (c.get("id") or c.get("companyId")) == cid:
+                slug = c.get("slug") or c.get("key") or c.get("shortName")
+    except Exception:
+        pass
+    return {"paperclip_up": True, "company_id": cid, "company_slug": slug, "tasks": tasks}
+
+
+@app.get("/orchestration/tasks/{key}")
+def task_detail(key: str, _auth=Depends(require_auth)):
+    """One task's output: the message thread + deliverable files + latest run status."""
+    if not _pc_key():
+        raise HTTPException(status_code=400, detail="Connect Paperclip first (board API key).")
+    out = {"key": key, "status": None, "messages": [], "deliverables": [], "errors": []}
+    try:
+        cm = _pc_get("/api/issues/" + key + "/recent-comments")
+        comments = cm.get("comments") if isinstance(cm, dict) else cm
+        for c in (comments or []):
+            out["messages"].append(_norm_comment(c))
+        out["messages"].reverse()  # recent-comments is newest-first; show oldest-first
+    except Exception as e:
+        out["errors"].append("comments: " + str(e)[:100])
+    try:
+        wp = _pc_get("/api/issues/" + key + "/work-products")
+        wpitems = wp if isinstance(wp, list) else (wp.get("workProducts") or wp.get("items") or wp.get("data") or [])
+        for w in (wpitems or []):
+            if isinstance(w, dict):
+                out["deliverables"].append({
+                    "name": w.get("name") or w.get("title") or w.get("filename") or "file",
+                    "kind": w.get("kind") or w.get("type") or w.get("contentType"),
+                    "id": w.get("id"),
+                })
+    except Exception as e:
+        out["errors"].append("work-products: " + str(e)[:100])
+    try:
+        rs = _pc_get("/api/issues/" + key + "/runs?view=recent")
+        ritems = rs if isinstance(rs, list) else (rs.get("runs") or rs.get("items") or rs.get("data") or [])
+        if ritems and isinstance(ritems[0], dict):
+            out["status"] = ritems[0].get("status")
+    except Exception:
+        pass
     return out
 
 

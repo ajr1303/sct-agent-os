@@ -41,7 +41,7 @@ mkdir -p "$H/dashboard-themes" "$H/plugins" "$H/brand"
 cp templates/dashboard-themes/*.yaml "$H/dashboard-themes/"
 cp brand/* "$H/brand/"
 chmod 755 "$H/brand"; chmod 644 "$H/brand/"*
-for plug in suburban-cyber suburban-chat suburban-mail suburban-bookings suburban-automations suburban-orchestration; do
+for plug in suburban-cyber suburban-chat suburban-mail suburban-bookings suburban-automations suburban-orchestration suburban-tasks; do
   rm -rf "$H/plugins/$plug"
   mkdir -p "$H/plugins/$plug"
   cp -r "plugins/$plug/." "$H/plugins/$plug/"
