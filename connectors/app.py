@@ -751,6 +751,19 @@ HERMES_API_URL = os.environ.get("HERMES_API_URL", "http://hermes:8642").rstrip("
 HERMES_GATEWAY_URL = os.environ.get("HERMES_GATEWAY_URL", "https://hermes-gateway:8443").rstrip("/")
 HERMES_API_KEY = os.environ.get("HERMES_API_KEY", "").strip()
 
+# Spend guardrails — Paperclip's native budget hard-stop. When monthly spend
+# reaches the cap, Paperclip auto-pauses the agent/company ("budget hard-stop
+# reached"), so a runaway loop can never blow past a hard dollar ceiling. The
+# company cap is the catastrophe backstop; the per-agent cap is off by default
+# so legit agents aren't surprised. Cents; 0 disables. Env-overridable per client.
+def _env_int(name, default):
+    try:
+        return max(0, int(os.environ.get(name, "").strip() or default))
+    except Exception:
+        return default
+COMPANY_BUDGET_CENTS = _env_int("COMPANY_BUDGET_CENTS", 10000)  # $100/mo per client box
+AGENT_BUDGET_CENTS = _env_int("AGENT_BUDGET_CENTS", 0)          # off; company cap is the ceiling
+
 
 def _pc_stored_key():
     with closing(get_db()) as con:
@@ -900,6 +913,13 @@ def create_agent(a: AgentCreate, _auth=Depends(require_auth)):
     if role not in AGENT_ROLES:
         role = "general"
     body = {"name": name, "role": role, "adapterType": "hermes_gateway", "adapterConfig": adapter_config}
+    if AGENT_BUDGET_CENTS > 0:
+        body["budgetMonthlyCents"] = AGENT_BUDGET_CENTS  # per-agent monthly hard-stop
+
+    # Make sure the company-wide monthly ceiling is set before any agent can run.
+    # Idempotent (only sets when unset), so it's safe to call on every create and
+    # also backfills existing installs. This is the backstop that caps total spend.
+    _ensure_company_budget(cid)
 
     try:
         with httpx.Client(timeout=45.0, follow_redirects=True) as c:
@@ -920,6 +940,35 @@ def create_agent(a: AgentCreate, _auth=Depends(require_auth)):
     if is_first_agent and new_id:
         seeded = _seed_welcome_task(cid, new_id)
     return {"ok": True, "agent": {"id": new_id, "name": data.get("name") or name}, "welcome_seeded": seeded}
+
+
+def _ensure_company_budget(cid):
+    """Set the company-wide monthly budget hard-stop to our default, but only if the
+    owner hasn't already set one — never clobber a value they chose. Paperclip
+    auto-pauses the company when this cap is reached, so spend can't run away.
+    Best-effort: never blocks agent creation."""
+    if COMPANY_BUDGET_CENTS <= 0:
+        return
+    try:
+        ov = _pc_get("/api/companies/" + str(cid) + "/budgets/overview")
+    except Exception:
+        ov = None
+    # Find any already-configured positive company budget; if present, leave it.
+    current = None
+    if isinstance(ov, dict):
+        for k in ("budgetMonthlyCents", "companyBudgetMonthlyCents", "monthlyCents"):
+            if isinstance(ov.get(k), (int, float)):
+                current = ov.get(k); break
+        if current is None and isinstance(ov.get("company"), dict):
+            current = ov["company"].get("budgetMonthlyCents")
+    if isinstance(current, (int, float)) and current > 0:
+        return
+    try:
+        with httpx.Client(timeout=20.0, follow_redirects=True) as c:
+            c.request("PATCH", PAPERCLIP_URL + "/api/companies/" + str(cid) + "/budgets",
+                      headers=_pc_headers(), json={"budgetMonthlyCents": COMPANY_BUDGET_CENTS})
+    except Exception:
+        pass
 
 
 WELCOME_TITLE = "Welcome — meet your agent"
@@ -1193,6 +1242,36 @@ def task_detail(key: str, _auth=Depends(require_auth)):
             out["status"] = ritems[0].get("status")
     except Exception:
         pass
+    return out
+
+
+@app.get("/orchestration/budget")
+def get_budget(_auth=Depends(require_auth)):
+    """The company's monthly spend ceiling and spend-to-date, for the dashboard.
+    Paperclip auto-pauses when spend reaches the cap (budget hard-stop)."""
+    out = {"paperclip_up": bool(_pc_up()), "budget_cents": None, "spent_cents": None,
+           "default_cents": COMPANY_BUDGET_CENTS}
+    if not out["paperclip_up"]:
+        return out
+    try:
+        cid = _pc_company_id()
+    except Exception:
+        cid = None
+    if not cid:
+        return out
+    try:
+        ov = _pc_get("/api/companies/" + str(cid) + "/budgets/overview")
+    except Exception:
+        ov = None
+    if isinstance(ov, dict):
+        for k in ("budgetMonthlyCents", "companyBudgetMonthlyCents", "monthlyCents"):
+            if isinstance(ov.get(k), (int, float)):
+                out["budget_cents"] = int(ov[k]); break
+        if out["budget_cents"] is None and isinstance(ov.get("company"), dict) and isinstance(ov["company"].get("budgetMonthlyCents"), (int, float)):
+            out["budget_cents"] = int(ov["company"]["budgetMonthlyCents"])
+        for k in ("spentMonthlyCents", "spentCents", "usedCents", "monthToDateCents", "spentToDateCents"):
+            if isinstance(ov.get(k), (int, float)):
+                out["spent_cents"] = int(ov[k]); break
     return out
 
 

@@ -90,6 +90,10 @@ services:
       HERMES_API_URL: "${HERMES_API_URL:-http://hermes:8642}"
       HERMES_GATEWAY_URL: "${HERMES_GATEWAY_URL:-https://hermes-gateway:8443}"
       HERMES_API_KEY: "${API_SERVER_KEY:-}"
+      # Spend guardrails (Paperclip native budget hard-stop). Cents/month; 0 = off.
+      # Company cap is the per-client-box ceiling that auto-pauses on overspend.
+      COMPANY_BUDGET_CENTS: "${COMPANY_BUDGET_CENTS:-10000}"
+      AGENT_BUDGET_CENTS: "${AGENT_BUDGET_CENTS:-0}"
     volumes:
       - connectors-data:/data
     expose:
