@@ -953,16 +953,13 @@ def _ensure_company_budget(cid):
         ov = _pc_get("/api/companies/" + str(cid) + "/budgets/overview")
     except Exception:
         ov = None
-    # Find any already-configured positive company budget; if present, leave it.
-    current = None
-    if isinstance(ov, dict):
-        for k in ("budgetMonthlyCents", "companyBudgetMonthlyCents", "monthlyCents"):
-            if isinstance(ov.get(k), (int, float)):
-                current = ov.get(k); break
-        if current is None and isinstance(ov.get("company"), dict):
-            current = ov["company"].get("budgetMonthlyCents")
-    if isinstance(current, (int, float)) and current > 0:
-        return
+    # The overview returns policies[]; a company-scope active policy with amount>0
+    # means the owner already has a budget. Never overwrite it.
+    if isinstance(ov, dict) and isinstance(ov.get("policies"), list):
+        for p in ov["policies"]:
+            if (isinstance(p, dict) and p.get("scopeType") == "company"
+                    and p.get("isActive") and isinstance(p.get("amount"), (int, float)) and p.get("amount") > 0):
+                return
     try:
         with httpx.Client(timeout=20.0, follow_redirects=True) as c:
             c.request("PATCH", PAPERCLIP_URL + "/api/companies/" + str(cid) + "/budgets",
@@ -1263,15 +1260,15 @@ def get_budget(_auth=Depends(require_auth)):
         ov = _pc_get("/api/companies/" + str(cid) + "/budgets/overview")
     except Exception:
         ov = None
-    if isinstance(ov, dict):
-        for k in ("budgetMonthlyCents", "companyBudgetMonthlyCents", "monthlyCents"):
-            if isinstance(ov.get(k), (int, float)):
-                out["budget_cents"] = int(ov[k]); break
-        if out["budget_cents"] is None and isinstance(ov.get("company"), dict) and isinstance(ov["company"].get("budgetMonthlyCents"), (int, float)):
-            out["budget_cents"] = int(ov["company"]["budgetMonthlyCents"])
-        for k in ("spentMonthlyCents", "spentCents", "usedCents", "monthToDateCents", "spentToDateCents"):
-            if isinstance(ov.get(k), (int, float)):
-                out["spent_cents"] = int(ov[k]); break
+    if isinstance(ov, dict) and isinstance(ov.get("policies"), list):
+        for p in ov["policies"]:
+            if isinstance(p, dict) and p.get("scopeType") == "company":
+                if isinstance(p.get("amount"), (int, float)):
+                    out["budget_cents"] = int(p["amount"])
+                if isinstance(p.get("observedAmount"), (int, float)):
+                    out["spent_cents"] = int(p["observedAmount"])
+                out["hard_stop"] = bool(p.get("hardStopEnabled"))
+                break
     return out
 
 
