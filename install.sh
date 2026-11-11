@@ -255,6 +255,8 @@ main() {
   say "Generating internal gateway TLS (Paperclip -> Hermes hop)"
   ./scripts/gen-tls.sh || warn "gateway TLS generation failed - agents won't run until this is fixed"
   hermes_first_run
+  say "Setting up chat tools (delegation + automations)"
+  ./scripts/sync-chat-tools.sh || warn "chat tools setup reported problems; re-run: ./scripts/sync-chat-tools.sh"
   start_stack
   enable_plugins
   install_cron

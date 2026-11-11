@@ -121,6 +121,21 @@ def get_db():
             blocked_at  TEXT
         )
     """)
+    # Workflow activations an agent has asked for. An agent can build a workflow
+    # (always inactive) but can never switch one on: it files a request here and
+    # the owner approves it in the Automations tab.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS workflow_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workflow_id   TEXT NOT NULL,
+            workflow_name TEXT,
+            summary       TEXT,
+            requested_by  TEXT,
+            status        TEXT NOT NULL DEFAULT 'pending',
+            created_at    TEXT NOT NULL,
+            decided_at    TEXT
+        )
+    """)
     return con
 
 
@@ -1663,6 +1678,495 @@ def gateway_unblock(b: GwUnblock, _auth=Depends(require_auth)):
     except Exception:
         raise HTTPException(status_code=500, detail="Could not unblock the task")
     return {"ok": True}
+
+
+# ===========================================================================
+# CHAT TOOLS (MCP)
+# Gives the Hermes chat agent tools to run the business: delegate work to the
+# right Paperclip agent, ask the CEO for a hiring review, and build n8n
+# workflows. Hermes loads this as an MCP server (config.yaml -> mcp_servers).
+#
+# Guardrails, enforced here rather than left to the prompt:
+#   - Workflows are always created INACTIVE. There is no "activate" tool. An
+#     agent files an activation request; the owner approves it in Automations.
+#   - A live (active) workflow cannot be edited through these tools.
+#   - Hiring is a proposal task for the CEO agent; nothing here creates agents.
+#   - Task creation is rate-limited (CHAT_TASKS_PER_HOUR).
+#   - Against an EXTERNAL Paperclip the delegation tools are read-only.
+# Internal only: bearer token + blocked on the public proxy.
+# ===========================================================================
+import hmac
+import time
+import threading
+
+CHAT_TOOLS_TOKEN = os.environ.get("CHAT_TOOLS_TOKEN", "").strip()
+CHAT_TASKS_PER_HOUR = _env_int("CHAT_TASKS_PER_HOUR", 20)
+_MCP_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
+_task_times, _task_lock = [], threading.Lock()
+
+
+class ToolError(Exception):
+    """A failure the model should read and act on (shown as the tool result)."""
+
+
+def _n8n_send(method, path, body=None):
+    conn = _n8n_conn()
+    if not conn:
+        raise ToolError("The automation engine (n8n) is not connected yet. Ask the owner to open the "
+                        "Automations tab and connect it.")
+    try:
+        with httpx.Client(timeout=30.0, follow_redirects=True) as c:
+            r = c.request(method, conn["base_url"] + path, headers={"X-N8N-API-KEY": conn["api_key"]},
+                          json=body if method != "GET" else None,
+                          params=body if method == "GET" else None)
+    except Exception as e:
+        raise ToolError("Could not reach n8n: " + str(e)[:140])
+    if r.status_code in (401, 403):
+        raise ToolError("n8n rejected the stored API key. Ask the owner to reconnect it in the Automations tab.")
+    if r.status_code == 404:
+        raise ToolError("n8n has no workflow or run with that id.")
+    if r.status_code >= 400:
+        raise ToolError("n8n refused the request: " + _scrub_secrets(r.text)[:400])
+    try:
+        return r.json()
+    except Exception:
+        return {}
+
+
+def _tool_agents():
+    try:
+        cid = _pc_company_id()
+        ag = _pc_get("/api/companies/" + str(cid) + "/agents") if cid else []
+    except PermissionError:
+        raise ToolError("Paperclip is not connected. Ask the owner to connect it in the Orchestration tab.")
+    except Exception as e:
+        raise ToolError("Could not reach Paperclip: " + str(e)[:140])
+    items = ag if isinstance(ag, list) else ((ag or {}).get("agents") or (ag or {}).get("data") or [])
+    return cid, [a for a in items if isinstance(a, dict) and a.get("id")]
+
+
+def _agent_name(a):
+    return a.get("name") or a.get("agentName") or a.get("displayName") or "Agent"
+
+
+def _find_agent(agents, ref):
+    ref = (ref or "").strip().lower()
+    if not ref:
+        return None
+    for a in agents:
+        if str(a.get("id")).lower() == ref or _agent_name(a).lower() == ref:
+            return a
+    close = [a for a in agents if ref in _agent_name(a).lower()]
+    return close[0] if len(close) == 1 else None
+
+
+def _require_bundled():
+    if _pc_mode() == "external":
+        raise ToolError("This install is connected to an external Paperclip in read-only mode, so tasks "
+                        "cannot be created from chat. Tell the owner to create the task in Paperclip.")
+
+
+def _create_issue(cid, agent, title, description, priority):
+    with _task_lock:
+        now = time.time()
+        _task_times[:] = [t for t in _task_times if now - t < 3600]
+        if CHAT_TASKS_PER_HOUR > 0 and len(_task_times) >= CHAT_TASKS_PER_HOUR:
+            raise ToolError("Task limit reached (%d per hour). Stop creating tasks and tell the owner."
+                            % CHAT_TASKS_PER_HOUR)
+        _task_times.append(now)
+    pr = priority if priority in ("low", "medium", "high", "urgent") else "medium"
+    body = {"title": title[:200], "description": description[:8000],
+            "assigneeAgentId": agent["id"], "priority": pr}
+    try:
+        d = _pc_send("POST", "/api/companies/" + _safe_id(cid) + "/issues", body, what="create the task")
+    except HTTPException as e:
+        raise ToolError(str(e.detail))
+    return d.get("humanKey") or d.get("identifier") or d.get("key") or d.get("id")
+
+
+def t_list_agents(a):
+    _, agents = _tool_agents()
+    if not agents:
+        return ("There are no agents yet. Suggest the owner create one from a template in "
+                "Orchestration > Create agent.")
+    lines = []
+    for ag in agents:
+        bits = [_agent_name(ag), "role: " + str(ag.get("role") or "general"),
+                "status: " + str(ag.get("status") or "unknown")]
+        desc = ag.get("title") or ag.get("capabilities")
+        if desc:
+            bits.append("does: " + str(desc)[:200])
+        lines.append("- " + " | ".join(bits))
+    return "\n".join(lines)
+
+
+def t_assign_task(a):
+    _require_bundled()
+    title = (a.get("title") or "").strip()
+    desc = (a.get("description") or "").strip()
+    if not title or not desc:
+        raise ToolError("Both title and description are required.")
+    cid, agents = _tool_agents()
+    ag = _find_agent(agents, a.get("agent"))
+    if not ag:
+        raise ToolError("No agent matches '%s'. Agents: %s. If none fits the work, use request_hiring_review."
+                        % (a.get("agent"), ", ".join(_agent_name(x) for x in agents) or "none"))
+    key = _create_issue(cid, ag, title, desc, a.get("priority"))
+    note = ""
+    if ag.get("status") == "paused":
+        note = " Note: this agent is paused, so the task will wait until the owner resumes it in Orchestration."
+    return "Task %s created and assigned to %s.%s The owner can follow it in the Tasks tab." % (
+        key, _agent_name(ag), note)
+
+
+def t_list_tasks(a):
+    try:
+        d = list_tasks(agent="", _auth=None)
+    except HTTPException as e:
+        raise ToolError(str(e.detail))
+    tasks = d.get("tasks") or []
+    want = (a.get("agent") or "").strip().lower()
+    if want:
+        tasks = [t for t in tasks if want in (t.get("agentName") or "").lower()]
+    if not tasks:
+        return "No tasks found."
+    return "\n".join("- %s | %s | %s | %s" % (t.get("key"), t.get("status") or "?",
+                                               t.get("agentName") or "unassigned", t.get("title"))
+                     for t in tasks[:30])
+
+
+def t_task_status(a):
+    key = (a.get("task") or "").strip()
+    if not re.match(r"^[A-Za-z0-9-]{1,80}$", key):
+        raise ToolError("Give the task key exactly as list_tasks shows it, for example ABC-12.")
+    try:
+        d = task_detail(key, _auth=None)
+    except HTTPException as e:
+        raise ToolError(str(e.detail))
+    out = ["Task %s. Latest run: %s" % (key, d.get("status") or "no run yet")]
+    for m in (d.get("messages") or [])[-3:]:
+        out.append("[%s] %s" % (m.get("author") or m.get("role") or "note", (m.get("text") or "")[:1500]))
+    if d.get("deliverables"):
+        out.append("Files: " + ", ".join(x.get("name") or "file" for x in d["deliverables"][:10]))
+    return "\n\n".join(out)
+
+
+def t_request_hiring_review(a):
+    _require_bundled()
+    need = (a.get("need") or "").strip()
+    if not need:
+        raise ToolError("Describe the need.")
+    cid, agents = _tool_agents()
+    ceo = next((x for x in agents if str(x.get("role") or "").lower() == "ceo"), None)
+    if not ceo:
+        return ("There is no CEO agent to run a hiring review. Tell the owner: create one from the CEO "
+                "template in Orchestration > Create agent, or create the agent they need directly from a "
+                "template there.")
+    team = ", ".join("%s (%s)" % (_agent_name(x), x.get("role") or "general") for x in agents)
+    desc = ("The owner asked for something no current agent covers.\n\nNeed: " + need[:3000] +
+            "\n\nOwner's request, in their words: " + (a.get("request") or "(not given)")[:2000] +
+            "\n\nCurrent team: " + team +
+            "\n\nRun a hiring review and reply on this task with a recommendation the owner can approve "
+            "or decline:\n1. Is this recurring, or a one-off?\n2. Could an n8n workflow do it with no "
+            "agent? Prefer that when the steps are the same every time.\n3. Could an existing agent take "
+            "it with a small change to their instructions?\n4. Only if not: propose a new agent - name, "
+            "role, what it would do, what access it needs.\n\nYou propose; the owner decides. Do not "
+            "create, change or remove any agent.")
+    key = _create_issue(cid, ceo, "Hiring review: " + need[:120], desc, "medium")
+    return ("Hiring review %s sent to %s. Tell the owner the recommendation will appear in the Tasks tab "
+            "for them to approve or decline." % (key, _agent_name(ceo)))
+
+
+def t_list_workflows(a):
+    wfs = (_n8n_send("GET", "/api/v1/workflows", {"limit": 100}).get("data")) or []
+    if not wfs:
+        return "No workflows yet."
+    return "\n".join("- id %s | %s | %s" % (w.get("id"), "ACTIVE" if w.get("active") else "inactive",
+                                             w.get("name") or "Workflow") for w in wfs)
+
+
+def t_workflow_failures(a):
+    try:
+        lim = max(1, min(int(a.get("limit") or 10), 25))
+    except Exception:
+        lim = 10
+    ex = (_n8n_send("GET", "/api/v1/executions", {"status": "error", "limit": lim}).get("data")) or []
+    if not ex:
+        return "No failed runs."
+    names = {str(w.get("id")): w.get("name") for w in
+             (_n8n_send("GET", "/api/v1/workflows", {"limit": 100}).get("data") or [])}
+    return "\n".join("- run %s | workflow %s (%s) | %s" % (
+        e.get("id"), e.get("workflowId"), names.get(str(e.get("workflowId"))) or "?", e.get("startedAt"))
+        for e in ex)
+
+
+def _wf_id(a):
+    wid = str(a.get("workflow_id") or "").strip()
+    if not re.match(r"^[A-Za-z0-9_-]{1,64}$", wid):
+        raise ToolError("Give the workflow id exactly as list_workflows shows it.")
+    return wid
+
+
+def t_get_workflow(a):
+    w = _n8n_send("GET", "/api/v1/workflows/" + _wf_id(a))
+    slim = {"id": w.get("id"), "name": w.get("name"), "active": bool(w.get("active")),
+            "nodes": w.get("nodes"), "connections": w.get("connections"), "settings": w.get("settings")}
+    text = json.dumps(slim, default=str)
+    return text if len(text) <= 60000 else text[:60000] + "\n...(truncated)"
+
+
+def t_failed_run_detail(a):
+    rid = str(a.get("run_id") or "").strip()
+    if not re.match(r"^[0-9A-Za-z_-]{1,40}$", rid):
+        raise ToolError("Give the run id exactly as workflow_failures shows it.")
+    e = _n8n_send("GET", "/api/v1/executions/" + rid, {"includeData": "true"})
+    rd = ((e.get("data") or {}).get("resultData") or {}) if isinstance(e.get("data"), dict) else {}
+    err = rd.get("error") or {}
+    out = {"run": e.get("id"), "workflowId": e.get("workflowId"), "status": e.get("status"),
+           "startedAt": e.get("startedAt"), "failedNode": rd.get("lastNodeExecuted"),
+           "error": _scrub_secrets(str(err.get("message") or err.get("description") or err or "unknown"))[:2000]}
+    return json.dumps(out, default=str)
+
+
+def _wf_body(a):
+    name = (a.get("name") or "").strip()
+    nodes, conns = a.get("nodes"), a.get("connections")
+    if not name:
+        raise ToolError("name is required.")
+    if not isinstance(nodes, list) or not nodes or not all(isinstance(n, dict) for n in nodes):
+        raise ToolError("nodes must be a non-empty list of n8n node objects.")
+    if len(nodes) > 60:
+        raise ToolError("Too many nodes (max 60). Split this into smaller workflows.")
+    if not isinstance(conns, dict):
+        raise ToolError("connections must be an n8n connections object (use {} for a single node).")
+    body = {"name": name[:120], "nodes": nodes, "connections": conns,
+            "settings": a.get("settings") if isinstance(a.get("settings"), dict) else {"executionOrder": "v1"}}
+    if len(json.dumps(body, default=str)) > 250000:
+        raise ToolError("Workflow is too large.")
+    return body
+
+
+def t_create_workflow(a):
+    w = _n8n_send("POST", "/api/v1/workflows", _wf_body(a))
+    return ("Workflow '%s' created with id %s. It is INACTIVE and will not run. Credentials must be added "
+            "by the owner inside n8n. When it is ready, call request_activation so the owner can approve "
+            "switching it on." % (w.get("name"), w.get("id")))
+
+
+def t_update_workflow(a):
+    wid = _wf_id(a)
+    cur = _n8n_send("GET", "/api/v1/workflows/" + wid)
+    if cur.get("active"):
+        raise ToolError("That workflow is live, and live workflows cannot be changed from here. Build the "
+                        "fix as a new workflow with create_workflow, then call request_activation and "
+                        "explain that it replaces workflow %s." % wid)
+    w = _n8n_send("PUT", "/api/v1/workflows/" + wid, _wf_body(a))
+    return "Workflow %s updated. It is still inactive." % (w.get("id") or wid)
+
+
+def t_request_activation(a):
+    wid = _wf_id(a)
+    summary = (a.get("summary") or "").strip()
+    if len(summary) < 20:
+        raise ToolError("Give a plain-English summary: what it does, what triggers it, what it sends or changes.")
+    w = _n8n_send("GET", "/api/v1/workflows/" + wid)
+    if w.get("active"):
+        return "That workflow is already active."
+    with closing(get_db()) as con:
+        row = con.execute("SELECT id FROM workflow_requests WHERE workflow_id=? AND status='pending'",
+                          (wid,)).fetchone()
+        if row:
+            con.execute("UPDATE workflow_requests SET summary=?, workflow_name=? WHERE id=?",
+                        (summary[:2000], w.get("name"), row[0]))
+        else:
+            con.execute("INSERT INTO workflow_requests(workflow_id, workflow_name, summary, requested_by, "
+                        "status, created_at) VALUES(?,?,?,?,?,?)",
+                        (wid, w.get("name"), summary[:2000], (a.get("requested_by") or "")[:80],
+                         "pending", _now().isoformat()))
+        con.commit()
+    return ("Activation of '%s' is now waiting for the owner. Tell them: open the Automations tab and "
+            "approve or decline it under Waiting for your approval. You cannot activate it yourself."
+            % (w.get("name") or wid))
+
+
+def _schema(props, required=()):
+    return {"type": "object", "properties": props, "required": list(required), "additionalProperties": False}
+
+
+_S = {"type": "string"}
+_ROUTING = (" Routing rule for owner requests: answer quick questions yourself; if the work is the same "
+            "steps every time on a schedule or trigger, build an n8n workflow (cheapest, no AI usage per "
+            "run); if it needs judgment, assign it to the matching agent; if no agent fits, request a "
+            "hiring review.")
+# name -> (handler, scope, description, schema). scope "chat" = chat agent only.
+MCP_TOOLS = {
+    "list_agents": (t_list_agents, "chat",
+        "List the business's agents with their role, status and what they do. Call this before "
+        "assigning work so you pick the right agent." + _ROUTING, _schema({})),
+    "assign_task": (t_assign_task, "chat",
+        "Give a piece of work that needs judgment to one agent. Creates a task the owner can follow in "
+        "the Tasks tab. Write the description so the agent can act without this conversation: goal, "
+        "context, what done looks like. Do not use for work that is the same steps every time on a "
+        "schedule or trigger; that belongs in an n8n workflow.",
+        _schema({"agent": {"type": "string", "description": "Agent name from list_agents"},
+                 "title": _S, "description": _S,
+                 "priority": {"type": "string", "enum": ["low", "medium", "high", "urgent"]}},
+                ("agent", "title", "description"))),
+    "list_tasks": (t_list_tasks, "chat", "List current tasks with status and assigned agent.",
+        _schema({"agent": {"type": "string", "description": "Optional agent name filter"}})),
+    "task_status": (t_task_status, "chat",
+        "Latest run status and most recent replies on one task.",
+        _schema({"task": {"type": "string", "description": "Task key from list_tasks"}}, ("task",))),
+    "request_hiring_review": (t_request_hiring_review, "chat",
+        "Use when the owner asks for ongoing work that no current agent covers and a workflow cannot do. "
+        "Sends the CEO agent a hiring review; the CEO proposes whether to add an agent and the owner "
+        "decides. This never creates an agent.",
+        _schema({"need": {"type": "string", "description": "The work that has no owner"},
+                 "request": {"type": "string", "description": "The owner's request in their words"}},
+                ("need",))),
+    "list_workflows": (t_list_workflows, "all",
+        "List n8n workflows with id and whether each is active. Check here before building a new one.",
+        _schema({})),
+    "workflow_failures": (t_workflow_failures, "all", "Recent failed workflow runs.",
+        _schema({"limit": {"type": "integer"}})),
+    "failed_run_detail": (t_failed_run_detail, "all",
+        "Which node failed and the error message for one failed run.",
+        _schema({"run_id": _S}, ("run_id",))),
+    "get_workflow": (t_get_workflow, "all", "Full definition (nodes and connections) of one workflow.",
+        _schema({"workflow_id": _S}, ("workflow_id",))),
+    "create_workflow": (t_create_workflow, "all",
+        "Create a new n8n workflow. It is always created INACTIVE. Use for repeatable work: same steps "
+        "every time, on a schedule or trigger. Not worth it for a one-off task. Prefer plain n8n nodes; "
+        "add an AI or agent step only for the one step that needs judgment. Never put passwords, API "
+        "keys or tokens in node parameters; reference n8n credentials, which the owner adds in n8n.",
+        _schema({"name": _S,
+                 "nodes": {"type": "array", "items": {"type": "object"}, "description": "n8n node objects"},
+                 "connections": {"type": "object", "description": "n8n connections object"},
+                 "settings": {"type": "object"}}, ("name", "nodes", "connections"))),
+    "update_workflow": (t_update_workflow, "all",
+        "Replace the definition of an INACTIVE workflow. Live workflows cannot be changed here.",
+        _schema({"workflow_id": _S, "name": _S,
+                 "nodes": {"type": "array", "items": {"type": "object"}},
+                 "connections": {"type": "object"}, "settings": {"type": "object"}},
+                ("workflow_id", "name", "nodes", "connections"))),
+    "request_activation": (t_request_activation, "all",
+        "Ask the owner to switch a workflow on. You cannot activate workflows yourself. The summary is "
+        "what the owner reads before approving: what it does, what triggers it, and what it sends or "
+        "changes.",
+        _schema({"workflow_id": _S, "summary": _S, "requested_by": {"type": "string",
+                 "description": "Your agent name"}}, ("workflow_id", "summary"))),
+}
+
+
+def _mcp_rpc(msg, scope):
+    if not isinstance(msg, dict):
+        return {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid request"}}
+    mid, method, params = msg.get("id"), msg.get("method"), msg.get("params") or {}
+    if "id" not in msg:
+        return None  # notification
+    def ok(result):
+        return {"jsonrpc": "2.0", "id": mid, "result": result}
+    visible = {n: t for n, t in MCP_TOOLS.items() if scope == "chat" or t[1] == "all"}
+    if method == "initialize":
+        want = params.get("protocolVersion")
+        return ok({"protocolVersion": want if want in _MCP_VERSIONS else _MCP_VERSIONS[0],
+                   "capabilities": {"tools": {"listChanged": False}},
+                   "serverInfo": {"name": "agent-os", "version": "1.0"},
+                   "instructions": "Tools for running the business: delegate to agents, and build n8n "
+                                   "workflows. Workflow activation and hiring always need the owner's "
+                                   "approval." + _ROUTING})
+    if method == "ping":
+        return ok({})
+    if method == "tools/list":
+        return ok({"tools": [{"name": n, "description": t[2], "inputSchema": t[3]} for n, t in visible.items()]})
+    if method == "tools/call":
+        name = params.get("name")
+        if name not in visible:
+            return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": "Unknown tool"}}
+        args = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
+        try:
+            text, is_err = visible[name][0](args), False
+        except ToolError as e:
+            text, is_err = str(e), True
+        except Exception as e:
+            text, is_err = "Tool failed: " + _scrub_secrets(str(e))[:200], True
+        return ok({"content": [{"type": "text", "text": str(text)}], "isError": is_err})
+    return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": "Method not found"}}
+
+
+async def _mcp_http(request: Request, scope: str):
+    if not CHAT_TOOLS_TOKEN:
+        return Response(status_code=404)
+    got = request.headers.get("authorization") or ""
+    if not hmac.compare_digest(got.encode(), ("Bearer " + CHAT_TOOLS_TOKEN).encode()):
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    if request.method != "POST":
+        return Response(status_code=405, headers={"Allow": "POST"})
+    try:
+        payload = json.loads(await request.body())
+    except Exception:
+        return JSONResponse(status_code=400, content={"jsonrpc": "2.0", "id": None,
+                                                      "error": {"code": -32700, "message": "Parse error"}})
+    from starlette.concurrency import run_in_threadpool
+    if isinstance(payload, list):
+        outs = [o for o in [await run_in_threadpool(_mcp_rpc, m, scope) for m in payload[:20]] if o]
+        return JSONResponse(outs) if outs else Response(status_code=202)
+    out = await run_in_threadpool(_mcp_rpc, payload, scope)
+    return JSONResponse(out) if out else Response(status_code=202)
+
+
+@app.api_route("/mcp", methods=["GET", "POST", "DELETE"])
+async def mcp_chat(request: Request):
+    return await _mcp_http(request, "chat")
+
+
+@app.api_route("/mcp/agent", methods=["GET", "POST", "DELETE"])
+async def mcp_agent(request: Request):
+    """Subset for working agents (n8n tools only, no delegation)."""
+    return await _mcp_http(request, "agent")
+
+
+@app.get("/automations/requests")
+def workflow_requests(_auth=Depends(require_auth)):
+    with closing(get_db()) as con:
+        rows = con.execute("SELECT id, workflow_id, workflow_name, summary, requested_by, status, created_at, "
+                           "decided_at FROM workflow_requests ORDER BY id DESC LIMIT 40").fetchall()
+    keys = ("id", "workflow_id", "workflow_name", "summary", "requested_by", "status", "created_at", "decided_at")
+    items = [dict(zip(keys, r)) for r in rows]
+    return {"pending": [i for i in items if i["status"] == "pending"],
+            "recent": [i for i in items if i["status"] != "pending"][:10]}
+
+
+def _decide_request(rid, approve):
+    with closing(get_db()) as con:
+        row = con.execute("SELECT workflow_id, status FROM workflow_requests WHERE id=?", (rid,)).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Request not found.")
+    if row[1] != "pending":
+        raise HTTPException(status_code=400, detail="That request was already decided.")
+    if approve:
+        if not re.match(r"^[A-Za-z0-9_-]{1,64}$", str(row[0])):
+            raise HTTPException(status_code=400, detail="Bad workflow id.")
+        try:
+            _n8n_send("POST", "/api/v1/workflows/" + str(row[0]) + "/activate", {})
+        except ToolError as e:
+            raise HTTPException(status_code=400, detail="n8n could not activate it: " + str(e))
+    with closing(get_db()) as con:
+        con.execute("UPDATE workflow_requests SET status=?, decided_at=? WHERE id=?",
+                    ("approved" if approve else "declined", _now().isoformat(), rid))
+        con.commit()
+    return {"ok": True, "status": "approved" if approve else "declined"}
+
+
+@app.post("/automations/requests/{rid}/approve")
+def approve_workflow_request(rid: int, _auth=Depends(require_auth)):
+    """Owner approval: this is the only path that switches an agent-built workflow on."""
+    return _decide_request(rid, True)
+
+
+@app.post("/automations/requests/{rid}/decline")
+def decline_workflow_request(rid: int, _auth=Depends(require_auth)):
+    return _decide_request(rid, False)
 
 
 @app.exception_handler(HTTPException)

@@ -164,3 +164,29 @@ while being blind to real spend. Only enable it for models whose runs report cos
 If a company ever shows "paused by budget", the Orchestration page offers
 **Turn off cap & resume**.
 
+## 10. Chat tools (delegation and workflows from chat)
+
+The chat agent has an `agent_os` tool server (connectors' MCP endpoint) and a
+routing skill. Ask it for help running the business and it will: answer quick
+questions itself, build an n8n workflow for repeatable work, hand judgment work to
+the matching agent, or send the CEO agent a hiring review when no agent fits.
+
+What needs the owner:
+- **Turning a workflow on.** Agents build workflows inactive and file a request.
+  Approve or decline under **Waiting for your approval** in the Automations tab.
+- **Hiring.** The CEO's recommendation arrives as a task; the owner creates the
+  agent (or not) in Orchestration.
+- **Credentials.** Agents never handle logins; add them as credentials inside n8n.
+
+Prerequisites: n8n connected in the Automations tab, Paperclip connected in
+Orchestration, and at least one agent. A CEO agent is needed for hiring reviews.
+
+Operations:
+- Setup runs on install/update: `./scripts/sync-chat-tools.sh` (then restart
+  Hermes). Check the tools are loaded in the dashboard's MCP tab (`agent_os`).
+- Give another agent profile the n8n tools: add its profile name to
+  `N8N_TOOLS_PROFILES=` in `.env` and run update.
+- Limit how many tasks chat can create: `CHAT_TASKS_PER_HOUR` (default 20).
+- Turn the tools off: blank `CHAT_TOOLS_TOKEN=` in `.env`, remove `agent_os` from
+  `data/hermes/config.yaml`, update.
+

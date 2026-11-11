@@ -37,6 +37,8 @@ fi
 
 ./scripts/sync-branding.sh
 docker compose build connectors
+# Chat tools: write the MCP entry + routing skill before Hermes restarts below.
+./scripts/sync-chat-tools.sh || echo "  ! chat tools setup reported problems"
 docker compose up -d
 docker compose restart hermes
 docker compose restart proxy

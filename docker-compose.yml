@@ -117,6 +117,10 @@ services:
       # Per-task fast-stop: max run-creations for one agent+task before the gateway
       # halts it (trips in seconds on a tight loop, long before the dollar cap). 0 = off.
       RUN_MAX_ATTEMPTS: "${RUN_MAX_ATTEMPTS:-6}"
+      # Bearer token Hermes uses to call the chat tools (MCP) endpoint. Empty = off.
+      CHAT_TOOLS_TOKEN: "${CHAT_TOOLS_TOKEN:-}"
+      CHAT_TASKS_PER_HOUR: "${CHAT_TASKS_PER_HOUR:-20}"
+      N8N_TOOLS_PROFILES: "${N8N_TOOLS_PROFILES:-}"
     volumes:
       - connectors-data:/data
     expose:

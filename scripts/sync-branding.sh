@@ -9,6 +9,7 @@ cd "$(dirname "$0")/.."
 # on the first pass, which is still the old update.sh that lacks the backfill.
 if [ -f .env ]; then
   grep -q '^CONNECTORS_KEY=' .env || { echo "CONNECTORS_KEY=$(openssl rand -base64 32 | tr '+/' '-_')" >> .env; echo "Added CONNECTORS_KEY to .env"; }
+  grep -q '^CHAT_TOOLS_TOKEN=' .env || { echo "CHAT_TOOLS_TOKEN=$(openssl rand -hex 32)" >> .env; echo "Added CHAT_TOOLS_TOKEN to .env"; }
   grep -q '^N8N_ENCRYPTION_KEY=' .env || { echo "N8N_ENCRYPTION_KEY=$(openssl rand -hex 32)" >> .env; echo "Added N8N_ENCRYPTION_KEY to .env"; }
   # Paperclip secrets so the control-plane profile never errors when enabled.
   # (The profile itself stays opt-in — enabling it triggers a heavy source build.)

@@ -51,10 +51,45 @@
       s = useState("");    var apiKey = s[0], setApiKey = s[1];
       s = useState(false); var busy = s[0], setBusy = s[1];
       s = useState(null);  var err = s[0], setErr = s[1];
+      s = useState(null);  var reqs = s[0], setReqs = s[1];
+      s = useState(null);  var reqBusy = s[0], setReqBusy = s[1];
+      s = useState(null);  var reqErr = s[0], setReqErr = s[1];
+
+      function loadReqs() {
+        api("/automations/requests").then(setReqs).catch(function () { setReqs(null); });
+      }
+      function decide(r, approve) {
+        setReqErr(null); setReqBusy(r.id);
+        api("/automations/requests/" + r.id + (approve ? "/approve" : "/decline"), { method: "POST" })
+          .then(function () { setReqBusy(null); loadReqs(); loadData(); })
+          .catch(function (e) { setReqBusy(null); setReqErr(String(e.message || e)); });
+      }
+      // Workflows an agent built and wants switched on. Only this button activates them.
+      function approvals() {
+        var pend = reqs && reqs.pending ? reqs.pending : [];
+        if (!pend.length) return null;
+        return h("div", { className: "sa-panel sa-approvals" },
+          h("div", { className: "sa-panel-h" }, "WAITING FOR YOUR APPROVAL"),
+          h("div", { className: "sa-apphint" }, "An agent built these workflows. They stay off until you approve."),
+          pend.map(function (r) {
+            return h("div", { className: "sa-app", key: r.id },
+              h("div", { className: "sa-app-main" },
+                h("div", { className: "sa-app-name" }, "Turn on: " + (r.workflow_name || "Workflow")),
+                h("div", { className: "sa-app-sum" }, r.summary || ""),
+                h("div", { className: "sa-app-meta" }, (r.requested_by ? "Requested by " + r.requested_by + " · " : "") + whenStr(r.created_at))),
+              h("div", { className: "sa-app-acts" },
+                h("button", { type: "button", className: "sa-btn sa-primary", disabled: reqBusy === r.id,
+                  onClick: function () { decide(r, true); } }, reqBusy === r.id ? "Working…" : "Approve & turn on"),
+                h("button", { type: "button", className: "sa-btn", disabled: reqBusy === r.id,
+                  onClick: function () { decide(r, false); } }, "Decline")));
+          }),
+          reqErr ? h("div", { className: "sa-msg sa-err" }, reqErr) : null);
+      }
 
       function loadData() {
         api("/automations/workflows").then(setWf).catch(function () { setWf(null); });
         api("/automations/executions").then(setEx).catch(function () { setEx(null); });
+        loadReqs();
       }
       function loadStatus() {
         return api("/automations/status").then(function (st) {
@@ -164,6 +199,7 @@
         header(),
         up === false ? h("div", { className: "sa-note" }, "The automation engine is still starting — this can take a minute after a deploy. The status dot turns green when it's ready.") : null,
         (up && !connected) ? connectPanel() : null,
+        connected ? approvals() : null,
         connected ? dashboard() : null,
         h("div", { className: "sa-foot" }, "Local automations run on your server, not through the model — use them for scheduled jobs, data moves, and glue work to save tokens.")
       );

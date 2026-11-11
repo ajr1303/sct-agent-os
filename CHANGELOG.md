@@ -2,6 +2,33 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.14.0] — 2026-11-11 — Chat tools: delegation + workflows from chat
+
+The chat agent can now run the business instead of doing every job itself.
+
+- **Chat tools (MCP).** Connectors serves an MCP endpoint (`/mcp`) that Hermes
+  loads as the `agent_os` server. Tools: `list_agents`, `assign_task`,
+  `list_tasks`, `task_status`, `request_hiring_review`, `list_workflows`,
+  `workflow_failures`, `failed_run_detail`, `get_workflow`, `create_workflow`,
+  `update_workflow`, `request_activation`.
+- **Routing skill** (`skills/agent-os/running-the-business`): answer quick
+  questions; repeatable work becomes an n8n workflow (preferred, no AI usage per
+  run); judgment work goes to the matching agent; no matching agent sends the
+  CEO a hiring review that proposes, never hires.
+- **Approval is enforced in code, not in the prompt.** Workflows are always
+  created inactive; there is no activate tool. Agents file an activation request
+  and the owner approves it under **Waiting for your approval** in Automations
+  (`/automations/requests`). Live workflows cannot be edited through the tools.
+  Task creation is rate-limited (`CHAT_TASKS_PER_HOUR`, default 20). Against an
+  external Paperclip the delegation tools are read-only.
+- **Internal only.** Bearer token (`CHAT_TOOLS_TOKEN`, generated on update), and
+  `/api/connectors/mcp` returns 404 on the public proxy.
+- `scripts/sync-chat-tools.sh` writes the MCP entry into the Hermes config
+  (backup kept as `config.yaml.pre-agent-os-tools`) and installs the skill; run
+  by install and update. Agent profiles whose name contains "automation" or
+  "n8n" (or listed in `N8N_TOOLS_PROFILES`) get the n8n-only subset
+  (`/mcp/agent`).
+
 ## [0.13.0] — 2026-11-11 — Agent templates
 
 - **Start from a template** in Orchestration → Create agent. Nine starter agents
