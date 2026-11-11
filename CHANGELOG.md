@@ -2,6 +2,22 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.12.1] — 2026-11-11 — Company resume + full invite prompt
+
+- **Company-level pause/resume.** Agents were stuck because the whole Paperclip
+  company was paused (agent pause reason `company_paused`), which agent-level
+  resume can't override. New `GET /orchestration/company` and
+  `POST /orchestration/company/resume|pause`; the Orchestration page shows a
+  banner explaining why the company is paused (budget hard-stop vs manual) with a
+  Resume company button.
+- **Invite prompt is now the full paste-ready prompt.** Paperclip's endpoint only
+  returns the onboarding URL (its UI builds the prompt client-side); connectors now
+  builds the equivalent prompt (onboarding URL, health check, join flow,
+  Hermes/OpenClaw gateway notes, optional note). Errors clearly if
+  PAPERCLIP_PUBLIC_URL isn't a reachable URL.
+- Brand assets (`/sct-brand/`) are served `no-cache` so branding/version updates
+  appear without a hard refresh.
+
 ## [0.12.0] — 2026-11-11 — Agent controls, invite, branding
 
 - **Pause / Resume agents from the dashboard.** New connectors endpoints

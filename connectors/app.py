@@ -1141,13 +1141,17 @@ def _safe_id(v):
 
 
 def _pc_post(path, body=None, what="complete the request"):
+    return _pc_send("POST", path, body, what)
+
+
+def _pc_send(method, path, body=None, what="complete the request"):
     key = _pc_key()
     if not key:
         raise HTTPException(status_code=400, detail="Connect Paperclip first (board API key).")
     try:
         with httpx.Client(timeout=45.0, follow_redirects=True) as c:
-            r = c.post(PAPERCLIP_URL + path, headers={"Authorization": "Bearer " + key},
-                       json=body if body is not None else {})
+            r = c.request(method, PAPERCLIP_URL + path, headers={"Authorization": "Bearer " + key},
+                          json=body if body is not None else ({} if method != "GET" else None))
     except Exception as e:
         raise HTTPException(status_code=502, detail="Could not reach Paperclip: " + str(e)[:140])
     if r.status_code in (401, 403):
@@ -1190,15 +1194,106 @@ def invite_prompt(b: InvitePrompt, _auth=Depends(require_auth)):
     cid = _pc_company_id()
     if not cid:
         raise HTTPException(status_code=400, detail="No Paperclip company found.")
-    body = {"agentMessage": (b.message or "").strip()[:4000] or None}
+    note = (b.message or "").strip()[:4000]
+    body = {"agentMessage": note or None}
     d = _pc_post("/api/companies/" + _safe_id(cid) + "/openclaw/invite-prompt", body,
                  what="create the invite")
+    onboarding = d.get("onboardingTextUrl") or ""
+    if not onboarding.startswith("http"):
+        raise HTTPException(status_code=400, detail=(
+            "Paperclip returned no public onboarding URL. Set PAPERCLIP_PUBLIC_URL to the "
+            "Paperclip address external agents can reach (e.g. your tunnel hostname)."))
     return {
-        "inviteMessage": d.get("inviteMessage") or "",
-        "onboardingTextUrl": d.get("onboardingTextUrl") or "",
-        "inviteUrl": d.get("inviteUrl") or "",
+        "inviteMessage": _build_invite_prompt(onboarding, note),
+        "onboardingTextUrl": onboarding,
         "expiresAt": d.get("expiresAt"),
     }
+
+
+def _build_invite_prompt(onboarding_url, note=""):
+    """The copy-paste prompt for an external agent. Mirrors Paperclip's own
+    'invite agent' prompt (ui/src/lib/agent-onboarding-prompt.ts): the endpoint
+    only returns the onboarding URL; the UI wraps it in these instructions. The
+    onboarding.txt it points to carries the full, authoritative instructions."""
+    base = onboarding_url.split("/api/", 1)[0]
+    test_url = onboarding_url.replace("/onboarding.txt", "/test-resolution")
+    lines = [
+        "You're invited to join a Paperclip company as an agent.",
+        "",
+        "First, tell your user you understand the request and are going to onboard into Paperclip. Then work through the steps below.",
+    ]
+    if note:
+        lines += ["", "Note from the company: " + note]
+    lines += [
+        "",
+        "Paperclip onboarding document:",
+        "- " + onboarding_url,
+        "",
+        "Connectivity: Paperclip must be reachable from your runtime. Check with: GET " + base + "/api/health",
+        "If your runtime exposes a callback or gateway URL, test Paperclip-to-agent reachability with: "
+        + test_url + "?url=<urlencoded-agent-url>",
+        "",
+        "Join flow:",
+        "1. Read the onboarding.txt document above.",
+        "2. Submit an agent join request to the invite registration endpoint it describes.",
+        "3. Use your own agent name for `agentName`.",
+        "4. Include a concise `capabilities` summary so the board knows what work to assign you.",
+        "5. Set `adapterType` to the Paperclip adapter that matches your runtime.",
+        "6. Put runtime-specific settings in `agentDefaultsPayload`.",
+        "7. Wait for board approval before claiming the API key.",
+        "8. Claim the Paperclip API key once via the standard claim endpoint and store the parsed `token` field "
+        "from the raw HTTP response securely. A value containing `...` or `[redacted]` is a masked preview, not a key.",
+        "",
+        "Hermes Gateway agents: use `adapterType: \"hermes_gateway\"`. Start Hermes with API_SERVER_ENABLED=true and a "
+        "random API_SERVER_KEY, run `hermes gateway run --replace --accept-hooks` (API port 8642). Set "
+        "`agentDefaultsPayload.apiBaseUrl` to a Hermes URL Paperclip can reach, `apiKey` to the same value as "
+        "API_SERVER_KEY (the gateway key, not the Paperclip key), and `paperclipApiUrl` to " + base + ".",
+        "",
+        "OpenClaw Gateway agents: use `adapterType: \"openclaw_gateway\"`, set `agentDefaultsPayload.url` to your "
+        "ws:// or wss:// gateway URL and `headers[\"x-openclaw-token\"]` to your gateway token.",
+        "",
+        "After connecting, follow the full onboarding instructions in onboarding.txt.",
+    ]
+    return "\n".join(lines)
+
+
+def _company_brief(d):
+    return {
+        "id": d.get("id"),
+        "name": d.get("name"),
+        "status": d.get("status"),
+        "pauseReason": d.get("pauseReason"),
+        "pausedAt": d.get("pausedAt"),
+    }
+
+
+@app.get("/orchestration/company")
+def get_company(_auth=Depends(require_auth)):
+    """Company-level run state. When the company is paused (manually, or by the
+    budget hard-stop), every agent shows paused with reason company_paused and
+    agent-level resume has no effect until the company is resumed."""
+    cid = _pc_company_id()
+    if not cid:
+        raise HTTPException(status_code=400, detail="No Paperclip company found.")
+    return _company_brief(_pc_send("GET", "/api/companies/" + _safe_id(cid), what="read the company"))
+
+
+@app.post("/orchestration/company/resume")
+def resume_company(_auth=Depends(require_auth)):
+    cid = _pc_company_id()
+    if not cid:
+        raise HTTPException(status_code=400, detail="No Paperclip company found.")
+    d = _pc_send("PATCH", "/api/companies/" + _safe_id(cid), {"status": "active"}, what="resume the company")
+    return {"ok": True, **_company_brief(d)}
+
+
+@app.post("/orchestration/company/pause")
+def pause_company(_auth=Depends(require_auth)):
+    cid = _pc_company_id()
+    if not cid:
+        raise HTTPException(status_code=400, detail="No Paperclip company found.")
+    d = _pc_send("PATCH", "/api/companies/" + _safe_id(cid), {"status": "paused"}, what="pause the company")
+    return {"ok": True, **_company_brief(d)}
 
 
 @app.get("/orchestration/overview")

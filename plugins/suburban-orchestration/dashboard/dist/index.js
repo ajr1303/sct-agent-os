@@ -73,6 +73,21 @@
       s = useState(false); var iCopied = s[0], setICopied = s[1];
       s = useState(null); var runBusy = s[0], setRunBusy = s[1];  // agent id mid pause/resume
       s = useState(null); var runErr = s[0], setRunErr = s[1];
+      s = useState(null); var company = s[0], setCompany = s[1];
+      s = useState(false); var coBusy = s[0], setCoBusy = s[1];
+
+      function resumeCompany() {
+        setRunErr(null); setCoBusy(true);
+        api("/orchestration/company/resume", { method: "POST" })
+          .then(function () { setCoBusy(false); load(); })
+          .catch(function (e2) { setCoBusy(false); setRunErr("Couldn't resume the company: " + String(e2.message || e2)); });
+      }
+      function pauseWhy(r) {
+        r = String(r || "").toLowerCase();
+        if (r === "budget") return "the monthly budget hard-stop tripped. Resuming lets agents spend again — raise the budget first if you're near the cap.";
+        if (r === "company_archived") return "the company was archived.";
+        return "it was paused manually (likely during the earlier runaway-cost cleanup).";
+      }
 
       function isPaused(a) { return String(a.status || "").toLowerCase() === "paused"; }
       function toggleRun(a) {
@@ -99,7 +114,10 @@
       function load() {
         api("/orchestration/status").then(function (st) {
           setStatus(st);
-          if (st.connected) api("/orchestration/overview").then(setOv).catch(function () {});
+          if (st.connected) {
+            api("/orchestration/overview").then(setOv).catch(function () {});
+            api("/orchestration/company").then(setCompany).catch(function () { setCompany(null); });
+          }
         }).catch(function () { setStatus({ paperclip_up: false, connected: false }); });
       }
       useEffect(function () {
@@ -233,6 +251,14 @@
           stat("Managed agents", ov ? String(agents.length) : "—"),
           stat("Waiting on you", att == null ? "—" : String(att), true),
           stat("Mode", mode === "external" ? "External" : "Bundled")) : null,
+
+        up && connected && mode !== "external" && company && String(company.status).toLowerCase() === "paused"
+          ? h("div", { className: "so-cobanner" },
+              h("div", { className: "so-cobanner-txt" },
+                h("b", null, "Your company is paused, so no agent can run. "),
+                "Paperclip paused it because " + pauseWhy(company.pauseReason)),
+              h("button", { className: "so-btn so-primary", disabled: coBusy, onClick: resumeCompany }, coBusy ? "Resuming…" : "▶ Resume company"))
+          : null,
 
         up && connected ? h("div", { className: "so-panel" },
           h("div", { className: "so-panel-h so-panel-h-row" },
