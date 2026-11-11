@@ -2,6 +2,25 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.11.0] — 2026-11-11 — Tunnel hostnames for Paperclip & n8n
+
+Makes the "Open Paperclip" / "Open builder" buttons work through the tunnel, and
+configures n8n to sit correctly behind an HTTPS reverse proxy.
+
+- **Dashboard buttons now use configured public URLs.** `sync-branding.sh`
+  generates `/sct-brand/links.js` (`window.__SCT_LINKS__`) from
+  `PAPERCLIP_PUBLIC_URL` / `N8N_PUBLIC_URL`; the orchestration, automations, and
+  tasks plugins use those for the open-in-new-tab links, falling back to the old
+  `host:3100` / `host:5678` guess when unset.
+- **n8n reverse-proxy settings parameterized:** `N8N_PROTOCOL`, `N8N_HOST`,
+  `N8N_SECURE_COOKIE`, `N8N_PROXY_HOPS`, and `WEBHOOK_URL`/`N8N_EDITOR_BASE_URL`
+  (from `N8N_PUBLIC_URL`). Defaults unchanged for LAN/local; set them for a tunnel.
+- **cloudflared default bumped** 2024.12.2 → 2026.7.3 (the old pin was flagged
+  "unsupported" by Cloudflare). Override with `CLOUDFLARED_TAG`.
+
+Per-client naming note: one-level hostnames (e.g. `agent-os-paperclip.example.com`)
+are covered by free Universal SSL; nested (`x.agent-os.example.com`) needs ACM.
+
 ## [0.10.0] — 2026-11-11 — Access methods (F-04/F-05 groundwork)
 
 Reworks how a box is reached, secure by default, with a pluggable access method.

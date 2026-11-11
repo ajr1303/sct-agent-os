@@ -97,7 +97,20 @@ ssh -L 9119:127.0.0.1:9119 user@server
 
 **3 — Direct LAN / public HTTP (not recommended).** Plain HTTP on your network (`DASHBOARD_BIND=0.0.0.0`). Only on a trusted LAN; prefer option 1 or 2 anywhere else.
 
-To reach n8n or Paperclip directly, use the dashboard's links, an SSH tunnel (`-L 5678:127.0.0.1:5678`, `-L 3100:127.0.0.1:3100`), or give them their own tunnel hostnames.
+To reach n8n or Paperclip directly, use the dashboard's links, an SSH tunnel (`-L 5678:127.0.0.1:5678`, `-L 3100:127.0.0.1:3100`), or give them their own tunnel hostnames (recommended behind a tunnel):
+
+- Add two more tunnel routes: a Paperclip host → `http://paperclip:3100` and an n8n host → `http://n8n:5678` (one-level names like `agent-os-paperclip.example.com` get a free cert).
+- In `.env`, set the public URLs and the reverse-proxy flags, then `docker compose up -d`:
+  ```
+  PAPERCLIP_PUBLIC_URL=https://agent-os-paperclip.example.com
+  PAPERCLIP_ALLOWED_HOSTNAMES=paperclip,localhost,127.0.0.1,agent-os-paperclip.example.com
+  N8N_PUBLIC_URL=https://agent-os-n8n.example.com/
+  N8N_PROTOCOL=https
+  N8N_HOST=agent-os-n8n.example.com
+  N8N_SECURE_COOKIE=true
+  N8N_PROXY_HOPS=1
+  ```
+  `sync-branding.sh` writes these into the dashboard so the "Open" buttons point at the tunnel hostnames.
 
 **Login:** the installer generates a random dashboard password (user `admin`) and prints it at the end; it's also stored in `/opt/sct-agent-os/.env` as `DASHBOARD_PASSWORD`. Change it there and restart to rotate.
 

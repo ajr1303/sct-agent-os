@@ -46,7 +46,7 @@ services:
   # from Suburban Cyber's account — a self-hoster uses their own token, same code.
   cloudflared:
     profiles: ["tunnel"]
-    image: cloudflare/cloudflared:${CLOUDFLARED_TAG:-2024.12.2}
+    image: cloudflare/cloudflared:${CLOUDFLARED_TAG:-2026.7.3}
     container_name: agent-os-cloudflared
     restart: unless-stopped
     depends_on: [proxy]
@@ -136,11 +136,18 @@ services:
       - "${INTERNAL_BIND:-127.0.0.1}:5678:5678"
     environment:
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?run ./install.sh first}
-      N8N_HOST: "0.0.0.0"
+      N8N_HOST: "${N8N_HOST:-0.0.0.0}"
       N8N_PORT: "5678"
-      N8N_PROTOCOL: "http"
-      # Login cookie must be allowed over plain HTTP on a LAN IP (no TLS yet).
-      N8N_SECURE_COOKIE: "false"
+      N8N_PROTOCOL: "${N8N_PROTOCOL:-http}"
+      # Login cookie over plain HTTP by default (LAN/local). Behind an HTTPS tunnel
+      # set N8N_SECURE_COOKIE=true, N8N_PROTOCOL=https, N8N_PROXY_HOPS=1, and
+      # N8N_PUBLIC_URL=https://<your n8n tunnel host>/ (see README access section).
+      N8N_SECURE_COOKIE: "${N8N_SECURE_COOKIE:-false}"
+      # Trust X-Forwarded-* from the tunnel/reverse proxy (0 = don't trust any).
+      N8N_PROXY_HOPS: "${N8N_PROXY_HOPS:-0}"
+      # Empty = n8n derives these from host/protocol; set to the public URL behind a tunnel.
+      WEBHOOK_URL: "${N8N_PUBLIC_URL:-}"
+      N8N_EDITOR_BASE_URL: "${N8N_PUBLIC_URL:-}"
       N8N_DIAGNOSTICS_ENABLED: "false"
       N8N_HIRING_BANNER_ENABLED: "false"
       N8N_PERSONALIZATION_ENABLED: "false"

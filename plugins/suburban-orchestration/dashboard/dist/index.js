@@ -40,7 +40,7 @@
       return found ? sum : null;
     }
 
-    function pcUrl() { return location.protocol + "//" + location.hostname + ":3100/"; }
+    function pcUrl() { var L = window.__SCT_LINKS__; if (L && L.paperclip) return L.paperclip; return location.protocol + "//" + location.hostname + ":3100/"; }
     function openPc() { try { window.open(pcUrl(), "_blank", "noopener"); } catch (e) {} }
 
     function Orchestration() {

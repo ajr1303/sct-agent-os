@@ -40,6 +40,21 @@ H=data/hermes
 mkdir -p "$H/dashboard-themes" "$H/plugins" "$H/brand"
 cp templates/dashboard-themes/*.yaml "$H/dashboard-themes/"
 cp brand/* "$H/brand/"
+
+# Generate links.js so the dashboard's "Open Paperclip/builder" buttons use the
+# configured browser-facing URLs (tunnel hostnames, LAN IP, etc.) instead of
+# guessing host:3100 / host:5678. Empty values make the buttons fall back to the
+# old host-based guess. Values come from .env; JSON-escape the quote/backslash.
+pc_url=""; n8n_url=""
+if [ -f .env ]; then
+  pc_url=$(sed -n 's/^PAPERCLIP_PUBLIC_URL=//p' .env | tail -n1)
+  n8n_url=$(sed -n 's/^N8N_PUBLIC_URL=//p' .env | tail -n1)
+fi
+esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+cat > "$H/brand/links.js" <<JS
+window.__SCT_LINKS__ = { "paperclip": "$(esc "$pc_url")", "n8n": "$(esc "$n8n_url")" };
+JS
+
 chmod 755 "$H/brand"; chmod 644 "$H/brand/"*
 for plug in suburban-cyber suburban-chat suburban-mail suburban-bookings suburban-automations suburban-orchestration suburban-tasks; do
   rm -rf "$H/plugins/$plug"

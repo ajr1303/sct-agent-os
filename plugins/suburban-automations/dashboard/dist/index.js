@@ -29,7 +29,7 @@
     }
 
     // n8n editor runs on :5678 of whatever host the dashboard is on.
-    function n8nUrl() { return location.protocol + "//" + location.hostname + ":5678/"; }
+    function n8nUrl() { var L = window.__SCT_LINKS__; if (L && L.n8n) return L.n8n; return location.protocol + "//" + location.hostname + ":5678/"; }
     function openN8n() { try { window.open(n8nUrl(), "_blank", "noopener"); } catch (e) {} }
 
     function whenStr(iso) {

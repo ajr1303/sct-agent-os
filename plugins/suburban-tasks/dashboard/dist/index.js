@@ -103,7 +103,7 @@
       var up = list ? list.paperclip_up : null;
       var shown = tasks.filter(function (t) { return filter === "all" || bucket(t.status).k === filter; });
 
-      function pcBase() { return location.protocol + "//" + location.hostname + ":3100"; }
+      function pcBase() { var L = window.__SCT_LINKS__; if (L && L.paperclip) return L.paperclip.replace(/\/+$/, ""); return location.protocol + "//" + location.hostname + ":3100"; }
       function pcTaskUrl(key) {
         var slug = list && list.company_slug;
         return slug ? (pcBase() + "/" + slug + "/issues/" + key) : (pcBase() + "/");
