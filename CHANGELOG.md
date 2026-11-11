@@ -2,6 +2,26 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.10.0] — 2026-11-11 — Access methods (F-04/F-05 groundwork)
+
+Reworks how a box is reached, secure by default, with a pluggable access method.
+The product stays neutral — a self-hoster picks their own method; the managed
+service is just the Cloudflare option operated on the client's behalf.
+
+- **n8n and Paperclip now bind to loopback only** (`INTERNAL_BIND`, default
+  `127.0.0.1`), decoupled from `DASHBOARD_BIND`. They are never published on the
+  LAN, closing the "first visitor on the network claims the owner account" window.
+- **Installer access menu:** `1) this machine / SSH tunnel` (default), `2) Cloudflare
+  Tunnel` (collects a tunnel token), `3) direct LAN/public HTTP` (flagged not
+  recommended). Writes `ACCESS_MODE`, `INTERNAL_BIND`, and `CLOUDFLARE_TUNNEL_TOKEN`.
+- **`cloudflared` service** (compose profile `tunnel`): dials out to Cloudflare, no
+  inbound ports, free TLS, hostname→service routing configured in Cloudflare Zero
+  Trust. Works for any operator with their own Cloudflare account.
+- README access-methods section rewritten; CI validates the `tunnel` profile.
+
+Not yet done (next): tunnel hostnames for n8n/Paperclip and the dashboard's
+"Open builder" links when tunneled; per-client tunnel automation; Tailscale path.
+
 ## [0.9.1] — 2026-11-10 — Security batch (pre-client-install blockers)
 
 Addresses the "Immediate" items from the code & security review. All four were

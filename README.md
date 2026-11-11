@@ -84,20 +84,22 @@ curl -fsSL .../get.sh | sudo bash -s -- --profiles "automation,control-plane" --
 
 ## Using the dashboard
 
-Ports bind to `127.0.0.1` by default. The installer asks whether to also expose the dashboard on your LAN.
+Everything binds to `127.0.0.1` by default, and **n8n and Paperclip are *always* loopback-only** — they're never published on your network, regardless of how you reach the dashboard. The installer asks how you want to reach the box:
 
-**Localhost / SSH tunnel (default):**
+**1 — This machine / SSH tunnel (default, most secure).** Nothing is exposed; reach it over SSH:
 
 ```bash
 ssh -L 9119:127.0.0.1:9119 user@server
 # then open http://localhost:9119
 ```
 
-**LAN access:** choose "anyone on my network" during install (or set `DASHBOARD_BIND=0.0.0.0` in `.env` and `docker compose up -d`), then browse to `http://<server-ip>:9119`.
+**2 — Cloudflare Tunnel (public HTTPS URL, no open ports).** Recommended when you want a browser-reachable URL without touching the client's firewall. `cloudflared` dials *out* to Cloudflare (works behind any NAT), Cloudflare provides the TLS cert, and you map a hostname to the box in your own Zero Trust dashboard. Create a tunnel, paste its token during install, and point the public hostname at `http://proxy:9119`. Gate it with Cloudflare Access if it shouldn't be public. You use **your own** Cloudflare account — nothing routes through anyone else.
+
+**3 — Direct LAN / public HTTP (not recommended).** Plain HTTP on your network (`DASHBOARD_BIND=0.0.0.0`). Only on a trusted LAN; prefer option 1 or 2 anywhere else.
+
+To reach n8n or Paperclip directly, use the dashboard's links, an SSH tunnel (`-L 5678:127.0.0.1:5678`, `-L 3100:127.0.0.1:3100`), or give them their own tunnel hostnames.
 
 **Login:** the installer generates a random dashboard password (user `admin`) and prints it at the end; it's also stored in `/opt/sct-agent-os/.env` as `DASHBOARD_PASSWORD`. Change it there and restart to rotate.
-
-> The dashboard is served over plain HTTP. On a LAN that's fine for internal use; for anything exposed beyond a trusted network, put it behind HTTPS (reverse proxy or Tailscale) first. This is on the roadmap.
 
 ---
 

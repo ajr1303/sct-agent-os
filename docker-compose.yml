@@ -35,6 +35,24 @@ services:
       - ./data/hermes/brand:/srv/brand:ro
     mem_limit: 128M
 
+  # Optional outbound tunnel (Cloudflare). Enabled by the installer's "Cloudflare
+  # Tunnel" access mode (profile "tunnel" + CLOUDFLARE_TUNNEL_TOKEN). cloudflared
+  # dials OUT to Cloudflare — no inbound ports, works behind any NAT/firewall — and
+  # the public hostname -> service routing is configured in your Cloudflare Zero
+  # Trust dashboard (point the dashboard hostname at http://proxy:9119; optionally
+  # n8n at http://n8n:5678 and Paperclip at http://paperclip:3100). cloudflared
+  # reaches those over the compose network even though they bind to loopback on the
+  # host. Nothing in the tunnel passes through Suburban Cyber unless the token is
+  # from Suburban Cyber's account — a self-hoster uses their own token, same code.
+  cloudflared:
+    profiles: ["tunnel"]
+    image: cloudflare/cloudflared:${CLOUDFLARED_TAG:-2024.12.2}
+    container_name: agent-os-cloudflared
+    restart: unless-stopped
+    depends_on: [proxy]
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    mem_limit: 128M
+
   # Dedicated TLS terminator for the Hermes gateway runs API (the Paperclip -> Hermes
   # hop). Kept as its own container on purpose: Paperclip won't run an agent that
   # reaches a non-loopback host over plain HTTP, so this presents the Hermes runs API
@@ -113,7 +131,9 @@ services:
     container_name: agent-os-n8n
     restart: unless-stopped
     ports:
-      - "${DASHBOARD_BIND:-127.0.0.1}:5678:5678"
+      # Loopback-only, never the LAN: reached through the dashboard / tunnel / SSH
+      # (CODE_REVIEW F-04). INTERNAL_BIND is independent of DASHBOARD_BIND.
+      - "${INTERNAL_BIND:-127.0.0.1}:5678:5678"
     environment:
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?run ./install.sh first}
       N8N_HOST: "0.0.0.0"
@@ -173,9 +193,10 @@ services:
       # Trust our internal gateway CA so Paperclip accepts the HTTPS Hermes endpoint
       # (https://hermes-gateway:8443) without disabling TLS verification.
       NODE_EXTRA_CA_CERTS: "/etc/ssl/agent-os-ca.crt"
-    # Published so you can open the Paperclip UI once to create a board API key.
+    # Loopback-only, never the LAN (CODE_REVIEW F-04): reached through the dashboard,
+    # the tunnel, or an SSH tunnel. INTERNAL_BIND is independent of DASHBOARD_BIND.
     ports:
-      - "${DASHBOARD_BIND:-127.0.0.1}:3100:3100"
+      - "${INTERNAL_BIND:-127.0.0.1}:3100:3100"
     volumes:
       - paperclip-data:/paperclip
       - ./data/tls/ca.crt:/etc/ssl/agent-os-ca.crt:ro

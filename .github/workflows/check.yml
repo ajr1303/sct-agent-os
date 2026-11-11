@@ -14,7 +14,8 @@ jobs:
                    N8N_ENCRYPTION_KEY BETTER_AUTH_SECRET PAPERCLIP_TOOL_ACTION_SIGNING_SECRET; do
             echo "$k=ci"
           done > .env
+          echo "CLOUDFLARE_TUNNEL_TOKEN=ci" >> .env
           docker compose config -q
-          COMPOSE_PROFILES=memory,automation,control-plane docker compose config -q
+          COMPOSE_PROFILES=memory,automation,control-plane,tunnel docker compose config -q
       - name: yaml themes parse
         run: python3 -c "import yaml,glob;[yaml.safe_load(open(f)) for f in glob.glob('templates/dashboard-themes/*.yaml')]"

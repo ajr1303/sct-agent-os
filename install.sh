@@ -57,9 +57,33 @@ collect_answers() {
   ask OWNER_NAME "Your name" "owner"
   ask AGENT_NAME "Name your agent" "navi"
   ask WORKSPACE  "Workspace name" "$(echo "$AGENT_NAME" | tr 'A-Z ' 'a-z-')-workspace"
-  echo "Dashboard access: 1) this machine / SSH tunnel only  2) anyone on my network (LAN)"
+  echo "How will you reach this box?"
+  echo "  1) This machine / SSH tunnel only   — most secure, nothing exposed (default)"
+  echo "  2) Cloudflare Tunnel                 — public HTTPS URL, no open ports (needs a tunnel token)"
+  echo "  3) Direct LAN / public HTTP          — plain HTTP on your network, NOT recommended"
   ask ACCESS "Choice" "1"
-  if [ "$ACCESS" = 2 ]; then DASHBOARD_BIND=0.0.0.0; else DASHBOARD_BIND=127.0.0.1; fi
+  # The dashboard proxy's host bind. n8n and Paperclip are NEVER bound here — they
+  # stay on loopback (INTERNAL_BIND) and are reached through the dashboard, the
+  # tunnel, or an SSH tunnel (CODE_REVIEW F-04/F-05).
+  DASHBOARD_BIND=127.0.0.1
+  ACCESS_MODE=local
+  CLOUDFLARE_TUNNEL_TOKEN=""
+  case "$ACCESS" in
+    2)
+      ACCESS_MODE=cloudflare
+      echo "Cloudflare Tunnel keeps everything on localhost and dials out to Cloudflare —"
+      echo "no inbound ports. Create a tunnel in your Zero Trust dashboard and paste its token."
+      ask_secret CLOUDFLARE_TUNNEL_TOKEN "Tunnel token (input hidden)"
+      ;;
+    3)
+      ACCESS_MODE=lan
+      DASHBOARD_BIND=0.0.0.0
+      say "  ! Dashboard will be plain HTTP on your network — only on a trusted LAN. Prefer option 1 or 2."
+      ;;
+    *)
+      ACCESS_MODE=local
+      ;;
+  esac
   if [ "$MEMORY_MODE" = honcho ]; then
     echo "LLM provider for the memory service:"
     echo "  1) OpenAI   2) Other OpenAI-compatible (OpenRouter, vLLM, etc.)"
@@ -118,10 +142,19 @@ write_env() {
     profs="automation,control-plane"
   fi
   case ",$profs," in *,control-plane,*) say "Building the full stack — Paperclip compiles from source on first start (several minutes)." ;; esac
+  # Cloudflare access runs cloudflared as a container (the "tunnel" profile).
+  if [ "${ACCESS_MODE:-local}" = cloudflare ]; then profs="${profs},tunnel"; fi
   cat > .env <<ENV
 API_SERVER_KEY=$(gen_secret)
 DASHBOARD_USER=admin
 DASHBOARD_BIND=$DASHBOARD_BIND
+# n8n and Paperclip always bind here (loopback) regardless of DASHBOARD_BIND, so
+# they're never published on the LAN. Reach them via the dashboard, the tunnel, or
+# an SSH tunnel. Change only if you truly need them on the network (CODE_REVIEW F-04).
+INTERNAL_BIND=127.0.0.1
+# Access method: local (loopback/SSH) | cloudflare (tunnel) | lan (plain HTTP).
+ACCESS_MODE=${ACCESS_MODE:-local}
+CLOUDFLARE_TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
 DASHBOARD_PASSWORD=$(openssl rand -base64 18 | tr -dc A-Za-z0-9 | cut -c1-20)
 HONCHO_DB_PASSWORD=$(gen_secret)
 CONNECTORS_KEY=$(openssl rand -base64 32 | tr '+/' '-_')
