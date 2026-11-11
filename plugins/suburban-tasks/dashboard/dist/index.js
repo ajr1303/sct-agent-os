@@ -61,10 +61,23 @@
       s = useState(false); var dLoad = s[0], setDLoad = s[1];
       s = useState("all"); var filter = s[0], setFilter = s[1];    // all|working|attn|done
       s = useState(null);  var err = s[0], setErr = s[1];
+      s = useState([]);    var blocked = s[0], setBlocked = s[1];  // tasks halted by the fast-stop
+      s = useState(null);  var unblk = s[0], setUnblk = s[1];      // session_key being unblocked
 
       function loadList() {
         return api("/orchestration/tasks").then(function (d) { setList(d); setErr(null); return d; })
           .catch(function (e) { setErr(String(e.message || e)); });
+      }
+      function loadBlocked() {
+        return api("/gateway/blocked").then(function (d) { setBlocked((d && d.blocked) || []); })
+          .catch(function () { /* non-fatal: banner just won't show */ });
+      }
+      function unblock(sk) {
+        setUnblk(sk);
+        api("/gateway/unblock", { method: "POST", body: JSON.stringify({ session_key: sk }) })
+          .then(function () { return loadBlocked(); })
+          .catch(function (e) { setErr(String(e.message || e)); })
+          .then(function () { setUnblk(null); });
       }
       function loadDetail(key) {
         setDLoad(true);
@@ -75,8 +88,8 @@
       function open(key) { setSel(key); setDetail(null); loadDetail(key); }
 
       useEffect(function () {
-        loadList();
-        var t = setInterval(loadList, 15000);
+        loadList(); loadBlocked();
+        var t = setInterval(function () { loadList(); loadBlocked(); }, 15000);
         return function () { clearInterval(t); };
       }, []);
       // Refresh the open task while it may still be working.
@@ -169,9 +182,35 @@
               })));
       }
 
+      function blockedLabel(b) {
+        var m = tasks.filter(function (t) { return t.key === b.issue_key; })[0];
+        if (m && m.title) return m.title;
+        return b.issue_key ? ("Task " + b.issue_key) : "A task";
+      }
+      function blockedBanner() {
+        if (!blocked || blocked.length === 0) return null;
+        return h("div", { className: "st-halt" },
+          h("div", { className: "st-halt-head" },
+            h("span", { className: "st-halt-ic" }, "⛔"),
+            h("span", null, blocked.length === 1
+              ? "1 task was automatically stopped after repeated retries."
+              : (blocked.length + " tasks were automatically stopped after repeated retries."))),
+          h("div", { className: "st-halt-sub" },
+            "Agent OS halts a task once it has tried to run too many times, so a stuck task can't keep spending. Look at what it was doing, then release it to let the agent try again."),
+          h("div", { className: "st-halt-list" }, blocked.map(function (b, i) {
+            return h("div", { className: "st-halt-row", key: b.session_key || i },
+              h("span", { className: "st-halt-name" }, blockedLabel(b)),
+              h("span", { className: "st-halt-n" }, (b.attempts || 0) + " tries"),
+              h("button", { className: "st-halt-btn", disabled: unblk === b.session_key,
+                onClick: function () { unblock(b.session_key); } },
+                unblk === b.session_key ? "Releasing…" : "Release"));
+          })));
+      }
+
       return h("div", { className: "st-wrap" },
         header(),
         err ? h("div", { className: "st-msgbar st-err" }, err) : null,
+        blockedBanner(),
         h("div", { className: "st-cols" }, listPane(), detailPane()),
         h("div", { className: "st-foot" }, "Read-only view of your agents' work. Open a task in Paperclip for approvals, the full history, and file downloads."));
     }

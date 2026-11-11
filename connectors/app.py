@@ -28,7 +28,7 @@ import httpx
 from dateutil import parser as dtparse
 from cryptography.fernet import Fernet
 from fastapi import FastAPI, HTTPException, Request, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 DB_PATH = os.environ.get("CONNECTORS_DB", "/data/connectors.db")
@@ -97,6 +97,23 @@ def get_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             secret BLOB NOT NULL,
             created_at TEXT NOT NULL
+        )
+    """)
+    # Per-task run-attempt ledger (Phase 2 fast-stop). Keyed by the stable
+    # X-Hermes-Session-Key the Paperclip adapter sends on every run request
+    # (sessionKeyStrategy "issue" -> one key per agent+task). The TLS gateway's
+    # auth_request meters POST /v1/runs against this: over RUN_MAX_ATTEMPTS it
+    # denies with a terminal status so a looping task halts cleanly instead of
+    # burning spend. Status/events/stop calls are never metered.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS run_budget (
+            session_key TEXT PRIMARY KEY,
+            issue_key   TEXT,
+            attempts    INTEGER NOT NULL DEFAULT 0,
+            blocked     INTEGER NOT NULL DEFAULT 0,
+            first_at    TEXT,
+            last_at     TEXT,
+            blocked_at  TEXT
         )
     """)
     return con
@@ -764,6 +781,12 @@ def _env_int(name, default):
 COMPANY_BUDGET_CENTS = _env_int("COMPANY_BUDGET_CENTS", 10000)  # $100/mo per client box
 AGENT_BUDGET_CENTS = _env_int("AGENT_BUDGET_CENTS", 0)          # off; company cap is the ceiling
 
+# Per-task fast-stop (Phase 2). Max run-creations allowed for one agent+task
+# (keyed by the stable session key) before the gateway halts it. This trips in
+# seconds on a tight retry loop — long before the monthly dollar cap above would
+# — and is the thing that actually caps a single runaway task. 0 disables.
+RUN_MAX_ATTEMPTS = _env_int("RUN_MAX_ATTEMPTS", 6)
+
 
 def _pc_stored_key():
     with closing(get_db()) as con:
@@ -1270,6 +1293,112 @@ def get_budget(_auth=Depends(require_auth)):
                 out["hard_stop"] = bool(p.get("hardStopEnabled"))
                 break
     return out
+
+
+# --- Gateway run-attempt fast-stop (Phase 2) --------------------------------
+# These back the TLS gateway's auth_request. /gateway/authorize is internal:
+# nginx calls it as a subrequest on every request to the Hermes runs API and it
+# returns 200 (allow) or 403 (halt). The public dashboard proxy blocks
+# /api/connectors/gateway/* so it can't be reached from a browser; the only
+# caller is the in-cluster gateway-tls container. blocked/unblock are authed and
+# drive the Tasks page "halted" banner.
+
+def _issue_from_skey(skey):
+    # paperclip:company:{cid}:agent:{aid}:issue:{issueId} -> issueId
+    if not skey or "issue:" not in skey:
+        return None
+    return skey.rsplit("issue:", 1)[-1].strip() or None
+
+
+@app.api_route("/gateway/authorize",
+               methods=["GET", "POST", "HEAD", "PUT", "PATCH", "DELETE", "OPTIONS"])
+def gateway_authorize(request: Request):
+    """Internal auth_request target. Meters only run-creation (POST /v1/runs) per
+    session key; everything else (status, SSE events, stop) always passes. Over
+    RUN_MAX_ATTEMPTS it returns 403 so the adapter sees a terminal error and the
+    task halts instead of looping. Fails open on any ledger error — a guardrail
+    must never be the reason a legit run can't start."""
+    method = (request.headers.get("X-Gw-Method") or request.method or "").upper()
+    uri = request.headers.get("X-Gw-Uri") or ""
+    skey = (request.headers.get("X-Hermes-Session-Key") or "").strip()
+    path = uri.split("?", 1)[0].rstrip("/")
+
+    # Only count run-creation. Status/events/stop and anything else pass through.
+    if not (method == "POST" and path == "/v1/runs"):
+        return Response(status_code=200)
+    # Metering off, or no session key to meter on -> allow.
+    if RUN_MAX_ATTEMPTS <= 0 or not skey:
+        return Response(status_code=200)
+
+    now = _now().isoformat()
+    try:
+        with closing(get_db()) as con:
+            row = con.execute(
+                "SELECT attempts FROM run_budget WHERE session_key=?", (skey,)
+            ).fetchone()
+            attempts = row[0] if row else 0
+            if attempts >= RUN_MAX_ATTEMPTS:
+                con.execute(
+                    "UPDATE run_budget SET blocked=1, "
+                    "blocked_at=COALESCE(blocked_at,?), last_at=? WHERE session_key=?",
+                    (now, now, skey))
+                con.commit()
+                return Response(status_code=403)  # terminal -> adapter halts the task
+            if row:
+                con.execute(
+                    "UPDATE run_budget SET attempts=attempts+1, last_at=? WHERE session_key=?",
+                    (now, skey))
+            else:
+                con.execute(
+                    "INSERT INTO run_budget(session_key, issue_key, attempts, blocked, "
+                    "first_at, last_at) VALUES(?,?,?,?,?,?)",
+                    (skey, _issue_from_skey(skey), 1, 0, now, now))
+            con.commit()
+    except Exception:
+        return Response(status_code=200)
+    return Response(status_code=200)
+
+
+@app.get("/gateway/blocked")
+def gateway_blocked(_auth=Depends(require_auth)):
+    """Tasks the fast-stop has halted, for the dashboard banner."""
+    out = []
+    try:
+        with closing(get_db()) as con:
+            rows = con.execute(
+                "SELECT session_key, issue_key, attempts, blocked_at FROM run_budget "
+                "WHERE blocked=1 ORDER BY blocked_at DESC").fetchall()
+        for r in rows:
+            out.append({"session_key": r[0], "issue_key": r[1],
+                        "attempts": r[2], "blocked_at": r[3]})
+    except Exception:
+        pass
+    return {"blocked": out, "max_attempts": RUN_MAX_ATTEMPTS}
+
+
+class GwUnblock(BaseModel):
+    issue: str = ""
+    session_key: str = ""
+
+
+@app.post("/gateway/unblock")
+def gateway_unblock(b: GwUnblock, _auth=Depends(require_auth)):
+    """Clear a task's ledger so it can run again (human action after reviewing
+    why it was looping). Deletes the row -> the task starts fresh at 0 attempts."""
+    key = (b.session_key or "").strip()
+    iss = (b.issue or "").strip()
+    if not key and not iss:
+        raise HTTPException(status_code=400, detail="Provide issue or session_key")
+    try:
+        with closing(get_db()) as con:
+            if key:
+                con.execute("DELETE FROM run_budget WHERE session_key=?", (key,))
+            else:
+                con.execute("DELETE FROM run_budget WHERE issue_key=?", (iss,))
+            con.commit()
+    except Exception:
+        raise HTTPException(status_code=500, detail="Could not unblock the task")
+    return {"ok": True}
 
 
 @app.exception_handler(HTTPException)

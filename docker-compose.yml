@@ -94,6 +94,9 @@ services:
       # Company cap is the per-client-box ceiling that auto-pauses on overspend.
       COMPANY_BUDGET_CENTS: "${COMPANY_BUDGET_CENTS:-10000}"
       AGENT_BUDGET_CENTS: "${AGENT_BUDGET_CENTS:-0}"
+      # Per-task fast-stop: max run-creations for one agent+task before the gateway
+      # halts it (trips in seconds on a tight loop, long before the dollar cap). 0 = off.
+      RUN_MAX_ATTEMPTS: "${RUN_MAX_ATTEMPTS:-6}"
     volumes:
       - connectors-data:/data
     expose:

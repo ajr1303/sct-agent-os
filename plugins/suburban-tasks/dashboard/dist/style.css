@@ -64,3 +64,15 @@
   .st-cols { flex-direction: column; }
   .st-listpane, .st-detail { max-width: none; width: 100%; }
 }
+
+/* Fast-stop "halted task" banner */
+.st-halt { border: 1px solid var(--color-destructive, #ff7a73); background: rgba(255,122,115,.07); padding: 13px 15px; margin-bottom: 16px; border-radius: 8px; }
+.st-halt-head { display: flex; align-items: center; gap: 9px; font-size: 14px; font-weight: 600; }
+.st-halt-ic { font-size: 15px; }
+.st-halt-sub { font-size: 12.5px; line-height: 1.5; opacity: .75; margin: 6px 0 11px; }
+.st-halt-list { display: flex; flex-direction: column; gap: 7px; }
+.st-halt-row { display: flex; align-items: center; gap: 10px; padding: 8px 11px; border: 1px solid var(--color-border, rgba(255,255,255,.12)); border-radius: 6px; background: var(--color-card, rgba(255,255,255,.02)); }
+.st-halt-name { flex: 1; font-size: 13px; word-break: break-word; }
+.st-halt-n { font-size: 11px; opacity: .6; white-space: nowrap; }
+.st-halt-btn { font-size: 12px; font-weight: 600; padding: 5px 13px; border-radius: 999px; border: 1px solid var(--color-primary, #25c9ee); background: var(--color-primary, #25c9ee); color: var(--color-primary-foreground, #04202a); cursor: pointer; white-space: nowrap; }
+.st-halt-btn:disabled { opacity: .5; cursor: default; }
