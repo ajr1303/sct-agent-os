@@ -71,6 +71,8 @@
       s = useState(false); var iBusy = s[0], setIBusy = s[1];
       s = useState(null); var iErr = s[0], setIErr = s[1];
       s = useState(false); var iCopied = s[0], setICopied = s[1];
+      s = useState([]);   var tpls = s[0], setTpls = s[1];
+      s = useState("");   var tplId = s[0], setTplId = s[1];
       s = useState(null); var runBusy = s[0], setRunBusy = s[1];  // agent id mid pause/resume
       s = useState(null); var runErr = s[0], setRunErr = s[1];
       s = useState(null); var company = s[0], setCompany = s[1];
@@ -129,6 +131,7 @@
       }
       useEffect(function () {
         load();
+        api("/orchestration/agent-templates").then(function (d) { setTpls((d && d.templates) || []); }).catch(function () {});
         try {
           Promise.resolve(hapi.getModelOptions && hapi.getModelOptions()).then(function (m) {
             if (!m || !m.providers) return;
@@ -178,7 +181,7 @@
             // 2) Register it in Paperclip for management (role, org, approvals).
             return api("/orchestration/agents", { method: "POST", body: JSON.stringify({ name: nm, instructions: cInstr, role: cRole }) });
           })
-          .then(function () { setCBusy(false); setShowCreate(false); setCName(""); setCInstr(""); setCRole("general"); load(); })
+          .then(function () { setCBusy(false); setShowCreate(false); setCName(""); setCInstr(""); setCRole("general"); setTplId(""); load(); })
           .catch(function (e2) { setCBusy(false); setCErr(String(e2.message || e2)); });
       }
       function delAgent(a) {
@@ -297,6 +300,17 @@
                 (iRes.expiresAt ? "Single-use invite, expires " + new Date(iRes.expiresAt).toLocaleString() + ". " : "") +
                 "Treat it like a password — anyone with it can request to join. The join request lands in Waiting on you for approval.")) : null) : null,
           showCreate && cTab === "create" ? h("form", { className: "so-createform", onSubmit: createAgent },
+            tpls.length ? h("div", { className: "so-tpls" },
+              h("div", { className: "so-flabel" }, "Start from a template"),
+              h("div", { className: "so-tplrow" },
+                tpls.map(function (t) {
+                  return h("button", { key: t.id, type: "button", title: t.summary,
+                    className: "so-tpl" + (tplId === t.id ? " on" : ""),
+                    onClick: function () { setTplId(t.id); setCName(t.name); setCRole(t.role || "general"); setCInstr(t.instructions || ""); } },
+                    h("span", { className: "so-tplname" }, t.name),
+                    h("span", { className: "so-tplsum" }, t.summary));
+                })),
+              h("div", { className: "so-createhint" }, "Fills in the name, role and instructions below. Edit anything before you create.")) : null,
             h("div", { className: "so-createrow" },
               h("input", { className: "so-input", value: cName, placeholder: "Agent name (e.g. Front Desk)",
                 onChange: function (e) { setCName(e.target.value); } }),

@@ -2,6 +2,17 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.13.0] — 2026-11-11 — Agent templates
+
+- **Start from a template** in Orchestration → Create agent. Nine starter agents
+  fill in the name, role and instructions (all editable before creating):
+  Automation Engineer (n8n builds/fixes), Front Desk, Lead Qualifier, Customer
+  Support, Social Media Manager, Review & Reputation, Bookkeeping Assistant,
+  IT Helpdesk, and CEO (runs the hiring review for requests no agent covers).
+- Templates live in `connectors/agent_templates.json`, served by
+  `GET /orchestration/agent-templates`. Every template is approval-first: agents
+  draft and propose; the owner approves sends, publishes, activations and hires.
+
 ## [0.12.4] — 2026-11-11 — Paperclip password reset
 
 - New `scripts/paperclip-reset-password.sh`. Paperclip has no "forgot password"

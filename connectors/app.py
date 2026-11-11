@@ -1302,6 +1302,27 @@ def pause_company(_auth=Depends(require_auth)):
     return {"ok": True, **_company_brief(d)}
 
 
+@app.get("/orchestration/agent-templates")
+def agent_templates(_auth=Depends(require_auth)):
+    """Starter agents for the Create panel. Edit agent_templates.json to change them."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent_templates.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            items = json.load(f)
+    except Exception:
+        return {"templates": []}
+    out = []
+    for t in items if isinstance(items, list) else []:
+        if not isinstance(t, dict) or not t.get("name"):
+            continue
+        role = str(t.get("role") or "general").lower()
+        out.append({"id": str(t.get("id") or t["name"]), "name": str(t["name"]),
+                    "role": role if role in AGENT_ROLES or role == "general" else "general",
+                    "group": str(t.get("group") or ""), "summary": str(t.get("summary") or ""),
+                    "instructions": str(t.get("instructions") or "")})
+    return {"templates": out}
+
+
 @app.get("/orchestration/overview")
 def orchestration_overview(_auth=Depends(require_auth)):
     if not _pc_up():
