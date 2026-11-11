@@ -28,7 +28,10 @@
     function wsProto() { return location.protocol === "https:" ? "wss" : "ws"; }
     function sessTitle(s) { return (s.title && s.title.trim()) || (s.last_activity_description && s.last_activity_description.trim()) || "New conversation"; }
 
-    function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+    // Escapes quotes too: without &quot;/&#39; a markdown link could close the
+    // href attribute and inject event handlers (onfocus/onmouseover) that run in
+    // the dashboard origin — reachable via prompt injection (CODE_REVIEW F-03).
+    function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
     function mdToHtml(src) {
       if (!src) return "";
       var text = String(src), blocks = [];
@@ -37,7 +40,17 @@
       text = text.replace(/`([^`\n]+)`/g, function (_, c) { return "<code>" + c + "</code>"; });
       text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
       text = text.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
-      text = text.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+      // Validate each link's URL instead of trusting the captured text: parse it,
+      // allow only http/https, and re-escape the normalized href. A URL that is
+      // invalid or uses any other scheme renders as plain label text (F-03).
+      text = text.replace(/\[([^\]]+)\]\(([^\s)]+)\)/g, function (_, label, raw) {
+        var url = raw.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+        try {
+          var u = new URL(url);
+          if (u.protocol !== "http:" && u.protocol !== "https:") return label;
+          return '<a href="' + esc(u.href) + '" target="_blank" rel="noopener noreferrer">' + label + "</a>";
+        } catch (e) { return label; }
+      });
       text = text.replace(/(^|\n)\s*[-*]\s+/g, "$1• ");
       text = text.replace(/\n/g, "<br>");
       text = text.replace(/\u0000C(\d+)\u0000/g, function (_, i) { return '<pre class="scc-code">' + esc(blocks[+i]) + "</pre>"; });

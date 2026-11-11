@@ -9,8 +9,12 @@ jobs:
         run: shellcheck -S warning get.sh install.sh scripts/*.sh
       - name: compose config
         run: |
-          printf "API_SERVER_KEY=x\nDASHBOARD_PASSWORD=x\n" > .env
+          # All required (${VAR:?}) secrets must be present or `config` fails.
+          for k in API_SERVER_KEY DASHBOARD_PASSWORD CONNECTORS_KEY HONCHO_DB_PASSWORD \
+                   N8N_ENCRYPTION_KEY BETTER_AUTH_SECRET PAPERCLIP_TOOL_ACTION_SIGNING_SECRET; do
+            echo "$k=ci"
+          done > .env
           docker compose config -q
-          docker compose --profile memory config -q
+          COMPOSE_PROFILES=memory,automation,control-plane docker compose config -q
       - name: yaml themes parse
         run: python3 -c "import yaml,glob;[yaml.safe_load(open(f)) for f in glob.glob('templates/dashboard-themes/*.yaml')]"

@@ -38,5 +38,12 @@ else
   git clone --quiet --branch "$AOS_REF" "$AOS_REPO" "$AOS_DIR"
 fi
 cd "$AOS_DIR"
+# An existing install (has .env) must not be re-bootstrapped — that would try to
+# regenerate secrets. Route it to the in-place updater, which preserves .env and
+# the data volumes (CODE_REVIEW F-10). install.sh also guards this, belt-and-braces.
+if [ -f .env ]; then
+  echo "==> Existing install detected — updating in place instead of reinstalling"
+  exec ./scripts/update.sh "$@"
+fi
 # stdin is the curl pipe; give install.sh the real terminal for prompts
 exec ./install.sh "$@" </dev/tty

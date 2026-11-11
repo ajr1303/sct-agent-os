@@ -200,7 +200,10 @@ services:
     environment:
       POSTGRES_DB: honcho
       POSTGRES_USER: honcho
-      POSTGRES_PASSWORD: ${HONCHO_DB_PASSWORD:-unset}
+      # Required, not a literal fallback: ${:-unset} would silently initialise the
+      # DB with the password "unset" on a hand-edited or partially-restored .env,
+      # giving every container on the network a predictable login (CODE_REVIEW F-31).
+      POSTGRES_PASSWORD: ${HONCHO_DB_PASSWORD:?run ./install.sh first}
       PGDATA: /var/lib/postgresql/data/pgdata
     command: ["postgres", "-c", "max_connections=100"]
     volumes:

@@ -38,7 +38,11 @@ if not _KEY:
     raise RuntimeError("CONNECTORS_KEY is not set (run ./install.sh)")
 fernet = Fernet(_KEY.encode() if isinstance(_KEY, str) else _KEY)
 
-app = FastAPI(title="Agent OS Connectors", version="0.1")
+# docs_url/redoc_url/openapi_url disabled: the schema and Swagger UI are reachable
+# unauthenticated through the proxy and only serve to inventory the API for an
+# attacker (CODE_REVIEW F-15). Nothing in the dashboard consumes them.
+app = FastAPI(title="Agent OS Connectors", version="0.1",
+              docs_url=None, redoc_url=None, openapi_url=None)
 
 # --- Provider presets -------------------------------------------------------
 # Users pick a provider and we prefill IMAP host/port; "imap" is the manual

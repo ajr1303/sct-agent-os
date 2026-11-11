@@ -86,6 +86,23 @@ collect_answers() {
 write_env() {
   say "Writing configuration"
   umask 077
+  # Never regenerate secrets over an existing install (CODE_REVIEW F-10).
+  # Rewriting .env would change HONCHO_DB_PASSWORD / N8N_ENCRYPTION_KEY /
+  # CONNECTORS_KEY out from under already-initialised volumes: Postgres auth
+  # breaks, n8n can't decrypt its credentials, and every Fernet-encrypted
+  # connector secret becomes unreadable. Keep the existing .env, back it up, and
+  # just refresh branding/dirs. get.sh routes real re-runs to update.sh anyway.
+  if [ -f .env ]; then
+    cp -p .env ".env.bak.$(date +%Y%m%d%H%M%S)"
+    say "Existing install detected — keeping your secrets in .env (backup written)."
+    mkdir -p data/hermes/dashboard-themes backups
+    if [ "$MEMORY_MODE" = honcho ]; then
+      [ -f honcho.env ] || write_honcho_env
+      [ -f data/hermes/honcho.json ] || write_honcho_json
+    fi
+    ./scripts/sync-branding.sh
+    return
+  fi
   # Detect the address users reach this box at. The full stack is the default;
   # --profiles is an advanced subset override (preflight relaxes RAM for it).
   local lan_ip pc_host profs
