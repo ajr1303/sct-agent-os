@@ -1462,7 +1462,42 @@ def set_budget(b: BudgetSet, _auth=Depends(require_auth)):
         raise HTTPException(status_code=400, detail="No Paperclip company found.")
     _pc_send("PATCH", "/api/companies/" + _safe_id(cid) + "/budgets",
              {"budgetMonthlyCents": cents}, what="update the budget")
-    return {"ok": True, "budget_cents": cents}
+    cleared, resumed = [], []
+    if cents == 0:
+        # Per-agent caps are blind to Hermes cost the same way the company cap is
+        # (unpriced usage fails closed), and they keep a "budget" hold on the agent
+        # that a manual resume doesn't clear. Turning the cap off clears them too.
+        for p in _budget_policies(cid):
+            if p.get("scopeType") == "agent" and p.get("isActive") and (p.get("amount") or 0) > 0 and p.get("scopeId"):
+                try:
+                    _pc_send("PATCH", "/api/agents/" + _safe_id(p["scopeId"]) + "/budgets",
+                             {"budgetMonthlyCents": 0}, what="clear an agent budget")
+                    cleared.append(p.get("scopeName") or p["scopeId"])
+                except HTTPException:
+                    pass
+        # Nudge budget-held agents so Paperclip re-evaluates now, not at next tick.
+        try:
+            ag = _pc_get("/api/companies/" + str(cid) + "/agents")
+            items = ag if isinstance(ag, list) else ((ag or {}).get("agents") or (ag or {}).get("data") or [])
+            for a in items:
+                if isinstance(a, dict) and a.get("status") == "paused" and a.get("pauseReason") == "budget":
+                    try:
+                        _pc_post("/api/agents/" + _safe_id(a.get("id")) + "/resume", what="resume an agent")
+                        resumed.append(a.get("name"))
+                    except HTTPException:
+                        pass
+        except Exception:
+            pass
+    return {"ok": True, "budget_cents": cents, "agent_caps_cleared": cleared, "agents_nudged": resumed}
+
+
+def _budget_policies(cid):
+    try:
+        ov = _pc_get("/api/companies/" + str(cid) + "/budgets/overview")
+    except Exception:
+        return []
+    pol = ov.get("policies") if isinstance(ov, dict) else None
+    return [p for p in (pol or []) if isinstance(p, dict)]
 
 
 @app.get("/orchestration/budget")
@@ -1492,6 +1527,14 @@ def get_budget(_auth=Depends(require_auth)):
                     out["spent_cents"] = int(p["observedAmount"])
                 out["hard_stop"] = bool(p.get("hardStopEnabled"))
                 break
+        # Every active cap (company AND per-agent), so a stuck "paused (budget)"
+        # agent can be traced to its policy instead of guessed at.
+        out["policies"] = [{
+            "scope": p.get("scopeType"), "name": p.get("scopeName"),
+            "amount_cents": p.get("amount"), "spent_cents": p.get("observedAmount"),
+            "active": bool(p.get("isActive")), "hard_stop": bool(p.get("hardStopEnabled")),
+            "paused": bool(p.get("paused")),
+        } for p in ov["policies"] if isinstance(p, dict) and p.get("isActive") and (p.get("amount") or 0) > 0]
     return out
 
 

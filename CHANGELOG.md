@@ -2,6 +2,15 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.12.3] — 2026-11-11 — Clear per-agent budget caps too
+
+- Turning the company cap off (`POST /orchestration/budget {budget_cents:0}`, the
+  "Turn off cap & resume" button) now also clears **per-agent** caps and resumes
+  agents held with `pauseReason: budget`. Per-agent caps are blind to Hermes cost
+  the same way and kept agents paused after the company resumed (a manual resume
+  clears manual holds only, not budget holds).
+- `GET /orchestration/budget` now lists every active cap (company + agent).
+
 ## [0.12.2] — 2026-11-11 — Paperclip dollar budget off by default
 
 - **Root cause of "company paused by budget" at $0 spent:** Paperclip's hard-stop
