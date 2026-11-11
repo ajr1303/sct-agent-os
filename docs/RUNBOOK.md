@@ -136,6 +136,8 @@ build it rather than pull it (handled by the compose build context).
 
 - **cloudflared "Unsupported" in the Cloudflare panel** — the pinned tag aged out.
   Set `CLOUDFLARED_TAG=<current>` in `.env` and `docker compose up -d cloudflared`.
+- **Forgot the Paperclip password** — `sudo ./scripts/paperclip-reset-password.sh` (lists
+  accounts, hidden prompt for the new password). Paperclip has no reset email.
 - **n8n login rejects `admin`** — n8n logs in by the owner **email**, not username.
 - **Paperclip/n8n unreachable via tunnel** — confirm the route's Service URL uses the
   compose service name (`paperclip`/`n8n`), and that the hostname is in

@@ -2,6 +2,13 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.12.4] — 2026-11-11 — Paperclip password reset
+
+- New `scripts/paperclip-reset-password.sh`. Paperclip has no "forgot password"
+  flow, so this lists the accounts, takes the new password at a hidden prompt, and
+  writes a Better Auth-compatible scrypt hash for that user (and signs out their old
+  sessions). The password never touches argv, env, history, or disk.
+
 ## [0.12.3] — 2026-11-11 — Clear per-agent budget caps too
 
 - Turning the company cap off (`POST /orchestration/budget {budget_cents:0}`, the
