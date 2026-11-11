@@ -65,6 +65,36 @@
       s = useState(false); var eBusy = s[0], setEBusy = s[1];
       s = useState(false); var eLoad = s[0], setELoad = s[1];
       s = useState(null); var eErr = s[0], setEErr = s[1];
+      s = useState("create"); var cTab = s[0], setCTab = s[1];   // create | invite
+      s = useState("");   var iMsg = s[0], setIMsg = s[1];
+      s = useState(null); var iRes = s[0], setIRes = s[1];
+      s = useState(false); var iBusy = s[0], setIBusy = s[1];
+      s = useState(null); var iErr = s[0], setIErr = s[1];
+      s = useState(false); var iCopied = s[0], setICopied = s[1];
+      s = useState(null); var runBusy = s[0], setRunBusy = s[1];  // agent id mid pause/resume
+      s = useState(null); var runErr = s[0], setRunErr = s[1];
+
+      function isPaused(a) { return String(a.status || "").toLowerCase() === "paused"; }
+      function toggleRun(a) {
+        setRunErr(null); setRunBusy(a.id);
+        var act = isPaused(a) ? "resume" : "pause";
+        api("/orchestration/agents/" + encodeURIComponent(a.id) + "/" + act, { method: "POST" })
+          .then(function () { setRunBusy(null); load(); })
+          .catch(function (e2) { setRunBusy(null); setRunErr((act === "resume" ? "Couldn't resume " : "Couldn't pause ") + a.name + ": " + String(e2.message || e2)); });
+      }
+      function genInvite(e) {
+        if (e) e.preventDefault();
+        setIErr(null); setIRes(null); setICopied(false); setIBusy(true);
+        api("/orchestration/invite-prompt", { method: "POST", body: JSON.stringify({ message: iMsg }) })
+          .then(function (r) { setIBusy(false); setIRes(r); })
+          .catch(function (e2) { setIBusy(false); setIErr(String(e2.message || e2)); });
+      }
+      function copyInvite() {
+        var t = (iRes && iRes.inviteMessage) || "";
+        try {
+          navigator.clipboard.writeText(t).then(function () { setICopied(true); setTimeout(function () { setICopied(false); }, 2500); });
+        } catch (e) {}
+      }
 
       function load() {
         api("/orchestration/status").then(function (st) {
@@ -208,7 +238,28 @@
           h("div", { className: "so-panel-h so-panel-h-row" },
             h("span", null, "MANAGED AGENTS"),
             h("button", { className: "so-btn so-primary so-sm", onClick: function () { setShowCreate(!showCreate); setCErr(null); } }, showCreate ? "Close" : "+ Create agent")),
-          showCreate ? h("form", { className: "so-createform", onSubmit: createAgent },
+          showCreate ? h("div", { className: "so-ctabs" },
+            h("button", { type: "button", className: "so-ctab" + (cTab === "create" ? " on" : ""), onClick: function () { setCTab("create"); } }, "Create here"),
+            h("button", { type: "button", className: "so-ctab" + (cTab === "invite" ? " on" : ""), onClick: function () { setCTab("invite"); } }, "Invite an agent")) : null,
+          showCreate && cTab === "invite" ? h("form", { className: "so-createform", onSubmit: genInvite },
+            h("div", { className: "so-createhint" },
+              "Bring in an agent that already runs somewhere else — another Hermes, OpenClaw, Claude, or any agent that can read a URL. Generate a prompt, paste it into that agent, and it sends a join request. Approve it under Waiting on you and it joins your org."),
+            h("textarea", { className: "so-input so-ta", value: iMsg, maxLength: 4000,
+              placeholder: "Optional note for the agent — e.g. \"Join as our Front Desk agent and handle inbound bookings.\"",
+              onChange: function (e) { setIMsg(e.target.value); } }),
+            iErr ? h("div", { className: "so-msg so-err" }, iErr) : null,
+            h("div", { className: "so-createactions" },
+              h("button", { type: "submit", className: "so-btn so-primary", disabled: iBusy }, iBusy ? "Generating…" : (iRes ? "Generate a new prompt" : "Generate invite prompt"))),
+            iRes ? h("div", { className: "so-invite" },
+              h("div", { className: "so-flabel" }, "Paste this into the agent"),
+              h("textarea", { className: "so-input so-ta so-invite-text", readOnly: true, value: iRes.inviteMessage || "",
+                onFocus: function (e) { try { e.target.select(); } catch (x) {} } }),
+              h("div", { className: "so-createactions" },
+                h("button", { type: "button", className: "so-btn so-primary", onClick: copyInvite }, iCopied ? "Copied ✓" : "Copy prompt")),
+              h("div", { className: "so-createhint" },
+                (iRes.expiresAt ? "Single-use invite, expires " + new Date(iRes.expiresAt).toLocaleString() + ". " : "") +
+                "Treat it like a password — anyone with it can request to join. The join request lands in Waiting on you for approval.")) : null) : null,
+          showCreate && cTab === "create" ? h("form", { className: "so-createform", onSubmit: createAgent },
             h("div", { className: "so-createrow" },
               h("input", { className: "so-input", value: cName, placeholder: "Agent name (e.g. Front Desk)",
                 onChange: function (e) { setCName(e.target.value); } }),
@@ -225,6 +276,7 @@
             cErr ? h("div", { className: "so-msg so-err" }, cErr) : null,
             h("div", { className: "so-createactions" },
               h("button", { type: "submit", className: "so-btn so-primary", disabled: cBusy }, cBusy ? "Creating…" : "Create agent"))) : null,
+          runErr ? h("div", { className: "so-msg so-err" }, runErr) : null,
           ov == null ? h("div", { className: "so-empty" }, "Loading…")
             : (ov.errors && ov.errors.length) ? h("div", { className: "so-empty" }, "Paperclip: " + ov.errors.join("; "))
             : agents.length === 0 ? h("div", { className: "so-empty" }, "No managed agents yet. Use + Create agent to make one.")
@@ -235,7 +287,13 @@
                     h("span", { className: "so-agent-name" }, a.name),
                     h("span", { className: "so-agent-right" },
                       a.role ? h("span", { className: "so-agent-role" + (a.role === "ceo" ? " ceo" : "") }, String(a.role).toUpperCase()) : null,
-                      a.status ? h("span", { className: "so-agent-state" }, String(a.status)) : null,
+                      a.status ? h("span", { className: "so-agent-state" + (isPaused(a) ? " paused" : "") }, String(a.status)) : null,
+                      mode !== "external" && a.status
+                        ? h("button", { className: "so-runbtn" + (isPaused(a) ? " resume" : ""), disabled: runBusy === a.id,
+                            title: isPaused(a) ? "Let Paperclip assign and run work for this agent" : "Stop this agent from picking up new work",
+                            onClick: function () { toggleRun(a); } },
+                            runBusy === a.id ? "…" : (isPaused(a) ? "▶ Resume" : "❚❚ Pause"))
+                        : null,
                       delId === a.id
                         ? h("span", { className: "so-confirm" },
                             h("button", { className: "so-x", onClick: function () { delAgent(a); } }, "Delete"),
@@ -271,7 +329,7 @@
           h("div", { className: "so-explain-row" }, h("b", null, "Paperclip"), " — the management office. The org chart, task assignment, schedules, budgets, approvals and audit ledger. It drives agents; it doesn't run them."),
           h("div", { className: "so-explain-row" }, h("b", null, "This dashboard"), " — the only cockpit. Paperclip runs headless; you manage everything from here.")),
 
-        h("div", { className: "so-foot" }, "Create, edit (role + instructions) and remove agents from here. Model lives on the Hermes profile (Agents tab); activating an agent to run work is the next phase.")
+        h("div", { className: "so-foot" }, "Create, invite, edit, pause/resume and remove agents from here. Model lives on the Hermes profile (Agents tab). A paused agent won't pick up work until you resume it.")
       );
     }
 

@@ -15,7 +15,32 @@
       (document.head || document.documentElement).appendChild(s);
     }
   }
+  // Sidebar footer: Hermes shows "v0.22.7 · Nous Research". Replace it with our
+  // product + version (useful for support — it's the version WE ship), keeping
+  // the upstream credit as a hover title. Hermes Agent is MIT-licensed; the
+  // copyright notice stays with the code, so the UI credit is courtesy.
+  function brandFooter() {
+    var links = document.querySelectorAll('a[href*="nousresearch.com"]');
+    for (var i = 0; i < links.length; i++) {
+      var a = links[i], row = a.parentElement;
+      if (!row || a.getAttribute("data-sct") === "1") continue;
+      var ver = null, spans = row.querySelectorAll("span");
+      for (var j = 0; j < spans.length; j++) {
+        if (/^v\d+\.\d+\.\d+/.test((spans[j].textContent || "").trim())) { ver = spans[j]; break; }
+      }
+      if (!ver) continue;  // only the footer pair (version + credit), not other mentions
+      var B = window.__SCT_BRAND__ || {};
+      var upstream = (ver.textContent || "").trim();   // e.g. v0.22.7 (Hermes)
+      ver.textContent = "agent os " + (B.version ? "v" + B.version : "");
+      ver.title = "Built on Hermes Agent " + upstream;
+      a.textContent = "Suburban Cyber";
+      a.href = "https://suburbancyber.com";
+      a.title = "Powered by Hermes Agent · Nous Research (MIT)";
+      a.setAttribute("data-sct", "1");
+    }
+  }
   function run() {
+    try { brandFooter(); } catch (e) {}
     try {
       if (!/\/login/.test(location.pathname)) { var ex = document.getElementById("sct-login-style"); if (ex) ex.remove(); return; }
       ensureStyle();

@@ -1,0 +1,24 @@
+/* Suburban Cyber global dashboard overrides — injected into every page by the proxy.
+   Keep this small and selector-specific; plugin styles live with each plugin. */
+
+/* Native <select> dropdowns: plugins style the closed control dark with light
+   text (color: inherit), but Windows/Chrome draws the OPEN option list with the
+   OS default white background, giving light-on-white unreadable options.
+   color-scheme: dark makes the browser render the popup dark; explicit option
+   colors cover browsers that ignore color-scheme for the list. */
+select {
+  color-scheme: dark;
+}
+select option,
+select optgroup {
+  background-color: #0b1418;
+  color: #e6eef1;
+}
+select option:checked,
+select option:hover {
+  background-color: #25c9ee;
+  color: #04202a;
+}
+select option:disabled {
+  color: #6b7c83;
+}

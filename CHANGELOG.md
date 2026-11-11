@@ -2,6 +2,25 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.12.0] — 2026-11-11 — Agent controls, invite, branding
+
+- **Pause / Resume agents from the dashboard.** New connectors endpoints
+  `POST /orchestration/agents/{id}/pause|resume` (board key) and a button on each
+  agent row. Paused agents show an amber chip. Agent detail now includes
+  `status` + `pauseReason`.
+- **Invite an agent.** The Create panel has a second tab that generates
+  Paperclip's invite prompt (`/openclaw/invite-prompt`) — copy-paste text an
+  external agent (Hermes, OpenClaw, Claude…) reads to request to join; approve it
+  under Waiting on you. Single-use, expires in 72h, links use the tunnel URL.
+- **Readable dropdowns everywhere.** Global `sct.css` (injected by the proxy) sets
+  `color-scheme: dark` and option colors, fixing light-on-white option lists.
+- **Suburban Cyber favicon.** SC monogram (SVG at `/favicon.ico`, PNG + apple-touch
+  icons) in the logo's sampled brand colors.
+- **Footer rebrand.** "v0.22.7 · Nous Research" becomes "agent os v<version> ·
+  Suburban Cyber", with a "Powered by Hermes Agent · Nous Research (MIT)" credit on
+  hover. Version comes from `VERSION` via the generated `links.js`.
+- Path IDs sent to Paperclip are validated (F-17) on the new endpoints.
+
 ## [0.11.1] — 2026-11-11 — Honcho install fixes + docs
 
 - **Honcho image no longer pull-fails.** `honcho-deriver` now declares the same

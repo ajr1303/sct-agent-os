@@ -15,6 +15,7 @@ Design notes:
 This is the pattern we reuse for every future connector.
 """
 import os
+import re
 import ssl
 import json
 import sqlite3
@@ -1080,6 +1081,8 @@ def get_agent(aid: str, _auth=Depends(require_auth)):
         "name": d.get("name"),
         "role": d.get("role") or "general",
         "instructions": (ac.get("instructions") if isinstance(ac, dict) else "") or "",
+        "status": d.get("status"),
+        "pauseReason": d.get("pauseReason"),
     }
 
 
@@ -1121,6 +1124,81 @@ def update_agent(aid: str, a: AgentUpdate, _auth=Depends(require_auth)):
     if r.status_code >= 400:
         raise HTTPException(status_code=400, detail="Paperclip could not update the agent: " + _scrub_secrets(r.text)[:240])
     return {"ok": True}
+
+
+# --- Agent lifecycle + invite (board-key writes) ------------------------------
+
+_ID_RE = re.compile(r"^[A-Za-z0-9-]{1,80}$")
+
+
+def _safe_id(v):
+    """Path segments go straight into upstream Paperclip URLs; only allow plain
+    UUID/slug characters so '..', '?', '#' can't reshape the request (F-17)."""
+    v = (v or "").strip()
+    if not _ID_RE.match(v):
+        raise HTTPException(status_code=400, detail="Invalid id.")
+    return v
+
+
+def _pc_post(path, body=None, what="complete the request"):
+    key = _pc_key()
+    if not key:
+        raise HTTPException(status_code=400, detail="Connect Paperclip first (board API key).")
+    try:
+        with httpx.Client(timeout=45.0, follow_redirects=True) as c:
+            r = c.post(PAPERCLIP_URL + path, headers={"Authorization": "Bearer " + key},
+                       json=body if body is not None else {})
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Could not reach Paperclip: " + str(e)[:140])
+    if r.status_code in (401, 403):
+        raise HTTPException(status_code=400, detail="Paperclip rejected the request (auth/permission).")
+    if r.status_code == 404:
+        raise HTTPException(status_code=404, detail="Not found in Paperclip.")
+    if r.status_code >= 400:
+        raise HTTPException(status_code=400, detail="Paperclip could not " + what + ": " + _scrub_secrets(r.text)[:240])
+    try:
+        return r.json()
+    except Exception:
+        return {}
+
+
+@app.post("/orchestration/agents/{aid}/pause")
+def pause_agent(aid: str, _auth=Depends(require_auth)):
+    d = _pc_post("/api/agents/" + _safe_id(aid) + "/pause", what="pause the agent")
+    return {"ok": True, "status": d.get("status")}
+
+
+@app.post("/orchestration/agents/{aid}/resume")
+def resume_agent(aid: str, _auth=Depends(require_auth)):
+    """Unpause an agent so Paperclip schedules work for it again. Paperclip
+    refuses (409) if the agent's reporting chain is broken; that message is
+    passed through so the dashboard can show what to fix."""
+    d = _pc_post("/api/agents/" + _safe_id(aid) + "/resume", what="resume the agent")
+    return {"ok": True, "status": d.get("status")}
+
+
+class InvitePrompt(BaseModel):
+    message: str = ""
+
+
+@app.post("/orchestration/invite-prompt")
+def invite_prompt(b: InvitePrompt, _auth=Depends(require_auth)):
+    """Generate Paperclip's 'invite an agent' prompt — the copy-paste text an
+    EXTERNAL agent (e.g. another Hermes, OpenClaw, Claude) reads to send a join
+    request. You then approve it under Waiting on you. Links use Paperclip's
+    public URL (the tunnel hostname), so the agent can be anywhere."""
+    cid = _pc_company_id()
+    if not cid:
+        raise HTTPException(status_code=400, detail="No Paperclip company found.")
+    body = {"agentMessage": (b.message or "").strip()[:4000] or None}
+    d = _pc_post("/api/companies/" + _safe_id(cid) + "/openclaw/invite-prompt", body,
+                 what="create the invite")
+    return {
+        "inviteMessage": d.get("inviteMessage") or "",
+        "onboardingTextUrl": d.get("onboardingTextUrl") or "",
+        "inviteUrl": d.get("inviteUrl") or "",
+        "expiresAt": d.get("expiresAt"),
+    }
 
 
 @app.get("/orchestration/overview")
