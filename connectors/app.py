@@ -783,7 +783,13 @@ def _env_int(name, default):
         return max(0, int(os.environ.get(name, "").strip() or default))
     except Exception:
         return default
-COMPANY_BUDGET_CENTS = _env_int("COMPANY_BUDGET_CENTS", 10000)  # $100/mo per client box
+# Off by default. Paperclip's hard-stop fails CLOSED on usage it can't price, and
+# Hermes-gateway runs report tokens but usually no dollar cost — so a cap here
+# pauses the whole company on the first run while showing $0 spent, yet can't
+# see real spend. Real protection: the gateway run fast-stop (RUN_MAX_ATTEMPTS)
+# plus a hard spend limit at the LLM provider. Set this only for models whose
+# runs report cost to Paperclip.
+COMPANY_BUDGET_CENTS = _env_int("COMPANY_BUDGET_CENTS", 0)
 AGENT_BUDGET_CENTS = _env_int("AGENT_BUDGET_CENTS", 0)          # off; company cap is the ceiling
 
 # Per-task fast-stop (Phase 2). Max run-creations allowed for one agent+task
@@ -1440,6 +1446,23 @@ def task_detail(key: str, _auth=Depends(require_auth)):
     except Exception:
         pass
     return out
+
+
+class BudgetSet(BaseModel):
+    budget_cents: int = 0
+
+
+@app.post("/orchestration/budget")
+def set_budget(b: BudgetSet, _auth=Depends(require_auth)):
+    """Set the company's monthly dollar cap (0 turns it off). Turning it off or
+    raising it also lets Paperclip release a budget-owned company pause."""
+    cents = max(0, min(int(b.budget_cents or 0), 100_000_000))
+    cid = _pc_company_id()
+    if not cid:
+        raise HTTPException(status_code=400, detail="No Paperclip company found.")
+    _pc_send("PATCH", "/api/companies/" + _safe_id(cid) + "/budgets",
+             {"budgetMonthlyCents": cents}, what="update the budget")
+    return {"ok": True, "budget_cents": cents}
 
 
 @app.get("/orchestration/budget")

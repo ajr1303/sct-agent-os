@@ -108,9 +108,11 @@ services:
       HERMES_API_URL: "${HERMES_API_URL:-http://hermes:8642}"
       HERMES_GATEWAY_URL: "${HERMES_GATEWAY_URL:-https://hermes-gateway:8443}"
       HERMES_API_KEY: "${API_SERVER_KEY:-}"
-      # Spend guardrails (Paperclip native budget hard-stop). Cents/month; 0 = off.
-      # Company cap is the per-client-box ceiling that auto-pauses on overspend.
-      COMPANY_BUDGET_CENTS: "${COMPANY_BUDGET_CENTS:-10000}"
+      # Paperclip dollar budget hard-stop. Cents/month; 0 = off (default). It fails
+      # closed on usage it can't price, and Hermes-gateway runs usually report no
+      # dollar cost — a cap would pause the company at $0 spent. Spend protection =
+      # RUN_MAX_ATTEMPTS (below) + a hard spend limit at your LLM provider.
+      COMPANY_BUDGET_CENTS: "${COMPANY_BUDGET_CENTS:-0}"
       AGENT_BUDGET_CENTS: "${AGENT_BUDGET_CENTS:-0}"
       # Per-task fast-stop: max run-creations for one agent+task before the gateway
       # halts it (trips in seconds on a tight loop, long before the dollar cap). 0 = off.

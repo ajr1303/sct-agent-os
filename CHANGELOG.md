@@ -2,6 +2,18 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.12.2] — 2026-11-11 — Paperclip dollar budget off by default
+
+- **Root cause of "company paused by budget" at $0 spent:** Paperclip's hard-stop
+  fails closed on usage it can't price, and Hermes-gateway runs report tokens but
+  usually no dollar cost. So the $100 cap paused the company as soon as it existed
+  while being blind to real spend.
+- `COMPANY_BUDGET_CENTS` now defaults to **0 (off)**. Spend protection is the run
+  fast-stop (`RUN_MAX_ATTEMPTS`) plus a hard limit at the LLM provider.
+- New `POST /orchestration/budget {budget_cents}` (0 = off). When the company is
+  budget-paused, the Orchestration banner offers **Turn off cap & resume**.
+- Runbook §9 "Spend protection" documents the model.
+
 ## [0.12.1] — 2026-11-11 — Company resume + full invite prompt
 
 - **Company-level pause/resume.** Agents were stuck because the whole Paperclip

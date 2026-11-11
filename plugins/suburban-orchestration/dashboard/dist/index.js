@@ -82,9 +82,16 @@
           .then(function () { setCoBusy(false); load(); })
           .catch(function (e2) { setCoBusy(false); setRunErr("Couldn't resume the company: " + String(e2.message || e2)); });
       }
+      function capOffAndResume() {
+        setRunErr(null); setCoBusy(true);
+        api("/orchestration/budget", { method: "POST", body: JSON.stringify({ budget_cents: 0 }) })
+          .then(function () { return api("/orchestration/company/resume", { method: "POST" }); })
+          .then(function () { setCoBusy(false); load(); })
+          .catch(function (e2) { setCoBusy(false); setRunErr("Couldn't turn off the cap / resume: " + String(e2.message || e2)); });
+      }
       function pauseWhy(r) {
         r = String(r || "").toLowerCase();
-        if (r === "budget") return "the monthly budget hard-stop tripped. Resuming lets agents spend again — raise the budget first if you're near the cap.";
+        if (r === "budget") return "its dollar budget hard-stop tripped. With Hermes agents this usually happens at $0 spent: their runs report tokens but no dollar cost, so Paperclip can't price them and fails closed. Agent OS protects spend with the run fast-stop and your LLM provider's spend limit instead, so turning this cap off is the recommended fix.";
         if (r === "company_archived") return "the company was archived.";
         return "it was paused manually (likely during the earlier runaway-cost cleanup).";
       }
@@ -257,7 +264,11 @@
               h("div", { className: "so-cobanner-txt" },
                 h("b", null, "Your company is paused, so no agent can run. "),
                 "Paperclip paused it because " + pauseWhy(company.pauseReason)),
-              h("button", { className: "so-btn so-primary", disabled: coBusy, onClick: resumeCompany }, coBusy ? "Resuming…" : "▶ Resume company"))
+              String(company.pauseReason || "").toLowerCase() === "budget"
+                ? h("div", { className: "so-cobanner-acts" },
+                    h("button", { className: "so-btn so-primary", disabled: coBusy, onClick: capOffAndResume }, coBusy ? "Working…" : "Turn off cap & resume"),
+                    h("button", { className: "so-btn", disabled: coBusy, onClick: resumeCompany, title: "Resume but keep the cap (it may pause again)" }, "Resume only"))
+                : h("button", { className: "so-btn so-primary", disabled: coBusy, onClick: resumeCompany }, coBusy ? "Resuming…" : "▶ Resume company"))
           : null,
 
         up && connected ? h("div", { className: "so-panel" },

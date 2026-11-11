@@ -113,7 +113,7 @@ or SSO) in front of the dashboard hostname. Same URL, only approved people get i
 3. Create the tunnel + 3 routes (§3).
 4. Set `.env` + `update.sh` (§3).
 5. Verify (§4).
-6. Set the company budget cap if different from the $100 default (`COMPANY_BUDGET_CENTS`).
+6. **Set a hard monthly spend limit at the LLM provider** (Nous Portal, OpenRouter, Anthropic/OpenAI console). That is the real dollar ceiling — see §9.
 7. Hand the client their dashboard URL + login. Rotate the dashboard password first
    if it was ever shown over a non-tunnel connection.
 
@@ -144,3 +144,21 @@ build it rather than pull it (handled by the compose build context).
   honcho image is a local build (fixed by the deriver build context).
 - **Honcho plugin "Permission denied /opt/data/plugins"** — fixed; the install step
   now runs as root to write the bind-mounted plugins dir.
+
+## 9. Spend protection
+
+Two layers protect a box from runaway cost:
+
+1. **Run fast-stop (built in, on by default).** The gateway counts run attempts per
+   task and halts a task after `RUN_MAX_ATTEMPTS` (default 6). Works regardless of
+   model or pricing. Halted tasks show on the Tasks page with a Release button.
+2. **Provider spend limit (set this per client).** A hard monthly cap in the LLM
+   provider's console is the true dollar ceiling.
+
+**Paperclip's dollar budget is off by default** (`COMPANY_BUDGET_CENTS=0`). Its
+hard-stop fails closed on usage it can't price, and Hermes-gateway runs report
+tokens but usually no dollar cost — so a cap pauses the whole company at $0 spent
+while being blind to real spend. Only enable it for models whose runs report cost.
+If a company ever shows "paused by budget", the Orchestration page offers
+**Turn off cap & resume**.
+
