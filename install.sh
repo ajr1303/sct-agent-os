@@ -212,7 +212,12 @@ hermes_first_run() {
   docker compose run --rm -it hermes setup <"$TTY" || warn "hermes setup exited non-zero; re-run: docker compose run --rm -it hermes setup"
   docker compose run --rm hermes config set dashboard.theme suburban-cyber || warn "could not set default theme; pick it in the dashboard"
   if [ "$MEMORY_MODE" = honcho ]; then
-    docker compose run --rm hermes plugins install honcho || warn "honcho plugin install failed"
+    # --user root: /opt/data/plugins is bind-mounted from host ./data/hermes/plugins,
+    # which sync-branding creates as root. The hermes image's non-root user can't
+    # write the install temp dir there (Errno 13), so run just this step as root.
+    # The installed files are world-readable, so the runtime (non-root) hermes reads
+    # them fine.
+    docker compose run --rm --user root hermes plugins install honcho || warn "honcho plugin install failed"
   fi
 }
 

@@ -195,17 +195,15 @@ Model selection lives on the Hermes side (`createProfile` sets it inline); Paper
 
 The long-term model is **managed hosting**: Suburban Cyber spins up the full stack per client on an individual VPS. Each client gets their own box and their own isolated stack — nothing is shared.
 
-A per-client provision is just the standard non-interactive install on a 16 GB+ VPS — the full stack is the default:
+A per-client provision is the standard install on a 16 GB+ VPS (full stack is the default), with access served over a **Cloudflare Tunnel** under Suburban Cyber's own account — a branded HTTPS URL, no open ports at the client, and a free cert. The client never needs a Cloudflare account; all tunnels are managed from one dashboard.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/ajr1303/sct-agent-os/main/get.sh | sudo bash -s -- --yes
-```
+**See [docs/RUNBOOK.md](docs/RUNBOOK.md)** for the full per-client checklist: VM prep (Secure Boot on), install, tunnel + route creation, the `.env` settings for the dashboard/Paperclip/n8n hostnames, and verification.
 
-The installer checks the box meets spec, generates all per-client secrets (dashboard password, API/encryption keys, Paperclip secrets), sets Paperclip's LAN URL from the host IP, prints the dashboard login, and brings the full stack up. Point DNS/TLS at the proxy per the HTTPS roadmap item, and you have a client instance.
+The installer checks the box meets spec, generates all per-client secrets (dashboard password, API/encryption keys, Paperclip secrets), prints the dashboard login, and brings the full stack up — everything bound to loopback behind the tunnel.
 
 ## Memory (Honcho)
 
-With `--memory honcho` (the default when RAM ≥ 8 GB), the stack adds:
+With `--memory honcho` (the default; `--memory basic` skips it), the stack adds:
 
 - `honcho-db` — Postgres 16 + pgvector.
 - `honcho-api` — Honcho API, built from a pinned upstream commit.

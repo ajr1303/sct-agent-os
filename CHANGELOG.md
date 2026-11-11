@@ -2,6 +2,20 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.11.1] — 2026-11-11 — Honcho install fixes + docs
+
+- **Honcho image no longer pull-fails.** `honcho-deriver` now declares the same
+  build context as `honcho-api`, so `docker compose up` builds/reuses the local
+  `agent-os/honcho` image instead of trying to pull it ("pull access denied …
+  repository does not exist").
+- **Honcho plugin install fixed.** `hermes plugins install honcho` now runs
+  `--user root` so it can write the bind-mounted, root-owned `/opt/data/plugins`
+  (was failing with `PermissionError: [Errno 13]`).
+- **Docs:** new `docs/RUNBOOK.md` (deployment + per-client Cloudflare Tunnel
+  checklist; Secure Boot stays on, no LAN-mode advice). Refreshed
+  `docs/ARCHITECTURE.md` (real stack: proxy, connectors, gateway-tls, cloudflared,
+  Paperclip, n8n, 7 plugins). README points at the runbook; memory-default note fixed.
+
 ## [0.11.0] — 2026-11-11 — Tunnel hostnames for Paperclip & n8n
 
 Makes the "Open Paperclip" / "Open builder" buttons work through the tunnel, and

@@ -1,22 +1,37 @@
 # Architecture
 
-Suburban Cyber Agent OS is a **layer**, not a fork. Three upstream pieces run unmodified:
+Suburban Cyber Agent OS is a **layer**, not a fork. The upstream pieces run unmodified:
 
-- **Hermes Agent** (Docker image `nousresearch/hermes-agent`) — the agent runtime, gateway, and dashboard.
-- **Honcho** (built from a pinned upstream commit) — optional long-term memory.
-- **Postgres + pgvector** — Honcho's store.
+- **Hermes Agent** (`nousresearch/hermes-agent`) — the agent runtime, gateway, and dashboard (the cockpit).
+- **Paperclip** (built from a pinned commit, `control-plane` profile) — agent orchestration.
+- **n8n** (`automation` profile) — bundled workflow automation.
+- **Honcho** + **Postgres/pgvector** (built from a pinned commit, `memory` profile) — optional long-term memory.
 
-Everything Suburban Cyber adds is data dropped into the Hermes data directory (`/opt/data`, mounted as `./data/hermes`): a dashboard **theme**, and two dashboard **plugins**. Nothing patches Hermes' own code, so upstream updates are a tag bump in `docker-compose.yml`.
+Suburban Cyber adds: a dashboard **theme** and **seven dashboard plugins** dropped into the Hermes data dir (`/opt/data` ← `./data/hermes`); an nginx **proxy** that fronts the dashboard and injects branding + the links config; a **connectors** service (FastAPI, Fernet-encrypted SQLite) that bridges email/bookings/n8n/Paperclip; a **gateway-tls** terminator so Paperclip reaches the Hermes runs API over HTTPS (with a per-task run fast-stop via nginx `auth_request`); and an optional **cloudflared** tunnel. Nothing patches Hermes' own code.
 
 ```
-          ┌─────────────────────────── Docker ───────────────────────────┐
-  :9119   │  Hermes dashboard  ◄── theme (yaml) + plugins (js/css)        │
-  :8642   │  Hermes gateway/API                                          │
-          │  /opt/data  ◄── data/hermes  (themes, plugins, config, .env) │
-          │                                                              │
-          │  honcho-api ─ honcho-deriver ─ honcho-db   (memory profile)  │
-          └──────────────────────────────────────────────────────────────┘
+                         Internet (LLM, GitHub, Docker Hub, Cloudflare)
+                                           ▲ outbound only
+  ┌──────────────────────────────── Docker (agent-os) ───────────────────────────────┐
+  │                                                                                   │
+  │  cloudflared ──┐  (tunnel profile; dials OUT, no inbound ports)                   │
+  │                ▼                                                                   │
+  │   :9119  proxy (nginx) ──► hermes dashboard  ◄── theme + 7 plugins                │
+  │             │           └► connectors (/api/connectors/*) ──► n8n / paperclip     │
+  │             │                                                                     │
+  │   paperclip ──HTTPS──► gateway-tls :8443 ──► hermes runs API :8642                │
+  │     (control-plane)        (auth_request run fast-stop → connectors)              │
+  │   n8n (automation)                                                                │
+  │   honcho-api ─ honcho-deriver ─ honcho-db   (memory profile)                      │
+  │                                                                                   │
+  │   /opt/data ◄── data/hermes (themes, plugins, brand/links.js, config, .env)       │
+  └───────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+**Binds:** only the proxy (`:9119`) follows `DASHBOARD_BIND`. n8n (`:5678`) and
+Paperclip (`:3100`) always bind loopback (`INTERNAL_BIND`) and are reached through
+the dashboard, the tunnel, or an SSH tunnel. The Hermes runs API (`:8642`) is
+loopback-only. See [RUNBOOK.md](RUNBOOK.md) for access setup.
 
 ## Dashboard extension points (as used here)
 

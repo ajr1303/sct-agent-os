@@ -1,0 +1,146 @@
+# Suburban Cyber Agent OS — Deployment Runbook
+
+The operator runbook for standing up and hosting an Agent OS box. This supersedes
+the older Hyper-V/LAN walkthrough. Two rules changed from that version:
+
+- **Keep Secure Boot ON.** Ubuntu runs fine under Secure Boot on a Gen-2 VM with
+  the "Microsoft UEFI Certificate Authority" template. Don't disable it.
+- **Don't expose services on the LAN.** The dashboard, n8n, and Paperclip are
+  reached over a tunnel or an SSH tunnel — never a plain-HTTP LAN bind. n8n and
+  Paperclip are loopback-only by design and can't be published to the network.
+
+---
+
+## 1. Host preparation
+
+| Item | Value |
+|---|---|
+| OS | Ubuntu 22.04/24.04 LTS (or Debian) |
+| vCPU / RAM / disk | 4 vCPU / 16 GB / 80 GB (full stack with memory) |
+| Secure Boot | **On** (Microsoft UEFI CA template) |
+| Inbound ports | **None required** with a tunnel. (Direct-TLS mode only: 443.) |
+| Outbound | HTTPS to GitHub, Docker Hub, PyPI, the LLM provider, and (tunnel mode) Cloudflare |
+
+The box only needs **outbound** access. A tunnel dials out, so you never open a
+port on the client's firewall.
+
+## 2. Install
+
+As a sudo user on the fresh box:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ajr1303/sct-agent-os/main/get.sh | sudo bash
+```
+
+The installer checks the machine, asks a few questions, writes `/opt/sct-agent-os/.env`
+with generated secrets, pulls/builds images, and brings the stack up. Re-running
+the one-liner on an existing box **updates in place** (it keeps `.env` and routes
+to `update.sh`) — it never regenerates secrets.
+
+When it asks **how you'll reach the box**, pick:
+
+- **1) This machine / SSH tunnel** — most secure, nothing exposed. Reach it with
+  `ssh -L 9119:127.0.0.1:9119 user@box` then `http://localhost:9119`.
+- **2) Cloudflare Tunnel** — public HTTPS URL, no open ports. Paste the tunnel
+  token (see §3). This is the recommended client option.
+- **3) Direct LAN / public HTTP** — not recommended; trusted LAN only.
+
+The installer prints the dashboard login (`admin` + a generated password), also in
+`.env` as `DASHBOARD_PASSWORD`.
+
+## 3. Cloudflare Tunnel setup (recommended, per client)
+
+All tunnels live under the **one** Suburban Cyber Cloudflare account. The client
+never needs an account. One tunnel + one set of hostnames per box.
+
+**DNS prerequisite:** the domain you publish under (e.g. `suburbancyber.com`) must
+be on Cloudflare DNS. Per-client hostnames use one level so the free Universal SSL
+cert covers them (`acme-agentos.suburbancyber.com`, not a nested
+`acme.agentos.suburbancyber.com`, which would need Advanced Certificate Manager).
+
+### Create the tunnel
+1. Cloudflare → **Zero Trust → Networks → Tunnels → Create a tunnel → Cloudflared**.
+2. Name it for the box (e.g. `sct-aos-acme`). Save.
+3. Copy the **token** from the install screen (ignore their install command — we run
+   our own `cloudflared` container).
+
+### Add the routes (Routes → Add route → Published application)
+| Subdomain | Service URL |
+|---|---|
+| `<client>-agentos` | `http://proxy:9119` |
+| `<client>-agentos-paperclip` | `http://paperclip:3100` |
+| `<client>-agentos-n8n` | `http://n8n:5678` |
+
+Each adds the DNS record automatically. Service URLs use the **compose service
+names** (`proxy`, `paperclip`, `n8n`), which `cloudflared` reaches over the internal
+network even though those ports are loopback-only on the host.
+
+### Configure the box
+In `/opt/sct-agent-os/.env`:
+```
+ACCESS_MODE=cloudflare
+CLOUDFLARE_TUNNEL_TOKEN=<token from above>
+# so the dashboard's Open buttons and the services use the tunnel hostnames:
+PAPERCLIP_PUBLIC_URL=https://<client>-agentos-paperclip.suburbancyber.com
+PAPERCLIP_ALLOWED_HOSTNAMES=paperclip,localhost,127.0.0.1,<client>-agentos-paperclip.suburbancyber.com
+N8N_PUBLIC_URL=https://<client>-agentos-n8n.suburbancyber.com/
+N8N_PROTOCOL=https
+N8N_HOST=<client>-agentos-n8n.suburbancyber.com
+N8N_SECURE_COOKIE=true
+N8N_PROXY_HOPS=1
+```
+Add `,tunnel` to the `COMPOSE_PROFILES=` line, then:
+```bash
+cd /opt/sct-agent-os && sudo ./scripts/update.sh
+```
+
+### Optional: gate it
+To keep a box private without a VPN, put a **Cloudflare Access** policy (email OTP
+or SSO) in front of the dashboard hostname. Same URL, only approved people get in.
+
+## 4. Verify
+
+- Cloudflare tunnel shows **HEALTHY** (Tunnels → your tunnel → Overview).
+- `https://<client>-agentos.suburbancyber.com` loads the dashboard over real HTTPS.
+- "Open Paperclip" / "Open builder" open the Paperclip/n8n hostnames (fresh login
+  at each — new host = new session; n8n logs in by **email**, not `admin`).
+- `sudo docker compose ps` — all services healthy.
+
+## 5. Per-client provisioning checklist
+
+1. Provision the VM (§1), Secure Boot on.
+2. Install (§2), access mode = Cloudflare.
+3. Create the tunnel + 3 routes (§3).
+4. Set `.env` + `update.sh` (§3).
+5. Verify (§4).
+6. Set the company budget cap if different from the $100 default (`COMPANY_BUDGET_CENTS`).
+7. Hand the client their dashboard URL + login. Rotate the dashboard password first
+   if it was ever shown over a non-tunnel connection.
+
+## 6. Updating
+
+```bash
+cd /opt/sct-agent-os && sudo ./scripts/update.sh
+```
+Pulls `main`, regenerates branding/links, rebuilds `connectors`, restarts the proxy,
+gateway-tls, and cloudflared, and re-enables plugins. `.env` is preserved.
+
+## 7. Memory (Honcho)
+
+Honcho (long-term memory) runs under the `memory` profile and builds from a pinned
+upstream commit on first start (a few minutes). If it's enabled, the install builds
+the `agent-os/honcho` image locally — it is **not** on any registry, so a box must
+build it rather than pull it (handled by the compose build context).
+
+## 8. Troubleshooting
+
+- **cloudflared "Unsupported" in the Cloudflare panel** — the pinned tag aged out.
+  Set `CLOUDFLARED_TAG=<current>` in `.env` and `docker compose up -d cloudflared`.
+- **n8n login rejects `admin`** — n8n logs in by the owner **email**, not username.
+- **Paperclip/n8n unreachable via tunnel** — confirm the route's Service URL uses the
+  compose service name (`paperclip`/`n8n`), and that the hostname is in
+  `PAPERCLIP_ALLOWED_HOSTNAMES` (Paperclip) / set as `N8N_HOST` (n8n).
+- **"pull access denied for agent-os/honcho"** — update to the current version; the
+  honcho image is a local build (fixed by the deriver build context).
+- **Honcho plugin "Permission denied /opt/data/plugins"** — fixed; the install step
+  now runs as root to write the bind-mounted plugins dir.

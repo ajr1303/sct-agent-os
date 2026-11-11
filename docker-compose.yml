@@ -268,6 +268,13 @@ services:
 
   honcho-deriver:
     profiles: ["memory"]
+    # Same build context + image tag as honcho-api. Without the build context here,
+    # `docker compose up` treats agent-os/honcho as a registry image and tries to
+    # PULL it ("pull access denied … repository does not exist"), because it's a
+    # local build. Declaring the build makes compose build/reuse the shared image.
+    build:
+      context: https://github.com/plastic-labs/honcho.git#323f7e79923ffef968669fe4069d8cebed3ec8c3
+      dockerfile: Dockerfile
     image: agent-os/honcho:323f7e7
     container_name: agent-os-honcho-deriver
     restart: unless-stopped
