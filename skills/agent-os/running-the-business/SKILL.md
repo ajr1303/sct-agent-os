@@ -1,7 +1,7 @@
 ---
 name: running-the-business
-description: How to handle a request from the business owner - when to answer directly, when to build an n8n workflow, when to hand work to an agent, and when to ask the CEO for a hiring review. Use whenever the owner asks for help running or managing the business.
-version: 1.0.0
+description: Load this FIRST for any request to schedule, automate, repeat, remind, delegate or assign work, or to get 'someone' to handle something. Decides between answering directly, an n8n workflow (never a cron or scheduled job), handing work to an agent, and a CEO hiring review.
+version: 1.1.0
 metadata:
   hermes:
     tags: [agent-os, delegation, n8n, orchestration]
@@ -27,6 +27,12 @@ Go down this list and stop at the first one that fits.
    Examples: a reminder the day before every booking, a daily summary email,
    copying each new lead into a sheet. A workflow costs nothing per run, so use
    n8n whenever the work is repeatable. A one-off task is not worth a workflow.
+   - Do NOT use a scheduled job or cron job (`cronjob_manage` and similar) for
+     this. A scheduled job runs the AI model on every run and costs usage credits.
+     An n8n workflow does not. Use a scheduled job only if the owner asks for one
+     by name.
+   - Ask first for what you need to build it: where the data lives, where the
+     result should go, the time and timezone. Keep it to a few questions.
    - Check `list_workflows` first so you do not build a duplicate.
    - If there is an Automation Engineer agent, give them the build with
      `assign_task`. If not, build it with `create_workflow`.
@@ -41,11 +47,18 @@ Go down this list and stop at the first one that fits.
      seeing this conversation: the goal, the context, what done looks like.
    - Tell the owner who has it and that they can follow it in the Tasks tab.
 
-4. **Ongoing work that no agent covers and a workflow cannot do.** Call
+4. **A role nobody holds.** When the owner asks for "someone to handle" an ongoing
+   responsibility such as payroll, bookkeeping or support, that is a role, even if
+   it happens on a schedule. A role needs judgment, so it is not a workflow. Call
    `request_hiring_review`. The CEO agent weighs it and proposes whether to add
    an agent. The owner decides. Tell the owner the review is under way.
 
 ## Rules
+
+- Money never moves on its own. A workflow or agent may prepare payroll, draft
+  an invoice or remind the owner, but paying people, sending payments, refunds
+  and transfers are done by the owner. Say this plainly when the request
+  involves money.
 
 - You never activate a workflow, hire, change or remove an agent. Those are the
   owner's decisions. You prepare and they approve.

@@ -1995,9 +1995,12 @@ def _schema(props, required=()):
 
 _S = {"type": "string"}
 _ROUTING = (" Routing rule for owner requests: answer quick questions yourself; if the work is the same "
-            "steps every time on a schedule or trigger, build an n8n workflow (cheapest, no AI usage per "
-            "run); if it needs judgment, assign it to the matching agent; if no agent fits, request a "
-            "hiring review.")
+            "steps every time on a schedule or trigger (every morning, every week, whenever X happens), "
+            "build an n8n workflow, NOT a scheduled job or cron job: a scheduled job runs the AI model on "
+            "every run and costs usage credits, a workflow does not. If it needs judgment, assign it to "
+            "the matching agent; if it is an ongoing role no agent covers, request a hiring review. Ask "
+            "the owner for missing details before building. Load the running-the-business skill for the "
+            "full procedure.")
 # name -> (handler, scope, description, schema). scope "chat" = chat agent only.
 MCP_TOOLS = {
     "list_agents": (t_list_agents, "chat",
@@ -2018,7 +2021,9 @@ MCP_TOOLS = {
         "Latest run status and most recent replies on one task.",
         _schema({"task": {"type": "string", "description": "Task key from list_tasks"}}, ("task",))),
     "request_hiring_review": (t_request_hiring_review, "chat",
-        "Use when the owner asks for ongoing work that no current agent covers and a workflow cannot do. "
+        "Use when the owner asks for 'someone to handle' an ongoing responsibility (a role, such as "
+        "payroll, bookkeeping, support) that no current agent covers. A schedule in the request does "
+        "not make it a workflow: a role needs judgment. "
         "Sends the CEO agent a hiring review; the CEO proposes whether to add an agent and the owner "
         "decides. This never creates an agent.",
         _schema({"need": {"type": "string", "description": "The work that has no owner"},
@@ -2035,7 +2040,9 @@ MCP_TOOLS = {
     "get_workflow": (t_get_workflow, "all", "Full definition (nodes and connections) of one workflow.",
         _schema({"workflow_id": _S}, ("workflow_id",))),
     "create_workflow": (t_create_workflow, "all",
-        "Create a new n8n workflow. It is always created INACTIVE. Use for repeatable work: same steps "
+        "Create a new n8n workflow. It is always created INACTIVE. Use this instead of a scheduled or "
+        "cron job for anything recurring. A workflow may prepare, remind and report, but must never move "
+        "money (payroll, payments, refunds, transfers) on its own. Use for repeatable work: same steps "
         "every time, on a schedule or trigger. Not worth it for a one-off task. Prefer plain n8n nodes; "
         "add an AI or agent step only for the one step that needs judgment. Never put passwords, API "
         "keys or tokens in node parameters; reference n8n credentials, which the owner adds in n8n.",

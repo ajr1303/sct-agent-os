@@ -2,6 +2,17 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.14.1] — 2026-11-11 — Routing fixes from first live test
+
+- Recurring requests now go to **n8n, not Hermes scheduled jobs**. The first live
+  test offered `cronjob_manage` for a daily lead summary; a scheduled job runs the
+  model on every run. The tool descriptions (always in context) and the skill now
+  say so explicitly.
+- "I need someone to handle X" is treated as a **role** (hiring review), even when
+  X happens on a schedule. Payroll was routed to a workflow build.
+- **Money never moves on its own**: workflows and agents may prepare and remind;
+  payments, payroll runs, refunds and transfers stay with the owner.
+
 ## [0.14.0] — 2026-11-11 — Chat tools: delegation + workflows from chat
 
 The chat agent can now run the business instead of doing every job itself.
