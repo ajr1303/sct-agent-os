@@ -40,6 +40,10 @@ docker compose build connectors
 docker compose up -d
 docker compose restart hermes
 docker compose restart proxy
+# The proxy and gateway-tls configs are bind-mounted, so `up -d` won't reload them
+# on a content-only change — only a restart does. gateway-tls is behind the
+# control-plane profile; ignore "no such service" when that profile isn't active.
+docker compose restart gateway-tls 2>/dev/null || true
 # Re-enable plugins on every profile AFTER the restart, so the enable lands on a
 # ready gateway (enable-plugins.sh waits for readiness and covers all profiles).
 ./scripts/enable-plugins.sh || echo "  ! plugin enable reported problems; check: docker compose logs hermes"
