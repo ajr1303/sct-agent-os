@@ -2,6 +2,24 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.15.0] — 2026-11-11 — Agents close their own tasks; business profile
+
+- **Tasks finish properly.** Agents had no way to mark a task done, so delivered
+  work showed as "blocked" and Paperclip re-ran the agent to "recover" it. New
+  tools `complete_task` and `need_owner_input` (agent_os) let the assigned agent
+  close its task or park it waiting on the owner. Connectors checks the caller's
+  Agent ID against the task's assignee before changing anything.
+- **Working rules on every agent.** A short footer is appended to each agent's
+  instructions on create/edit (finish with `complete_task`, ask with
+  `need_owner_input`, no placeholders, don't assign tasks to other agents). It is
+  hidden when editing. Existing agents pick it up the next time they are saved.
+- **About your business.** New panel in Orchestration (name + free text). Agents
+  read it with `get_business_profile`, and it is attached to every task created
+  from chat, so output stops coming back with "[Company Name]".
+- Note: Paperclip-run agents all execute through the one Hermes gateway on the
+  default profile, so every agent sees the same `agent_os` tools. The per-profile
+  n8n subset from 0.14.0 only applies to chatting with a profile directly.
+
 ## [0.14.1] — 2026-11-11 — Routing fixes from first live test
 
 - Recurring requests now go to **n8n, not Hermes scheduled jobs**. The first live

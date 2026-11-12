@@ -72,6 +72,19 @@
       s = useState(null); var iErr = s[0], setIErr = s[1];
       s = useState(false); var iCopied = s[0], setICopied = s[1];
       s = useState([]);   var tpls = s[0], setTpls = s[1];
+      s = useState("");   var bName = s[0], setBName = s[1];
+      s = useState("");   var bAbout = s[0], setBAbout = s[1];
+      s = useState(false); var bOpen = s[0], setBOpen = s[1];
+      s = useState(false); var bBusy = s[0], setBBusy = s[1];
+      s = useState(null); var bMsg = s[0], setBMsg = s[1];
+      s = useState(false); var bSet = s[0], setBSet = s[1];
+      function saveBusiness(e) {
+        if (e) e.preventDefault();
+        setBBusy(true); setBMsg(null);
+        api("/orchestration/business", { method: "PUT", body: JSON.stringify({ name: bName, about: bAbout }) })
+          .then(function () { setBBusy(false); setBSet(!!(bName || bAbout)); setBMsg("Saved. Agents will use this from their next task."); })
+          .catch(function (e2) { setBBusy(false); setBMsg("Could not save: " + String(e2.message || e2)); });
+      }
       s = useState("");   var tplId = s[0], setTplId = s[1];
       s = useState(null); var runBusy = s[0], setRunBusy = s[1];  // agent id mid pause/resume
       s = useState(null); var runErr = s[0], setRunErr = s[1];
@@ -131,6 +144,9 @@
       }
       useEffect(function () {
         load();
+        api("/orchestration/business").then(function (d) {
+          if (!d) return; setBName(d.name || ""); setBAbout(d.about || ""); setBSet(!!(d.name || d.about)); setBOpen(!(d.name || d.about));
+        }).catch(function () {});
         api("/orchestration/agent-templates").then(function (d) { setTpls((d && d.templates) || []); }).catch(function () {});
         try {
           Promise.resolve(hapi.getModelOptions && hapi.getModelOptions()).then(function (m) {
@@ -273,6 +289,22 @@
                     h("button", { className: "so-btn", disabled: coBusy, onClick: resumeCompany, title: "Resume but keep the cap (it may pause again)" }, "Resume only"))
                 : h("button", { className: "so-btn so-primary", disabled: coBusy, onClick: resumeCompany }, coBusy ? "Resuming…" : "▶ Resume company"))
           : null,
+
+        up && connected ? h("div", { className: "so-panel so-biz" },
+          h("div", { className: "so-panel-h so-panel-h-row" },
+            h("span", null, "ABOUT YOUR BUSINESS" + (bSet && bName ? " · " + bName : "")),
+            h("button", { type: "button", className: "so-btn", onClick: function () { setBOpen(!bOpen); } }, bOpen ? "Close" : (bSet ? "Edit" : "Set up"))),
+          bOpen ? h("form", { className: "so-createform", onSubmit: saveBusiness },
+            h("div", { className: "so-createhint" }, "Every agent reads this so their work sounds like your business. Without it they write placeholders like [Company Name]."),
+            h("input", { className: "so-input", value: bName, maxLength: 120, placeholder: "Business name",
+              onChange: function (e) { setBName(e.target.value); } }),
+            h("textarea", { className: "so-input so-ta so-biz-ta", value: bAbout, maxLength: 4000,
+              placeholder: "What you do, who your customers are, services and prices, hours, service area, how you like to sound (friendly, formal…), and a contact phone or email for customers.",
+              onChange: function (e) { setBAbout(e.target.value); } }),
+            h("div", { className: "so-createhint" }, "Don't put passwords or anything private here. Agents may quote it to customers."),
+            bMsg ? h("div", { className: "so-msg" }, bMsg) : null,
+            h("div", { className: "so-createactions" },
+              h("button", { type: "submit", className: "so-btn so-primary", disabled: bBusy }, bBusy ? "Saving…" : "Save"))) : null) : null,
 
         up && connected ? h("div", { className: "so-panel" },
           h("div", { className: "so-panel-h so-panel-h-row" },

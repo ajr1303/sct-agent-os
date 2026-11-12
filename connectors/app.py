@@ -136,6 +136,13 @@ def get_db():
             decided_at    TEXT
         )
     """)
+    # Free-form facts about the business every agent can read (name, services, tone).
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS business_profile (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            name TEXT, about TEXT, updated_at TEXT
+        )
+    """)
     return con
 
 
@@ -912,6 +919,30 @@ AGENT_ROLES = {"ceo", "cto", "cmo", "cfo", "security", "engineer",
                "designer", "pm", "qa", "devops", "researcher", "general"}
 
 
+# Appended to every agent's instructions so a finished task gets closed instead of
+# being re-run by Paperclip's recovery. Stripped again when the dashboard reads the
+# instructions back for editing.
+AGENT_FOOTER_MARK = "--- Agent OS working rules ---"
+AGENT_FOOTER = (AGENT_FOOTER_MARK + "\n"
+    "- When you finish a task: post your result as a reply on the task, then call the "
+    "complete_task tool (agent_os) with the task id, your Agent ID and a one-line summary. "
+    "A task is not finished until you do.\n"
+    "- If you cannot finish without the owner (a decision, a login, missing information): "
+    "call need_owner_input with a clear question, then stop. Do not guess.\n"
+    "- If you need the business's name, services or tone, call get_business_profile. "
+    "Never write placeholders like [Company Name].\n"
+    "- You work on the task you were given. Do not assign tasks to other agents.")
+
+
+def _strip_footer(text):
+    return (text or "").split(AGENT_FOOTER_MARK, 1)[0].rstrip()
+
+
+def _with_footer(text):
+    base = _strip_footer(text)
+    return (base + "\n\n" if base else "") + AGENT_FOOTER
+
+
 class AgentCreate(BaseModel):
     name: str
     instructions: str = ""
@@ -956,8 +987,7 @@ def create_agent(a: AgentCreate, _auth=Depends(require_auth)):
         "apiKey": HERMES_API_KEY,
         "sessionKeyStrategy": "issue",
     }
-    if a.instructions.strip():
-        adapter_config["instructions"] = a.instructions.strip()
+    adapter_config["instructions"] = _with_footer(a.instructions)
     role = (a.role or "general").strip().lower()
     if role not in AGENT_ROLES:
         role = "general"
@@ -1101,7 +1131,7 @@ def get_agent(aid: str, _auth=Depends(require_auth)):
         "id": d.get("id") or aid,
         "name": d.get("name"),
         "role": d.get("role") or "general",
-        "instructions": (ac.get("instructions") if isinstance(ac, dict) else "") or "",
+        "instructions": _strip_footer((ac.get("instructions") if isinstance(ac, dict) else "") or ""),
         "status": d.get("status"),
         "pauseReason": d.get("pauseReason"),
     }
@@ -1129,7 +1159,7 @@ def update_agent(aid: str, a: AgentUpdate, _auth=Depends(require_auth)):
         body["role"] = role
     if a.instructions is not None:
         # Merge-only patch: just the instructions key goes into adapterConfig.
-        body["adapterConfig"] = {"instructions": a.instructions.strip()}
+        body["adapterConfig"] = {"instructions": _with_footer(a.instructions)}
     if not body:
         raise HTTPException(status_code=400, detail="Nothing to update.")
     try:
@@ -1775,6 +1805,9 @@ def _create_issue(cid, agent, title, description, priority):
                             % CHAT_TASKS_PER_HOUR)
         _task_times.append(now)
     pr = priority if priority in ("low", "medium", "high", "urgent") else "medium"
+    biz = _business_text()
+    if biz:
+        description = description[:6000] + "\n\n--- About the business ---\n" + biz[:2000]
     body = {"title": title[:200], "description": description[:8000],
             "assigneeAgentId": agent["id"], "priority": pr}
     try:
@@ -1989,6 +2022,79 @@ def t_request_activation(a):
             % (w.get("name") or wid))
 
 
+def _business():
+    try:
+        with closing(get_db()) as con:
+            row = con.execute("SELECT name, about FROM business_profile WHERE id=1").fetchone()
+    except Exception:
+        row = None
+    return {"name": (row[0] if row else "") or "", "about": (row[1] if row else "") or ""}
+
+
+def _business_text():
+    b = _business()
+    if not b["name"] and not b["about"]:
+        return ""
+    return ("Business name: " + (b["name"] or "(not set)") + ("\n" + b["about"] if b["about"] else "")).strip()
+
+
+def t_get_business_profile(a):
+    return _business_text() or ("The owner has not filled in the business profile yet. Ask them for the "
+                                "detail you need, and suggest they fill it in under Orchestration.")
+
+
+def _own_issue(a):
+    """Resolve a task and check the caller is the agent it is assigned to."""
+    _require_bundled()
+    key = (a.get("task") or "").strip()
+    aid = (a.get("agent_id") or "").strip()
+    if not re.match(r"^[A-Za-z0-9-]{1,80}$", key):
+        raise ToolError("Give the task id or key exactly as it appears in your task brief.")
+    if not re.match(r"^[A-Za-z0-9-]{1,80}$", aid):
+        raise ToolError("Give your Agent ID exactly as it appears under 'Paperclip runtime identity'.")
+    try:
+        issue = _pc_get("/api/issues/" + key)
+    except PermissionError:
+        raise ToolError("Paperclip is not connected.")
+    except Exception:
+        raise ToolError("No task found with that id.")
+    if not isinstance(issue, dict) or not issue.get("id"):
+        raise ToolError("No task found with that id.")
+    if str(issue.get("assigneeAgentId") or "") != aid:
+        raise ToolError("That task is not assigned to you, so you cannot change it.")
+    return issue
+
+
+def _set_issue(issue, status, comment):
+    try:
+        _pc_send("PATCH", "/api/issues/" + _safe_id(str(issue["id"])), {"status": status, "comment": comment[:6000]},
+                 what="update the task")
+    except HTTPException as e:
+        raise ToolError(str(e.detail))
+
+
+def t_complete_task(a):
+    summary = (a.get("summary") or "").strip()
+    if len(summary) < 5:
+        raise ToolError("Give a one-line summary of what you delivered.")
+    issue = _own_issue(a)
+    if issue.get("status") in ("done", "cancelled"):
+        return "That task is already closed. Stop here."
+    _set_issue(issue, "done", "Completed: " + summary)
+    return "Task marked done. You are finished; stop here."
+
+
+def t_need_owner_input(a):
+    q = (a.get("question") or "").strip()
+    if len(q) < 10:
+        raise ToolError("Ask a clear, specific question the owner can answer.")
+    issue = _own_issue(a)
+    if issue.get("status") in ("done", "cancelled"):
+        return "That task is already closed. Stop here."
+    _set_issue(issue, "blocked", "Waiting on the owner: " + q)
+    return "The task is now waiting on the owner. Stop here; you will be woken when they reply."
+
+
 def _schema(props, required=()):
     return {"type": "object", "properties": props, "required": list(required), "additionalProperties": False}
 
@@ -2008,8 +2114,9 @@ MCP_TOOLS = {
         "assigning work so you pick the right agent." + _ROUTING, _schema({})),
     "assign_task": (t_assign_task, "chat",
         "Give a piece of work that needs judgment to one agent. Creates a task the owner can follow in "
-        "the Tasks tab. Write the description so the agent can act without this conversation: goal, "
-        "context, what done looks like. Do not use for work that is the same steps every time on a "
+        "the Tasks tab. Only the owner's chat assistant assigns tasks; an agent working on a task must "
+        "not. Write the description so the agent can act without this conversation: goal, context, "
+        "what done looks like. Do not use for work that is the same steps every time on a "
         "schedule or trigger; that belongs in an n8n workflow.",
         _schema({"agent": {"type": "string", "description": "Agent name from list_agents"},
                  "title": _S, "description": _S,
@@ -2029,6 +2136,20 @@ MCP_TOOLS = {
         _schema({"need": {"type": "string", "description": "The work that has no owner"},
                  "request": {"type": "string", "description": "The owner's request in their words"}},
                 ("need",))),
+    "complete_task": (t_complete_task, "all",
+        "For an agent working on an assigned task: call this when the work is finished and your result "
+        "is posted on the task. This is what gives the task its final disposition; without it the task "
+        "is treated as unfinished and you will be woken again.",
+        _schema({"task": {"type": "string", "description": "Task id or key from your task brief"},
+                 "agent_id": {"type": "string", "description": "Your Agent ID from the runtime identity"},
+                 "summary": _S}, ("task", "agent_id", "summary"))),
+    "need_owner_input": (t_need_owner_input, "all",
+        "For an agent working on an assigned task: call this when you cannot finish without the owner "
+        "(a decision, a login, missing information). Marks the task as waiting on them.",
+        _schema({"task": _S, "agent_id": _S, "question": _S}, ("task", "agent_id", "question"))),
+    "get_business_profile": (t_get_business_profile, "all",
+        "The business's name and what the owner has said about it (services, hours, tone, contact). "
+        "Use it instead of placeholders such as [Company Name].", _schema({})),
     "list_workflows": (t_list_workflows, "all",
         "List n8n workflows with id and whether each is active. Check here before building a new one.",
         _schema({})),
@@ -2131,6 +2252,28 @@ async def mcp_chat(request: Request):
 async def mcp_agent(request: Request):
     """Subset for working agents (n8n tools only, no delegation)."""
     return await _mcp_http(request, "agent")
+
+
+class BusinessProfile(BaseModel):
+    name: str = ""
+    about: str = ""
+
+
+@app.get("/orchestration/business")
+def get_business(_auth=Depends(require_auth)):
+    return _business()
+
+
+@app.put("/orchestration/business")
+def put_business(b: BusinessProfile, _auth=Depends(require_auth)):
+    """What every agent may know about the business. Not a place for secrets."""
+    name, about = (b.name or "").strip()[:120], (b.about or "").strip()[:4000]
+    with closing(get_db()) as con:
+        con.execute("INSERT INTO business_profile(id, name, about, updated_at) VALUES(1,?,?,?) "
+                    "ON CONFLICT(id) DO UPDATE SET name=excluded.name, about=excluded.about, "
+                    "updated_at=excluded.updated_at", (name, about, _now().isoformat()))
+        con.commit()
+    return {"ok": True, "name": name, "about": about}
 
 
 @app.get("/automations/requests")
