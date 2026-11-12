@@ -4,7 +4,7 @@
 # routing skill. Idempotent; called by install.sh and update.sh BEFORE Hermes is
 # (re)started so the gateway loads the new config.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 warn() { echo "  ! $*" >&2; }
 
 H="${HERMES_HOME_DIR:-./data/hermes}"

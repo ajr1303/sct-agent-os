@@ -12,14 +12,13 @@
 # before the gateway is up and an early enable silently no-ops. Idempotent; used
 # by install.sh and update.sh.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 AOS_PLUGINS="suburban-cyber suburban-chat suburban-mail suburban-bookings suburban-automations suburban-orchestration suburban-tasks"
 warn() { echo "  ! $*" >&2; }
 
 wait_for_hermes() {
-  local i
-  for i in $(seq 1 60); do
+  for _ in $(seq 1 60); do
     docker compose exec -T hermes hermes --version >/dev/null 2>&1 && return 0
     sleep 2
   done

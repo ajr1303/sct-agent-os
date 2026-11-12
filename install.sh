@@ -16,7 +16,7 @@ done
 
 # Agent OS installs the FULL stack (Hermes + Honcho memory + n8n + Paperclip).
 # One spec, sized for the whole thing with headroom to grow — 16 GB / 4 vCPU / 60 GB.
-FULL_RAM_KB=15000000; REC_RAM_KB=16000000; MIN_DISK_GB=60; REC_DISK_GB=80
+FULL_RAM_KB=15000000; MIN_DISK_GB=60; REC_DISK_GB=80
 SUBSET_RAM_KB=3500000   # floor when an advanced operator passes --profiles
 TTY=/dev/tty; [ -r "$TTY" ] || TTY=/dev/stdin
 say()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }

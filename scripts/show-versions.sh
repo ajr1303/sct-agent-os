@@ -3,7 +3,7 @@
 # Run on a box you have TESTED; the output is what a release should pin so every
 # later install gets the same builds instead of whatever "latest" is that day.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 pin() {  # pin <compose service> <ENV NAME>
   local cid img digest

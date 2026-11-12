@@ -26,7 +26,7 @@ mkdir -p "$TLS_DIR"
 for f in ca.crt ca.key server.crt server.key server.srl; do
   if [ -d "$TLS_DIR/$f" ]; then
     echo "Removing stray directory $TLS_DIR/$f (Docker auto-created it before certs existed)."
-    rm -rf "$TLS_DIR/$f"
+    rm -rf "${TLS_DIR:?}/$f"
   fi
 done
 
