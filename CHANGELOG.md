@@ -2,6 +2,21 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.16.0] — 2026-11-12 — Supply chain: prebuilt images, version pins
+
+Protects new installs from upstream repos changing or disappearing.
+
+- **Prebuilt Paperclip and Honcho images.** `.github/workflows/images.yml` builds
+  both from their pinned commits (unmodified) and publishes them to
+  `ghcr.io/ajr1303/agent-os-paperclip` / `agent-os-honcho`. Install and update
+  pull these first and only build locally if the pull fails.
+- **Pin hooks for Hermes and n8n:** `HERMES_IMAGE` / `N8N_IMAGE` (accept a
+  digest). `scripts/show-versions.sh` prints the exact images a tested box is
+  running, as pin lines.
+- `THIRD_PARTY_NOTICES.md` records each upstream project, its license and how it
+  is used. n8n is pulled from its official registry and not redistributed.
+- CI checks the workflow's refs match the commits pinned in `docker-compose.yml`.
+
 ## [0.15.0] — 2026-11-11 — Agents close their own tasks; business profile
 
 - **Tasks finish properly.** Agents had no way to mark a task done, so delivered

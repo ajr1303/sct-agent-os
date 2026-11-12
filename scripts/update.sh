@@ -36,6 +36,8 @@ fi
 ./scripts/gen-tls.sh || echo "  ! gateway TLS generation failed - agents won't run until this is fixed"
 
 ./scripts/sync-branding.sh
+# Prefer prebuilt images for this release; fall back to a local build if unavailable.
+docker compose pull -q --ignore-pull-failures 2>/dev/null || true
 docker compose build connectors
 # Chat tools: write the MCP entry + routing skill before Hermes restarts below.
 ./scripts/sync-chat-tools.sh || echo "  ! chat tools setup reported problems"

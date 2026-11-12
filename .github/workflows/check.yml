@@ -19,3 +19,10 @@ jobs:
           COMPOSE_PROFILES=memory,automation,control-plane,tunnel docker compose config -q
       - name: yaml themes parse
         run: python3 -c "import yaml,glob;[yaml.safe_load(open(f)) for f in glob.glob('templates/dashboard-themes/*.yaml')]"
+      - name: image refs match (compose vs images workflow)
+        run: |
+          for ref in $(grep -oE "ref: [0-9a-f]{40}" .github/workflows/images.yml | awk '{print $2}'); do
+            grep -q "#$ref" docker-compose.yml || { echo "images.yml ref $ref is not the commit pinned in docker-compose.yml"; exit 1; }
+            grep -q ":${ref:0:7}}" docker-compose.yml || { echo "docker-compose.yml image tag does not match $ref"; exit 1; }
+          done
+

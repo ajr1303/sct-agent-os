@@ -222,8 +222,13 @@ hermes_first_run() {
 }
 
 start_stack() {
-  say "Starting services (first run builds Honcho; a few minutes)"
-  docker compose up -d --build
+  say "Fetching prebuilt images"
+  # Prebuilt, tested images come from our registry. Anything that can't be pulled
+  # is built locally from its pinned source by `up` below (slower, same result).
+  docker compose pull -q --ignore-pull-failures 2>/dev/null || warn "some images could not be pulled; they will be built locally"
+  docker compose build connectors
+  say "Starting services (builds anything not prebuilt; can take a few minutes)"
+  docker compose up -d
 }
 
 install_cron() {

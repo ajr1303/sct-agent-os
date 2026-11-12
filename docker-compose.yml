@@ -1,7 +1,8 @@
 name: agent-os
 services:
   hermes:
-    image: nousresearch/hermes-agent:${HERMES_TAG:-latest}
+    # Pin with HERMES_IMAGE (ideally by digest) so every install runs the tested build.
+    image: ${HERMES_IMAGE:-nousresearch/hermes-agent:${HERMES_TAG:-latest}}
     container_name: agent-os-hermes
     restart: unless-stopped
     command: gateway run
@@ -133,7 +134,8 @@ services:
   # n8n's public API via the connectors service (internal, http://n8n:5678).
   n8n:
     profiles: ["automation"]
-    image: n8nio/n8n:${N8N_TAG:-latest}
+    # Pulled from n8n's official registry (not mirrored: see THIRD_PARTY_NOTICES.md).
+    image: ${N8N_IMAGE:-n8nio/n8n:${N8N_TAG:-latest}}
     container_name: agent-os-n8n
     restart: unless-stopped
     ports:
@@ -182,7 +184,9 @@ services:
     build:
       context: https://github.com/paperclipai/paperclip.git#253bf071f0a496554b61fff897ad3f11afaf8766
       dockerfile: Dockerfile
-    image: agent-os/paperclip:253bf07
+    # Prebuilt by .github/workflows/images.yml. If it can't be pulled, compose
+    # builds it from the pinned upstream commit above instead.
+    image: ${PAPERCLIP_IMAGE:-ghcr.io/ajr1303/agent-os-paperclip:253bf07}
     container_name: agent-os-paperclip
     restart: unless-stopped
     pids_limit: 2048
@@ -255,7 +259,7 @@ services:
     build:
       context: https://github.com/plastic-labs/honcho.git#323f7e79923ffef968669fe4069d8cebed3ec8c3
       dockerfile: Dockerfile
-    image: agent-os/honcho:323f7e7
+    image: ${HONCHO_IMAGE:-ghcr.io/ajr1303/agent-os-honcho:323f7e7}
     container_name: agent-os-honcho-api
     restart: unless-stopped
     entrypoint: ["sh", "docker/entrypoint.sh"]
@@ -281,7 +285,7 @@ services:
     build:
       context: https://github.com/plastic-labs/honcho.git#323f7e79923ffef968669fe4069d8cebed3ec8c3
       dockerfile: Dockerfile
-    image: agent-os/honcho:323f7e7
+    image: ${HONCHO_IMAGE:-ghcr.io/ajr1303/agent-os-honcho:323f7e7}
     container_name: agent-os-honcho-deriver
     restart: unless-stopped
     entrypoint: ["/app/.venv/bin/python", "-m", "src.deriver"]
