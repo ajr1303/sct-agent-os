@@ -19,6 +19,10 @@ services:
       HERMES_DASHBOARD: "1"
       HERMES_DASHBOARD_BASIC_AUTH_USERNAME: ${DASHBOARD_USER:-admin}
       HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: ${DASHBOARD_PASSWORD:?run ./install.sh first}
+      # The memory plugin refuses to start without HONCHO_API_KEY, even though our
+      # self-hosted Honcho (AUTH_USE_AUTH=false, internal network only) ignores it.
+      # Any non-empty value satisfies the check; the endpoint comes from honcho.json.
+      HONCHO_API_KEY: "${HONCHO_API_KEY:-self-hosted}"
     mem_limit: ${HERMES_MEM_LIMIT:-3G}
     cpus: 2.0
 

@@ -2,6 +2,17 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.17.1] — 2026-11-12 — Memory plugin fixes from the first clean install
+
+- Memory plugin install no longer fails with a permission error: the plugins
+  directory is handed to the user Hermes actually runs as (the image drops root
+  even with `--user root`). `scripts/install-memory-plugin.sh` repairs an
+  existing box.
+- Hermes now gets a placeholder `HONCHO_API_KEY`. The plugin reported "not
+  available" without one, although the self-hosted memory service does not use it.
+- Installer: closing message is tunnel-aware; the memory-provider prompt only
+  accepts 1 or 2 and warns if a key was pasted there.
+
 ## [0.17.0] — 2026-11-12 — Sidebar: fixed, grouped, no reloads
 
 - **The sidebar no longer reshuffles.** Each plugin used to inject its own copy of
