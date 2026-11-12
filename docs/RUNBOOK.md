@@ -94,9 +94,9 @@ Add `,tunnel` to the `COMPOSE_PROFILES=` line, then:
 cd /opt/sct-agent-os && sudo ./scripts/update.sh
 ```
 
-### Optional: gate it
-To keep a box private without a VPN, put a **Cloudflare Access** policy (email OTP
-or SSO) in front of the dashboard hostname. Same URL, only approved people get in.
+### Team sign-in
+To give each person their own sign-in (and hide the login page from the internet), put
+**Cloudflare Access** in front of the box. See §11.
 
 ## 4. Verify
 
@@ -114,7 +114,8 @@ or SSO) in front of the dashboard hostname. Same URL, only approved people get i
 4. Set `.env` + `update.sh` (§3).
 5. Verify (§4).
 6. **Set a hard monthly spend limit at the LLM provider** (Nous Portal, OpenRouter, Anthropic/OpenAI console). That is the real dollar ceiling — see §9.
-7. Hand the client their dashboard URL + login. Rotate the dashboard password first
+7. Set up team sign-in with Cloudflare Access if more than one person will use it (§11).
+8. Hand the client their dashboard URL + login. Rotate the dashboard password first
    if it was ever shown over a non-tunnel connection.
 
 ## 6. Updating
@@ -189,4 +190,54 @@ Operations:
 - Limit how many tasks chat can create: `CHAT_TASKS_PER_HOUR` (default 20).
 - Turn the tools off: blank `CHAT_TOOLS_TOKEN=` in `.env`, remove `agent_os` from
   `data/hermes/config.yaml`, update.
+
+## 11. Logins, password resets and team access
+
+### The three logins
+| Login | Used by | Reset |
+|---|---|---|
+| Dashboard (`admin`) | The client | Change `DASHBOARD_PASSWORD` in `.env`, then `sudo ./scripts/update.sh` |
+| Paperclip | Operator | `sudo ./scripts/paperclip-reset-password.sh` |
+| n8n (owner email) | Operator | n8n's own reset; needs mail configured or a command-line reset. Not yet validated on this stack. |
+
+The dashboard has one shared login. Do not hand a shared password to a team; use
+Cloudflare Access so each person signs in as themselves.
+
+### Team access with Cloudflare Access (hosted boxes)
+Each person signs in with their own email (one-time code, or Google/Microsoft if you
+add that identity provider). Adding or removing someone is a list edit; there are no
+passwords to reset. Menu names below are as of late 2026 and may move.
+
+1. **Sign-in method:** Zero Trust → Integrations → Identity providers. One-time PIN
+   is available by default; add Google or Microsoft 365 if the client uses them.
+2. **Create the application:** Access controls → Applications → Add web
+   applications → **Self-hosted public application**.
+   - Name: `<client> Agent OS`
+   - Domain: the dashboard hostname, e.g. `<client>-agentos.suburbancyber.com`
+   - Session duration: 24 hours is a reasonable default for office staff.
+3. **Policy:** action **Allow**, include **Emails** (list each person) or **Emails
+   ending in** `@clientdomain.com`. Add your own operator address.
+4. **Test** in a private window: the hostname should show the Cloudflare sign-in
+   first, then the dashboard login.
+
+What to protect:
+- **Dashboard hostname: yes.** This is the one the team uses.
+- **Paperclip hostname: yes, operator emails only**, unless external agents were
+  invited (Orchestration → Invite an agent). Invited agents call Paperclip's API and
+  Access would block them; leave it open or issue them a service token (Access
+  controls → Service credentials).
+- **n8n hostname: protect the editor, not the webhooks.** Workflows triggered by
+  outside systems receive calls on `/webhook/` and `/webhook-test/`. Add a second
+  application for those two paths with a **Bypass** policy for Everyone, or forms and
+  integrations will stop working.
+
+Limits:
+- Access decides who gets in, not what they can do. Everyone who passes it then uses
+  the same dashboard `admin` login and sees everything. Keep the dashboard password
+  set; Access is a layer in front of it, not a replacement.
+- Per-person roles (owner vs staff views) are not built yet.
+- Self-hosted installs without Cloudflare keep the single login.
+
+Offboarding: remove the person's email from the policy. If they knew the dashboard
+password, rotate `DASHBOARD_PASSWORD` too.
 
