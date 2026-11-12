@@ -22,3 +22,22 @@ select option:hover {
 select option:disabled {
   color: #6b7c83;
 }
+
+/* ---- Sidebar: fixed grouped order (arranged by nav.js) ---- */
+/* Hide the stock list until nav.js has arranged it, so it never flashes in the
+   wrong order. If the script fails, the animation reveals it anyway. */
+#app-sidebar nav:not(.sct-nav){visibility:hidden;animation:sct-nav-reveal 0s 2.5s forwards}
+@keyframes sct-nav-reveal{to{visibility:visible}}
+#app-sidebar nav.sct-nav{display:flex;flex-direction:column}
+#app-sidebar nav.sct-nav .sct-flat{display:contents}
+#app-sidebar nav.sct-nav .sct-hide{display:none!important}
+#app-sidebar nav.sct-nav li{flex:none}
+#app-sidebar nav.sct-nav:not(.sct-adv-open) li.sct-adv{display:none}
+/* The per-plugin copies of links are retired; Hermes' own links are used. */
+#so-nav,#st-nav,#sa-nav,#sm-nav,#sb-nav{display:none!important}
+.sct-navh{flex:none;display:block;width:100%;text-align:left;font:inherit;font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:inherit;opacity:.45;padding:18px 20px 6px;background:none;border:0}
+.sct-navh-btn{cursor:pointer;display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--color-border,rgba(255,255,255,.1));margin-top:10px;padding-top:14px}
+.sct-navh-btn:hover{opacity:.8}
+.sct-navh-btn::after{content:"+";font-size:14px;letter-spacing:0}
+nav.sct-adv-open .sct-navh-btn::after{content:"\2212"}
+.sct-navh-btn:focus-visible{outline:2px solid var(--color-primary,#25c9ee);outline-offset:-2px;opacity:1}

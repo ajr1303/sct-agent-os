@@ -442,6 +442,7 @@
     }
     function injectNav() {
       try {
+        if (window.__SCT_NAV__) return;  // brand/nav.js arranges the sidebar with Hermes' own links
         if (document.getElementById("so-nav")) { markActive(); return; }
         var tmpl = navTemplate(); if (!tmpl || !tmpl.parentElement) return;
         var tmplLabel = norm(tmpl.textContent);

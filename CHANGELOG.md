@@ -2,6 +2,23 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.17.0] — 2026-11-12 — Sidebar: fixed, grouped, no reloads
+
+- **The sidebar no longer reshuffles.** Each plugin used to inject its own copy of
+  its link whenever it happened to load, so the order changed between pages, the
+  list flashed Hermes' stock order first, and every click on one of those copies
+  reloaded the whole app. `brand/nav.js` is now the only thing that arranges the
+  sidebar. It uses Hermes' own links (in-app navigation, working highlight) and
+  sets a fixed order with CSS, so nothing moves.
+- **Grouped:** Overview, Chat · *Your team*: Tasks, Orchestration, Automations ·
+  *Connections*: Bookings, Mailboxes · *Advanced* (collapsed by default,
+  remembered per browser, opens automatically when you are on one of its pages):
+  Agents, Models, Skills, MCP, Plugins, Scheduled Jobs, Sessions, Files, Channels,
+  Webhooks, Pairing, Keys, Config, System, Logs, Kanban, Achievements, Docs.
+- Duplicate entries and Hermes' "Plugins" list title are hidden. The stock list is
+  hidden until arranged (revealed after 2.5s regardless, if the script fails).
+- Overview navigates in-app instead of reloading.
+
 ## [0.16.0] — 2026-11-12 — Supply chain: prebuilt images, version pins
 
 Protects new installs from upstream repos changing or disappearing.
