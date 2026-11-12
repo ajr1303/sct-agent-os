@@ -88,6 +88,12 @@ collect_answers() {
     echo "LLM provider for the memory service:"
     echo "  1) OpenAI   2) Other OpenAI-compatible (OpenRouter, vLLM, etc.)"
     ask PROVIDER "Choice" "1"
+    # A pasted key lands here if the prompts are answered out of order; it would be
+    # echoed on screen and silently treated as "1". Insist on a real choice.
+    while [ "$PROVIDER" != 1 ] && [ "$PROVIDER" != 2 ]; do
+      echo "Please type 1 or 2. (If you just pasted a key here, it was shown on screen: revoke it and make a new one.)"
+      ask PROVIDER "Choice" "1"
+    done
     if [ "$PROVIDER" = 2 ]; then
       ask LLM_BASE_URL "Base URL" "https://openrouter.ai/api/v1"
       ask LLM_MODEL    "Chat model" "openai/gpt-4o-mini"
@@ -212,12 +218,17 @@ hermes_first_run() {
   docker compose run --rm -it hermes setup <"$TTY" || warn "hermes setup exited non-zero; re-run: docker compose run --rm -it hermes setup"
   docker compose run --rm hermes config set dashboard.theme suburban-cyber || warn "could not set default theme; pick it in the dashboard"
   if [ "$MEMORY_MODE" = honcho ]; then
-    # --user root: /opt/data/plugins is bind-mounted from host ./data/hermes/plugins,
-    # which sync-branding creates as root. The hermes image's non-root user can't
-    # write the install temp dir there (Errno 13), so run just this step as root.
-    # The installed files are world-readable, so the runtime (non-root) hermes reads
-    # them fine.
-    docker compose run --rm --user root hermes plugins install honcho || warn "honcho plugin install failed"
+    # /opt/data/plugins is bind-mounted from the host plugins dir, which
+    # sync-branding creates as root. The Hermes image always drops to its own
+    # non-root user (even with --user root), so the installer can't create its temp
+    # dir there (Errno 13). Hand the directory itself to the uid Hermes runs as,
+    # which is whoever owns the config.yaml that first-time setup just wrote.
+    local hdir own
+    hdir=$(sed -n 's/^HERMES_HOME_DIR=//p' .env | tail -n1); hdir=${hdir:-./data/hermes}
+    own=$(stat -c '%u:%g' "$hdir/config.yaml" 2>/dev/null || true)
+    if [ -n "$own" ] && [ "$own" != "0:0" ]; then chown "$own" "$hdir/plugins" 2>/dev/null || true; fi
+    docker compose run --rm hermes plugins install honcho \
+      || warn "memory plugin install failed; re-run: ./scripts/install-memory-plugin.sh"
   fi
 }
 
@@ -273,6 +284,10 @@ main() {
     where="http://${ip}:9119   (LAN; plain HTTP, so keep it on a trusted network)"
   else
     where="http://localhost:9119 after: ssh -L 9119:127.0.0.1:9119 <user>@<this-server>"
+  fi
+  if [ "${ACCESS_MODE:-}" = cloudflare ]; then
+    where="your Cloudflare hostname, once you add the routes (docs/RUNBOOK.md section 3).
+           Until then: $where"
   fi
   cat <<DONE
 
