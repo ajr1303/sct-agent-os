@@ -31,7 +31,12 @@ docker compose cp "$work/wf" "n8n:$IN" >/dev/null
 docker compose exec -T --user root n8n chmod -R a+rX "$IN"
 
 echo "Importing into n8n..."
-docker compose exec -T n8n n8n import:workflow --separate --input="$IN" 2>&1 | tail -n 15
+# n8n 2.x refuses a whole import if any workflow uses a retired step type (the old
+# "Function" node, for example). Allow them for this one command only, so old
+# workflows come across as they were; n8n itself keeps blocking them afterwards,
+# which means such a workflow must have those steps replaced before it can be saved.
+docker compose exec -T -e N8N_DEPRECATED_NODES_BLOCK=false n8n \
+  n8n import:workflow --separate --input="$IN" 2>&1 | grep -v "migration" | tail -n 15
 
 total=$(docker compose exec -T n8n n8n list:workflow 2>/dev/null | grep -c '|' || true)
 on=$(docker compose exec -T n8n n8n list:workflow --active=true 2>/dev/null | grep -c '|' || true)
