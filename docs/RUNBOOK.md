@@ -110,6 +110,18 @@ To give each person their own sign-in (and hide the login page from the internet
 2. Open n8n (Automations → Open builder), create the owner account, then
    Settings → n8n API → create an API key and paste it into the Automations tab.
 
+### Bringing workflows over from another n8n
+If you have exported workflow files (one `.json` per workflow), import them all,
+switched off:
+```bash
+cd /opt/sct-agent-os && sudo ./scripts/n8n-import.sh /path/to/workflow-folder
+```
+Create the n8n owner account first. Credentials are not part of a workflow export:
+add them in n8n, then switch workflows on one at a time. Webhook workflows get new
+URLs on this box's n8n hostname. To carry credentials over as well you need the old
+n8n database **and** its encryption key, set as `N8N_ENCRYPTION_KEY` before n8n is
+first started; that is a restore, not an import, and is not covered by this script.
+
 ## 4. Verify
 
 - Cloudflare tunnel shows **HEALTHY** (Tunnels → your tunnel → Overview).

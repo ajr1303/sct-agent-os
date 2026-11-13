@@ -2,6 +2,13 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.18.2] — 2026-11-12 — Workflow import
+
+- `scripts/n8n-import.sh <folder>` imports exported n8n workflows into the box's
+  n8n with every workflow switched off. It cleans a copy first (removes old
+  owner/tag/version links, keeps ids so workflows that call each other still match)
+  and never changes the source files.
+
 ## [0.18.1] — 2026-11-12 — One-step Paperclip connect
 
 - `scripts/paperclip-connect.sh` links the dashboard to Paperclip: it issues a
