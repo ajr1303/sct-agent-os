@@ -11,7 +11,9 @@ import { createRequire } from "node:module";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 
-const NAME = "Agent OS dashboard";
+// PCKEY_NAME lets an operator issue a separately named key (for a one-off admin task)
+// without revoking the dashboard's own key, which is matched by name below.
+const NAME = (process.env.PCKEY_NAME || "Agent OS dashboard").slice(0, 80);
 const arg = (process.argv[2] || "").trim();
 const fail = (code, msg) => { console.error(msg); process.exit(code); };
 
