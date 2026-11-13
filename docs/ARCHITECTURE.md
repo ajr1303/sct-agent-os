@@ -2,12 +2,12 @@
 
 Suburban Cyber Agent OS is a **layer**, not a fork. The upstream pieces run unmodified:
 
-- **Hermes Agent** (`nousresearch/hermes-agent`) — the agent runtime, gateway, and dashboard (the cockpit).
-- **Paperclip** (built from a pinned commit, `control-plane` profile) — agent orchestration.
-- **n8n** (`automation` profile) — bundled workflow automation.
-- **Honcho** + **Postgres/pgvector** (built from a pinned commit, `memory` profile) — optional long-term memory.
+- **Hermes Agent** (`nousresearch/hermes-agent`, pinned by digest) — the agent runtime, gateway, and dashboard (the cockpit).
+- **Paperclip** (prebuilt from a pinned commit, `control-plane` profile) — agent orchestration.
+- **n8n** (pinned by digest, `automation` profile) — bundled workflow automation.
+- **Honcho** + **Postgres/pgvector** (prebuilt from a pinned commit, `memory` profile) — long-term memory.
 
-Suburban Cyber adds: a dashboard **theme** and **seven dashboard plugins** dropped into the Hermes data dir (`/opt/data` ← `./data/hermes`); an nginx **proxy** that fronts the dashboard and injects branding + the links config; a **connectors** service (FastAPI, Fernet-encrypted SQLite) that bridges email/bookings/n8n/Paperclip; a **gateway-tls** terminator so Paperclip reaches the Hermes runs API over HTTPS (with a per-task run fast-stop via nginx `auth_request`); and an optional **cloudflared** tunnel. Nothing patches Hermes' own code.
+Suburban Cyber adds: a dashboard **theme** and **seven dashboard plugins** dropped into the Hermes data dir (`/opt/data` ← `./data/hermes`); an nginx **proxy** that fronts the dashboard and injects branding, the links config and the sidebar script; a set of **chat tools** (an MCP endpoint in connectors) plus a routing **skill**; a **connectors** service (FastAPI, Fernet-encrypted SQLite) that bridges email/bookings/n8n/Paperclip; a **gateway-tls** terminator so Paperclip reaches the Hermes runs API over HTTPS (with a per-task run fast-stop via nginx `auth_request`); and an optional **cloudflared** tunnel. Nothing patches Hermes' own code.
 
 ```
                          Internet (LLM, GitHub, Docker Hub, Cloudflare)
@@ -18,6 +18,7 @@ Suburban Cyber adds: a dashboard **theme** and **seven dashboard plugins** dropp
   │                ▼                                                                   │
   │   :9119  proxy (nginx) ──► hermes dashboard  ◄── theme + 7 plugins                │
   │             │           └► connectors (/api/connectors/*) ──► n8n / paperclip     │
+  │   hermes ──MCP (bearer, internal only)──► connectors /mcp  (chat tools)           │
   │             │                                                                     │
   │   paperclip ──HTTPS──► gateway-tls :8443 ──► hermes runs API :8642                │
   │     (control-plane)        (auth_request run fast-stop → connectors)              │
@@ -55,7 +56,7 @@ A plugin's `dist/index.js` is a plain IIFE (no bundler). It reads two globals th
 
 - **Overview page** (`override: "/"`): live data from `api.getStatus()` (gateway/version/active sessions/agents), `api.getAnalytics(days)` (sessions, tokens, `total_estimated_cost`), and `api.getProfiles()` (the agent list). The approvals panel is sample data — no approvals API exists.
 - **Branding**: a `MutationObserver` swaps the "HERMES AGENT" sidebar wordmark for the Suburban Cyber logo (a CSS background on an injected element) and sets the tab title.
-- **Nav**: clones a native sidebar link to inject an **Overview** item (pointing at `/`), and relabels **Cron → Scheduled Jobs** and **Profiles → Agents** in the sidebar and page headers.
+- **Nav**: clones a native sidebar link to inject an **Overview** item (Hermes has no tab for `/`), and relabels **Cron → Scheduled Jobs** and **Profiles → Agents**. Ordering and grouping are done by `brand/nav.js` (below), not by plugins.
 
 ## `suburban-chat` plugin
 
@@ -68,8 +69,55 @@ Replaces the built-in terminal chat (`override: "/chat"`) with a bubble UI. The 
 
 This cleanly separates input (PTY) from display (message API). Replies appear once the agent's model actually responds; a provider with exhausted credits returns a billing notice as the assistant message.
 
+## Sidebar (`brand/nav.js`)
+
+Hermes renders built-in tabs and plugin tabs as two separate lists. `nav.js`, loaded
+on every page by the proxy, is the only thing that arranges the sidebar. It never
+moves or clones Hermes' own links (so navigation stays in-app and the active
+highlight works): it flattens the wrappers with `display: contents`, sets CSS `order`
+on each item, hides duplicates and stock list titles, and adds three group headers.
+"Advanced" is collapsible and remembered in `localStorage`. `sct.css` hides the stock
+list until it is arranged and reveals it after 2.5 s regardless, so a script failure
+degrades to the stock sidebar.
+
+## Chat tools (MCP) and routing
+
+`connectors` serves a stateless MCP endpoint (`POST /mcp`, JSON-RPC, bearer token
+`CHAT_TOOLS_TOKEN`). `scripts/sync-chat-tools.sh` writes it into the Hermes config as
+the `agent_os` server (`connectors/mcp_config.py`) and installs the
+`running-the-business` skill. The proxy returns 404 for `/api/connectors/mcp`, so it
+is reachable only inside the Docker network.
+
+| Tool | Purpose |
+|---|---|
+| `list_agents`, `assign_task`, `list_tasks`, `task_status` | Delegation through Paperclip issues |
+| `request_hiring_review` | Task for the CEO agent to propose (never create) a new agent |
+| `complete_task`, `need_owner_input` | An agent closes or parks its own task (caller's Agent ID must match the assignee) |
+| `get_business_profile` | Name and description of the business |
+| `list_workflows`, `get_workflow`, `workflow_failures`, `failed_run_detail` | Read n8n |
+| `create_workflow`, `update_workflow` | Build workflows; always inactive, live ones are not editable |
+| `request_activation` | File an approval request; only the owner's click in Automations activates |
+
+Guardrails are enforced in connectors, not in prompts: no activate tool exists,
+task creation is rate-limited, and against an external Paperclip the delegation
+tools refuse. The routing ladder is repeated in the tool descriptions because the
+skill is not always loaded.
+
+**Run path for delegated tasks:** Paperclip → `gateway-tls` (nginx, `auth_request`
+to connectors `/gateway/authorize`, which meters `POST /v1/runs` per session key and
+denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
+
+## Supply chain
+
+- Hermes and n8n: official images pinned by digest in `docker-compose.yml`.
+- Paperclip and Honcho: `.github/workflows/images.yml` builds each from its pinned
+  commit, unmodified, and pushes to `ghcr.io/<owner>/agent-os-*`. Compose keeps the
+  `build:` context as a fallback. CI checks the workflow's refs match compose.
+- `scripts/show-versions.sh` prints the digests a tested box is running.
+
 ## Operations
 
 - `watchdog.sh` (cron, */5) restarts stopped/unhealthy `agent-os` containers and writes `data/health.json`.
 - `backup.sh` (cron, 03:30) runs `pg_dump` of Honcho into `backups/`, pruning past 14 days.
-- `smoke-test.sh` checks the dashboard (`:9119`), the gateway health (`:8642/health`), Honcho health, and that the theme is installed.
+- `smoke-test.sh` checks the dashboard (`:9119`), the gateway health (`:8642/health`), Honcho, connectors, n8n and Paperclip health, and that the theme is installed.
+- Operator scripts: `set-hostnames.sh`, `paperclip-connect.sh`, `paperclip-reset-password.sh`, `install-memory-plugin.sh`, `show-versions.sh` (see the runbook).

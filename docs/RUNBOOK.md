@@ -16,10 +16,10 @@ the older Hyper-V/LAN walkthrough. Two rules changed from that version:
 | Item | Value |
 |---|---|
 | OS | Ubuntu 22.04/24.04 LTS (or Debian) |
-| vCPU / RAM / disk | 4 vCPU / 16 GB / 80 GB (full stack with memory) |
+| vCPU / RAM / disk | Minimum 4 vCPU / 16 GB / 60 GB. Recommended 8 vCPU / 32 GB / 80 GB+ |
 | Secure Boot | **On** (Microsoft UEFI CA template) |
 | Inbound ports | **None required** with a tunnel. (Direct-TLS mode only: 443.) |
-| Outbound | HTTPS to GitHub, Docker Hub, PyPI, the LLM provider, and (tunnel mode) Cloudflare |
+| Outbound | HTTPS to GitHub (incl. ghcr.io), Docker Hub, PyPI, the LLM provider, and (tunnel mode) Cloudflare |
 
 The box only needs **outbound** access. A tunnel dials out, so you never open a
 port on the client's firewall.
@@ -47,6 +47,16 @@ When it asks **how you'll reach the box**, pick:
 
 The installer prints the dashboard login (`admin` + a generated password), also in
 `.env` as `DASHBOARD_PASSWORD`.
+
+**Entering secrets.** Tunnel token and API key prompts are hidden. Nothing appears
+as you paste; press Enter once. If a key is ever pasted at a visible prompt, or an
+install log containing the dashboard password is shared, rotate it.
+
+**Timing.** With the prebuilt images an install takes a few minutes. If they cannot
+be pulled, Paperclip and Honcho build from source instead (about 35 minutes).
+
+**Hermes setup** runs inside the installer: pick the model provider and, optionally,
+messaging channels. The chat model chosen here is what delegated tasks run on.
 
 ## 3. Cloudflare Tunnel setup (recommended, per client)
 
@@ -106,21 +116,14 @@ To give each person their own sign-in (and hide the login page from the internet
 3. Refresh Orchestration. Agents can now be created.
 
 **n8n**
-1. Decide about restoring an old n8n first (encryption key, see below).
-2. Open n8n (Automations → Open builder), create the owner account, then
-   Settings → n8n API → create an API key and paste it into the Automations tab.
+1. Open n8n (Automations → Open builder) and create the owner account.
+2. In n8n: Settings → n8n API → create an API key and paste it into the Automations
+   tab.
 
-### Bringing workflows over from another n8n
-If you have exported workflow files (one `.json` per workflow), import them all,
-switched off:
-```bash
-cd /opt/sct-agent-os && sudo ./scripts/n8n-import.sh /path/to/workflow-folder
-```
-Create the n8n owner account first. Credentials are not part of a workflow export:
-add them in n8n, then switch workflows on one at a time. Webhook workflows get new
-URLs on this box's n8n hostname. To carry credentials over as well you need the old
-n8n database **and** its encryption key, set as `N8N_ENCRYPTION_KEY` before n8n is
-first started; that is a restore, not an import, and is not covered by this script.
+A fresh n8n starts with its own encryption key. To carry saved credentials over from
+another n8n you need that server's database **and** its encryption key, set as
+`N8N_ENCRYPTION_KEY` before this n8n is first started. Workflows alone can be brought
+over with n8n's own `import:workflow` command; credentials are then re-entered.
 
 ## 4. Verify
 
@@ -135,11 +138,12 @@ first started; that is a restore, not an import, and is not covered by this scri
 1. Provision the VM (§1), Secure Boot on.
 2. Install (§2), access mode = Cloudflare.
 3. Create the tunnel + 3 routes (§3).
-4. Set `.env` + `update.sh` (§3).
-5. Verify (§4).
-6. **Set a hard monthly spend limit at the LLM provider** (Nous Portal, OpenRouter, Anthropic/OpenAI console). That is the real dollar ceiling — see §9.
-7. Set up team sign-in with Cloudflare Access if more than one person will use it (§11).
-8. Hand the client their dashboard URL + login. Rotate the dashboard password first
+4. `set-hostnames.sh` (§3).
+5. First-time Paperclip and n8n setup (§3a); fill in **About your business** and create the first agents from templates.
+6. Verify (§4), including `hermes memory status` (§7).
+7. **Set a hard monthly spend limit at the LLM provider** (Nous Portal, OpenRouter, Anthropic/OpenAI console). That is the real dollar ceiling — see §9.
+8. Set up team sign-in with Cloudflare Access if more than one person will use it (§11).
+9. Hand the client their dashboard URL + login. Rotate the dashboard password first
    if it was ever shown over a non-tunnel connection.
 
 ## 6. Updating
@@ -147,15 +151,30 @@ first started; that is a restore, not an import, and is not covered by this scri
 ```bash
 cd /opt/sct-agent-os && sudo ./scripts/update.sh
 ```
-Pulls `main`, regenerates branding/links, rebuilds `connectors`, restarts the proxy,
-gateway-tls, and cloudflared, and re-enables plugins. `.env` is preserved.
+Pulls `main`, pulls the pinned images, regenerates branding/links, rebuilds
+`connectors`, refreshes the chat tools, restarts Hermes, the proxy and gateway-tls,
+and re-enables plugins. `.env` is preserved. Updating can move a box to newer pinned
+versions of Hermes and n8n, so click through the dashboard afterward.
+
+**Versions are pinned.** Hermes and n8n are locked by image digest in
+`docker-compose.yml`. To adopt a newer upstream version: set `HERMES_IMAGE=` or
+`N8N_IMAGE=` in the test box's `.env`, test, run `sudo ./scripts/show-versions.sh`,
+and put the printed digests into the next release.
 
 ## 7. Memory (Honcho)
 
-Honcho (long-term memory) runs under the `memory` profile and builds from a pinned
-upstream commit on first start (a few minutes). If it's enabled, the install builds
-the `agent-os/honcho` image locally — it is **not** on any registry, so a box must
-build it rather than pull it (handled by the compose build context).
+Honcho (long-term memory) runs under the `memory` profile as three containers. The
+installer also installs the Honcho plugin into Hermes. Verify:
+```bash
+sudo docker compose exec -T hermes hermes memory status
+```
+Expect `Provider: honcho` and `Status: available`. If the plugin is missing or
+unavailable:
+```bash
+sudo ./scripts/install-memory-plugin.sh
+```
+`available` means the plugin started. To confirm recall, tell the agent a fact in one
+chat and ask for it in a new chat.
 
 ## 8. Troubleshooting
 
@@ -169,10 +188,17 @@ build it rather than pull it (handled by the compose build context).
 - **Paperclip/n8n unreachable via tunnel** — confirm the route's Service URL uses the
   compose service name (`paperclip`/`n8n`), and that the hostname is in
   `PAPERCLIP_ALLOWED_HOSTNAMES` (Paperclip) / set as `N8N_HOST` (n8n).
-- **"pull access denied for agent-os/honcho"** — update to the current version; the
-  honcho image is a local build (fixed by the deriver build context).
-- **Honcho plugin "Permission denied /opt/data/plugins"** — fixed; the install step
-  now runs as root to write the bind-mounted plugins dir.
+- **"pull access denied" for a `ghcr.io/ajr1303/agent-os-*` image** — the prebuilt
+  image is not public or not reachable; the stack builds it locally instead. To fix
+  permanently, make the package public in GitHub Packages.
+- **Memory status "not available" / plugin install "Permission denied"** — run
+  `sudo ./scripts/install-memory-plugin.sh`.
+- **"install out of sync (pnpm…)"** on Hermes commands — a Hermes packaging notice;
+  harmless.
+- **Open Paperclip / Open builder go to localhost** — hostnames not set; run
+  `sudo ./scripts/set-hostnames.sh <dashboard-hostname>`.
+- **Sidebar order looks stock or reshuffles** — hard-refresh (Ctrl+Shift+R); the
+  arrangement script is `brand/nav.js`.
 
 ## 9. Spend protection
 
@@ -198,6 +224,10 @@ routing skill. Ask it for help running the business and it will: answer quick
 questions itself, build an n8n workflow for repeatable work, hand judgment work to
 the matching agent, or send the CEO agent a hiring review when no agent fits.
 
+Routing rules the agents follow: recurring work becomes an n8n workflow, not a
+Hermes scheduled job (which runs the model every time); "someone to handle X" is a
+role and goes to a hiring review; money never moves on its own.
+
 What needs the owner:
 - **Turning a workflow on.** Agents build workflows inactive and file a request.
   Approve or decline under **Waiting for your approval** in the Automations tab.
@@ -211,8 +241,8 @@ Orchestration, and at least one agent. A CEO agent is needed for hiring reviews.
 Operations:
 - Setup runs on install/update: `./scripts/sync-chat-tools.sh` (then restart
   Hermes). Check the tools are loaded in the dashboard's MCP tab (`agent_os`).
-- Give another agent profile the n8n tools: add its profile name to
-  `N8N_TOOLS_PROFILES=` in `.env` and run update.
+- Agents run by Paperclip use the default Hermes profile, so they see the same
+  `agent_os` tools as chat, including `complete_task` and `need_owner_input`.
 - Limit how many tasks chat can create: `CHAT_TASKS_PER_HOUR` (default 20).
 - Turn the tools off: blank `CHAT_TOOLS_TOKEN=` in `.env`, remove `agent_os` from
   `data/hermes/config.yaml`, update.

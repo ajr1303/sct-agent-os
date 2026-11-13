@@ -2,15 +2,14 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
-## [0.18.2] — 2026-11-12 — Workflow import
+## [0.18.3] — 2026-11-12 — Documentation refresh
 
-- `scripts/n8n-import.sh <folder>` imports exported n8n workflows into the box's
-  n8n with every workflow switched off. It cleans a copy first (removes old
-  owner/tag/version links, keeps ids so workflows that call each other still match)
-  and never changes the source files. Tested against n8n 2.47.5 with a 139-workflow
-  backup: it also repairs links that point at steps that no longer exist and lets
-  workflows with retired step types through, both of which otherwise make n8n
-  reject the entire import.
+- README, runbook and architecture brought up to date with everything through
+  0.18: chat tools and routing, agent templates, business profile, fixed sidebar,
+  tunnel hostnames, one-step Paperclip connect, memory plugin, pinned versions and
+  prebuilt images, current status and limitations.
+- Removed the n8n workflow import script added in 0.18.2; it was a one-off for
+  Suburban Cyber's own instance and is not part of the product.
 
 ## [0.18.1] — 2026-11-12 — One-step Paperclip connect
 

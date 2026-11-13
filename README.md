@@ -1,8 +1,8 @@
 # Suburban Cyber Agent OS
 
-A branded, self-hosted **agent operating system** for Suburban Cyber Technologies clients — a thin, maintainable layer on top of the open-source [Hermes Agent](https://github.com/NousResearch/hermes-agent) (MIT). It turns a bare Linux box into a running AI-agent platform with a single command: isolated agent runtime, a branded dashboard, a simplified chat, and optional long-term memory.
+A branded, self-hosted **agent operating system** for Suburban Cyber Technologies clients — a thin, maintainable layer on top of the open-source [Hermes Agent](https://github.com/NousResearch/hermes-agent) (MIT). It turns a bare Linux box into a running AI-agent platform with a single command: an isolated agent runtime, a branded dashboard, a chat assistant that delegates work to a team of agents, bundled automations, and long-term memory.
 
-> **What this is:** an installer + a dashboard theme + two dashboard plugins. It does **not** fork Hermes. Hermes and [Honcho](https://github.com/plastic-labs/honcho) are pulled from upstream and run unmodified; everything Suburban Cyber adds lives in `plugins/` and `templates/`. That keeps upstream updates cheap and the custom surface small.
+> **What this is:** an installer, a dashboard theme, seven dashboard plugins, a small connectors service, and the scripts to run it. It does **not** fork anything. [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Paperclip](https://github.com/paperclipai/paperclip), [n8n](https://n8n.io) and [Honcho](https://github.com/plastic-labs/honcho) run unmodified at pinned versions; everything Suburban Cyber adds lives in `plugins/`, `connectors/`, `brand/`, `skills/`, `scripts/` and `templates/`. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ---
 
@@ -18,7 +18,7 @@ That one command:
 
 1. Installs `git` and Docker if they're missing (Docker's official convenience script).
 2. Clones this repo to `/opt/sct-agent-os`.
-3. Runs `install.sh`, which checks the machine, asks a few questions, writes config, pulls the Hermes image, builds Honcho (if memory is enabled), starts everything, installs the theme + plugins, and enables them.
+3. Runs `install.sh`, which checks the machine, asks a few questions (including how you will reach the box), writes config with generated secrets, pulls the pinned images, starts everything, installs the theme, plugins, chat tools and memory plugin, and runs a smoke test.
 
 By default this installs the **full stack** and requires a 16 GB+ box (see [Requirements](#requirements)).
 
@@ -37,16 +37,18 @@ Re-running the command updates the checkout in place. For routine updates, prefe
 
 | Area | Detail |
 |---|---|
-| **Agent runtime** | One isolated Hermes instance in Docker. API server on `127.0.0.1:8642`, dashboard on `9119`. |
-| **Branding** | Suburban Cyber logo in the sidebar, "Suburban Cyber" wordmark, dark-cyan theme, renamed nav (Overview, Scheduled Jobs, Agents). |
-| **Overview page** | Landing page with live gateway status, sessions, token usage, AI spend, your agents, recent activity, and a managed-service card. |
-| **Chat** | The raw Hermes terminal is replaced by a clean, bubble-style chatbot. |
-| **Mailboxes** | Connect multiple email accounts (Gmail, Microsoft 365, any hosted-domain IMAP) and see combined unread/preview in the dashboard. Credentials encrypted at rest. |
-| **Bookings** | Connect a scheduling app (Cal.com, Calendly, Acuity, Setmore, or a Google/Microsoft iCal link) and see combined upcoming appointments. Credentials encrypted at rest. |
-| **Automations** | A bundled, self-hosted **n8n** engine (`automation` profile). The dashboard shows workflow + run status and opens the n8n builder in one click; local workflows run off the token meter. |
-| **Orchestration** | A bundled, headless **Paperclip** control plane (`control-plane` profile). **Create an agent in one flow** (name + model + role) — it provisions the Hermes runtime profile *and* the Paperclip record together. Lists/deletes managed agents; the Overview's "waiting on you" reads Paperclip's real approvals. |
-| **Memory (optional)** | Honcho long-term memory (Postgres + pgvector + deriver), wired into Hermes. |
-| **Operations** | Watchdog cron (every 5 min), nightly database backup (03:30, 14-day retention), a smoke test, and an in-place updater. |
+| **Agent runtime** | One isolated Hermes instance in Docker (pinned to a tested version). Dashboard on `9119`, agent API on `127.0.0.1:8642`. |
+| **Dashboard** | Suburban Cyber branding, favicon and theme. A fixed, grouped sidebar: Overview, Chat · *Your team*: Tasks, Orchestration, Automations · *Connections*: Bookings, Mailboxes · *Advanced* (operator tabs, collapsed). |
+| **Chat** | A clean bubble chat in place of the raw terminal. The chat agent acts as chief of staff: it answers quick questions, builds an automation for repeatable work, hands judgment work to the right agent, or asks the CEO agent for a hiring review. |
+| **Orchestration** | Bundled **Paperclip** control plane. Create an agent from nine starter **templates** (or blank), pause/resume, edit, delete, or **invite** an external agent with a paste-ready prompt. An **About your business** profile is shared with every agent. |
+| **Tasks** | Tasks delegated to agents, their status, replies and files. Agents close their own tasks; runaway tasks are halted automatically and can be released. |
+| **Automations** | Bundled **n8n**. Workflow and run status, one-click open, and **Waiting for your approval**: agents can build workflows but only the owner can switch one on. |
+| **Mailboxes** | Connect email accounts (Gmail, Microsoft 365, any IMAP) and see a combined unread/preview. View-only today. Credentials encrypted at rest. |
+| **Bookings** | Connect a scheduling app (Cal.com, Calendly, Acuity, Setmore, or an iCal link) and see upcoming appointments. View-only today. |
+| **Memory** | Self-hosted Honcho long-term memory (Postgres + pgvector + deriver), wired into Hermes. |
+| **Access** | Loopback by default; SSH tunnel, **Cloudflare Tunnel** (HTTPS, no open ports), or LAN. Per-person team sign-in via Cloudflare Access. |
+| **Spend protection** | Per-task run fast-stop, a task-creation rate limit, and a provider-side monthly limit as the dollar ceiling. |
+| **Operations** | Watchdog (every 5 min), nightly backup (03:30, 14-day retention), smoke test, update check, in-place updater, and one-step scripts for hostnames, Paperclip connect and password reset. |
 
 ---
 
@@ -60,9 +62,9 @@ Agent OS installs the **full stack** — Hermes runtime, branded dashboard, conn
 | RAM | **16 GB** | 32 GB |
 | vCPU | 4 | 8 |
 | Free disk | **60 GB** | 80 GB+ |
-| Network | Outbound HTTPS to Docker Hub, GitHub, and your LLM provider | |
+| Network | Outbound HTTPS to Docker Hub, GitHub (incl. ghcr.io), your LLM provider, and Cloudflare if tunnelled | |
 
-The installer's preflight enforces this and stops early if the box is too small. It also writes `PAPERCLIP_PUBLIC_URL` / `PAPERCLIP_ALLOWED_HOSTNAMES` from the detected host IP so Paperclip's one-time board-key setup works over the LAN out of the box. Numbers are conservative estimates, not yet load-benchmarked.
+The installer's preflight enforces this and stops early if the box is too small. Numbers are conservative estimates, not yet load-benchmarked. Suburban Cyber's own production box runs 8 vCPU / 32 GB.
 
 > **Advanced / development:** `--profiles "..."` installs a subset instead of the full stack (and relaxes the RAM floor to 4 GB). This is an escape hatch for dev boxes, not the supported product shape — a client install is always the full stack.
 
@@ -97,20 +99,13 @@ ssh -L 9119:127.0.0.1:9119 user@server
 
 **3 — Direct LAN / public HTTP (not recommended).** Plain HTTP on your network (`DASHBOARD_BIND=0.0.0.0`). Only on a trusted LAN; prefer option 1 or 2 anywhere else.
 
-To reach n8n or Paperclip directly, use the dashboard's links, an SSH tunnel (`-L 5678:127.0.0.1:5678`, `-L 3100:127.0.0.1:3100`), or give them their own tunnel hostnames (recommended behind a tunnel):
+To reach n8n or Paperclip directly, use the dashboard's links, an SSH tunnel (`-L 5678:127.0.0.1:5678`, `-L 3100:127.0.0.1:3100`), or give them their own tunnel hostnames (recommended behind a tunnel). One command sets every hostname setting and applies it:
 
-- Add two more tunnel routes: a Paperclip host → `http://paperclip:3100` and an n8n host → `http://n8n:5678` (one-level names like `agent-os-paperclip.example.com` get a free cert).
-- In `.env`, set the public URLs and the reverse-proxy flags, then `docker compose up -d`:
-  ```
-  PAPERCLIP_PUBLIC_URL=https://agent-os-paperclip.example.com
-  PAPERCLIP_ALLOWED_HOSTNAMES=paperclip,localhost,127.0.0.1,agent-os-paperclip.example.com
-  N8N_PUBLIC_URL=https://agent-os-n8n.example.com/
-  N8N_PROTOCOL=https
-  N8N_HOST=agent-os-n8n.example.com
-  N8N_SECURE_COOKIE=true
-  N8N_PROXY_HOPS=1
-  ```
-  `sync-branding.sh` writes these into the dashboard so the "Open" buttons point at the tunnel hostnames.
+```bash
+sudo ./scripts/set-hostnames.sh agent-os.example.com
+```
+
+It derives `agent-os-paperclip.example.com` and `agent-os-n8n.example.com` (one-level names, so the free Cloudflare certificate covers them), writes the settings to `.env`, prints the three tunnel routes to create, and runs the updater. Details in [docs/RUNBOOK.md](docs/RUNBOOK.md) §3.
 
 **Login:** the installer generates a random dashboard password (user `admin`) and prints it at the end; it's also stored in `/opt/sct-agent-os/.env` as `DASHBOARD_PASSWORD`. Change it there and restart to rotate.
 
@@ -157,39 +152,39 @@ Each account is verified with a live API call before it's saved, credentials are
 
 ## Automations (bundled n8n)
 
-Agent OS ships its **own fresh [n8n](https://n8n.io) instance** (the `automation` compose profile, on by default). It is never a migration of an existing instance — it starts empty on a dedicated volume with its own encryption key.
+Agent OS ships its **own fresh [n8n](https://n8n.io) instance** (the `automation` compose profile, on by default), pinned to a tested version, on a dedicated volume with its own encryption key.
 
-- **Builder:** n8n runs on port `5678` (bound to the same address as the dashboard). The **Automations** page opens it in one click.
-- **At a glance:** once you create an n8n API key (n8n › Settings › n8n API) and paste it into the Automations page, the dashboard shows your workflows (active/inactive), recent run status, and counts — read through n8n's public API via the connectors service, so the key stays server-side.
-- **Why local automations:** scheduled jobs, data moves, and glue work run on your server instead of going through the model on every step — that's the token-saving layer.
+- **Builder:** the **Automations** page opens n8n in one click (via the tunnel hostname when configured).
+- **At a glance:** create an n8n API key (n8n › Settings › n8n API) and paste it into the Automations page; the dashboard then shows workflows, recent runs and counts through the connectors service, so the key stays server-side.
+- **Built from chat:** the chat agent and the Automation Engineer agent can list workflows, read failed runs and build new workflows. Workflows are always created **inactive**; switching one on needs the owner's approval under **Waiting for your approval**. Live workflows cannot be edited by agents.
+- **Why workflows:** repeatable work runs on your server instead of through a model on every step. The routing rules prefer a workflow over an agent or a scheduled AI job whenever the steps are the same each time.
 
 To run without n8n, remove `automation` from `COMPOSE_PROFILES` in `.env` and `docker compose up -d`.
 
-> First run: open the builder once to create your owner account and the API key. Auto-provisioning that key (so the engine is zero-touch) is a planned enhancement. Native TLS/subdomain + single sign-on for n8n land with the HTTPS roadmap item.
-
 ## Orchestration (bundled Paperclip)
 
-With the `control-plane` profile, Agent OS bundles its **own fresh [Paperclip](https://github.com/paperclipai/paperclip)** instance — the agent-orchestration layer (org chart, task/issue assignment, schedules, budgets, approvals, audit ledger). It is **not** a migration of any existing instance.
+With the `control-plane` profile, Agent OS bundles its **own fresh [Paperclip](https://github.com/paperclipai/paperclip)** instance: the management layer (org chart, tasks, approvals, audit ledger). **Hermes runs the agents; Paperclip manages them; the dashboard is the cockpit.**
 
-The model is **one cockpit, two engines**:
+**First-time setup**
 
-- **Hermes** is the engine room — where an agent actually runs (model, tools, chat, sessions).
-- **Paperclip** is the management office — it drives agents, it doesn't run them. It ships a Hermes adapter for exactly this.
-- **The Agent OS dashboard is the cockpit.** Paperclip runs in `authenticated` mode with a private LAN bind (off the public internet).
+1. Open Paperclip from the Orchestration page and create the owner account.
+2. On the box: `sudo ./scripts/paperclip-connect.sh`. This issues a non-expiring Paperclip board key for the owner and stores it in the dashboard's encrypted key store without displaying it. (Paperclip has no screen for creating board keys.)
+3. Refresh Orchestration.
 
-The **Orchestration** page is the unified cockpit:
+**What the page does**
 
-- **Create an agent in one flow** — name + **model** + **role** (CEO, CTO, …). This provisions a real **Hermes profile** with your chosen model (so it appears in the Agents tab and works in Chat) *and* registers a linked **Paperclip** record with the role. The same agent shows up in both the Agents tab (configure) and Orchestration (manage).
-- **List and delete** managed agents (delete terminates first, then removes both the Paperclip record and the matching Hermes profile).
-- The **Overview's "Waiting on you"** panel reads Paperclip's real attention feed (approvals, decisions, reviews, failed runs, budget alerts, agent errors), and the Overview's agent tile/roster reflects the Paperclip-managed agents with their roles.
+- **Create an agent** from a template (Automation Engineer, Front Desk, Lead Qualifier, Customer Support, Social Media Manager, Review & Reputation, Bookkeeping Assistant, IT Helpdesk, CEO) or from scratch. Templates are in `connectors/agent_templates.json`.
+- **Invite an agent** that already runs elsewhere: generates a paste-ready, single-use prompt (72 hours); approve the join under Waiting on you.
+- **Pause / resume / edit / delete** agents, and resume the company if it was paused.
+- **About your business:** name and a free-text description every agent can read, attached to every task created from chat.
 
-Model selection lives on the Hermes side (`createProfile` sets it inline); Paperclip owns role, org, approvals, tasks, and the audit ledger.
+**How delegated work runs.** A task assigned to an agent is executed by Paperclip through the Hermes gateway. Agents finish with `complete_task` or park the task with `need_owner_input`. All Paperclip-run agents currently execute on Hermes' **default profile**, so the model chosen when creating an agent applies to chatting with that agent's profile, not to its delegated tasks.
 
-**One-time setup:** because Paperclip runs authenticated, the dashboard reads it with a **board API key**. Open Paperclip once (published on `:3100`, bound to the same address as the dashboard), create your owner account and a board key, and paste it into the Orchestration page — same pattern as the n8n key. After that the dashboard is the cockpit. Set `PAPERCLIP_PUBLIC_URL` and add your LAN host to `PAPERCLIP_ALLOWED_HOSTNAMES` in `.env` so the browser can reach the UI. (Auto-provisioning the key so this stays fully zero-touch is a planned enhancement.)
+**Spend protection.** Paperclip's dollar budget is off by default because it cannot price Hermes runs and pauses the company at $0. Protection comes from the per-task run fast-stop (`RUN_MAX_ATTEMPTS`), the chat task limit (`CHAT_TASKS_PER_HOUR`) and a hard monthly limit at the LLM provider. See [docs/RUNBOOK.md](docs/RUNBOOK.md) §9.
 
-**Connect-to-existing (optional):** a lab already running Paperclip can point the bridge at it instead of the bundled one — set `PAPERCLIP_URL` (and `PAPERCLIP_API_KEY`, `PAPERCLIP_COMPANY_ID`) in `.env`. That path is **observe-only by design**: the bridge is GET-only, so Agent OS reads status but never approves, acts, or changes anything on an instance it doesn't own.
+**Connect-to-existing (optional):** point the bridge at an existing Paperclip with `PAPERCLIP_URL` (and `PAPERCLIP_API_KEY`, `PAPERCLIP_COMPANY_ID`). That path is **read-only by design**: Agent OS shows status but never creates tasks, approves or changes anything on an instance it does not own.
 
-> Paperclip builds from source (a Node monorepo) on first start, so the initial `control-plane` build is heavy. Native TLS/SSO is a later phase. The current create flow builds and links agents; **activating a paused agent so it executes work through the Hermes gateway** (runtime model/provider wiring) is the next phase.
+Forgot the Paperclip password? `sudo ./scripts/paperclip-reset-password.sh`.
 
 ## Hosting clients
 
@@ -206,12 +201,12 @@ The installer checks the box meets spec, generates all per-client secrets (dashb
 With `--memory honcho` (the default; `--memory basic` skips it), the stack adds:
 
 - `honcho-db` — Postgres 16 + pgvector.
-- `honcho-api` — Honcho API, built from a pinned upstream commit.
+- `honcho-api` — Honcho API, an unmodified build of a pinned upstream commit.
 - `honcho-deriver` — the background worker that derives long-term memory.
 
-Honcho is configured to use **your** LLM provider for all nine of its model slots (deriver, summary, both dream stages, and five dialectic levels) plus embeddings — see `install.sh` / `templates/honcho.json.tmpl`. A cost preset (economy / balanced / deep) tunes how often and how deeply memory is derived.
+The installer installs the Honcho plugin into Hermes and points it at the local service. Check with `docker compose exec -T hermes hermes memory status` (expect `Provider: honcho`, `Status: available`); repair with `sudo ./scripts/install-memory-plugin.sh`.
 
-Honcho is built unmodified from upstream source at a pinned commit; its AGPL-3.0 license applies to Honcho itself, not to this installer or your agent configuration.
+Honcho uses **your** LLM provider for its model slots and embeddings; a cost preset (economy / balanced / deep) tunes how often and how deeply memory is derived. Honcho's AGPL-3.0 license applies to Honcho itself, not to this installer or your agent configuration.
 
 ---
 
@@ -221,7 +216,7 @@ Honcho is built unmodified from upstream source at a pinned commit; its AGPL-3.0
 cd /opt/sct-agent-os && sudo ./scripts/update.sh
 ```
 
-Pulls the latest repo, re-syncs the theme and plugins with correct permissions, rebuilds local services, restarts, and re-enables the plugins. This updates **everything** — including the pinned versions of Hermes, Honcho, Paperclip, and n8n — because the repo is the single source of truth. Then hard-refresh the dashboard (Ctrl+Shift+R).
+Pulls the latest repo, re-syncs the theme and plugins with correct permissions, rebuilds local services, restarts, and re-enables the plugins. This updates **everything**, including the pinned versions of Hermes, n8n, Paperclip and Honcho, because the repo is the single source of truth. Hermes and n8n are pinned by image digest; Paperclip and Honcho come as prebuilt images from this repo's container registry (built from pinned commits by `.github/workflows/images.yml`), falling back to a local build if they cannot be pulled. To move to a newer upstream version, test it on a test box, run `scripts/show-versions.sh` there, and update the pins in a release. Then hard-refresh the dashboard (Ctrl+Shift+R).
 
 > Note: `update.sh` pulls a new copy of itself; if the update script *itself* changed, run it a second time so the new logic takes effect.
 
@@ -237,57 +232,74 @@ The release marker is the repo's **`VERSION`** file: bump it (and tag/release) w
 
 ```
 get.sh                      One-line bootstrap (installs Docker/git, clones, runs install.sh)
-install.sh                  Interactive installer (preflight, config, first run, cron, smoke test)
-docker-compose.yml          Hermes + optional Honcho (db/api/deriver) under a "memory" profile
-scripts/
-  sync-branding.sh          Copies themes + plugins into the Hermes data dir with correct perms
-  update.sh                 In-place update + restart
-  watchdog.sh               Restarts stopped/unhealthy containers (cron, every 5 min)
-  backup.sh                 Nightly pg_dump of Honcho (cron, 03:30, 14-day retention)
-  smoke-test.sh             Post-install health checks
-templates/
-  dashboard-themes/         suburban-cyber.yaml (dark) + suburban-cyber-light.yaml
-  honcho.json.tmpl          Hermes↔Honcho wiring
-  honcho-init.sql           pgvector extension
+install.sh                  Interactive installer (preflight, access mode, config, first run, cron, smoke test)
+docker-compose.yml          The whole stack; profiles: memory, automation, control-plane, tunnel
+VERSION / CHANGELOG.md      Release marker and history
+THIRD_PARTY_NOTICES.md      Upstream projects, licenses and how each is used
+brand/                      Logo, favicons, sct.css, login.js, nav.js (sidebar arrangement)
 connectors/
-  app.py                    Connectors service (FastAPI): mailboxes + IMAP, encrypted storage, Hermes-cookie auth
-  Dockerfile, requirements.txt
+  app.py                    Connectors service (FastAPI): mail, bookings, n8n and Paperclip bridges,
+                            run fast-stop ledger, chat tools (MCP), workflow approvals, business profile
+  agent_templates.json      Starter agents for the Create panel
+  mcp_config.py             Writes the chat-tools entry into the Hermes config
 plugins/
-  suburban-cyber/           Overview page, branding, logo, nav rename (dashboard plugin)
-  suburban-chat/            Bubble chat that replaces the terminal (dashboard plugin)
-  suburban-mail/            Mailboxes page: connect email accounts, combined inbox (dashboard plugin)
-  suburban-bookings/        Bookings page: connect a scheduling app, upcoming appointments (dashboard plugin)
-  suburban-automations/     Automations page: embedded n8n status, workflows, one-click open (dashboard plugin)
-  suburban-orchestration/   Orchestration page: unified create-agent (Hermes profile + Paperclip role), list/delete (dashboard plugin)
-docs/ARCHITECTURE.md        How the layer works, incl. the chat integration
+  suburban-cyber/           Overview page, branding
+  suburban-chat/            Bubble chat
+  suburban-orchestration/   Agents: templates, invite, pause/resume, business profile
+  suburban-tasks/           Delegated tasks, halted-task release
+  suburban-automations/     n8n status, workflow approvals
+  suburban-mail/            Mailboxes
+  suburban-bookings/        Bookings
+skills/agent-os/            Routing skill for the chat agent (running-the-business)
+scripts/
+  update.sh                 In-place update + restart
+  set-hostnames.sh          Set all tunnel hostname settings in one step
+  paperclip-connect.sh      Link the dashboard to Paperclip (issues + stores the board key)
+  paperclip-reset-password.sh  Reset a Paperclip login
+  install-memory-plugin.sh  Install/repair the Honcho memory plugin
+  show-versions.sh          Print the upstream image digests a box is running (for pinning)
+  sync-branding.sh          Copy theme, plugins and brand files; generate links.js
+  sync-chat-tools.sh        Install the chat-tools config and routing skill
+  enable-plugins.sh, gen-tls.sh, watchdog.sh, backup.sh, smoke-test.sh, check-updates.sh
+templates/                  nginx configs, dashboard themes, Honcho wiring
+.github/workflows/          check.yml (lint, compose validation), images.yml (prebuilt images)
+docs/RUNBOOK.md             Operator runbook: install, tunnel, first-time setup, logins, troubleshooting
+docs/ARCHITECTURE.md        How the layer works
 ```
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the plugins hook into the Hermes dashboard and how the bubble chat talks to the gateway.
 
 ---
 
 ## Status
 
-**v0.3 — working, validated by in-place updates on a test VM.** Verified live: install/start, theme, branding/logo, nav renames, Overview with real data, and the bubble chat (send + render round-trip) on Hermes v0.22.7.
+**v0.18 — a clean one-command install has been run end to end** on a fresh 8 vCPU / 32 GB VM (Hermes v0.23.1, n8n 2.47.5) and reached through a Cloudflare Tunnel.
 
-Not yet done / known limitations:
+Verified live:
 
-- A **from-scratch one-command install** has not been run end-to-end yet (iterated via in-place updates); that's the next validation.
-- The Overview **"Waiting on you" approvals** panel is **sample data**, clearly tagged — Hermes has no dashboard approvals API, so a real approval queue would be a separate build.
-- "Time saved" / review-schedule lines in the managed card are illustrative until wired to real sources.
-- A reverse proxy now serves the dashboard and brands the login page; HTTPS termination on that proxy is the next step.
-- The **Mailboxes** email connector (IMAP, multi-account) and **Bookings** connector (Cal.com / Calendly / Acuity / Setmore / iCal) are verified live. OAuth sign-in and agent send/triage/booking actions are not built yet.
-- The bundled **n8n** automation engine runs on its own port with its own login (TLS/subdomain + SSO pending the HTTPS work); the API key that powers the dashboard view is pasted once (auto-provisioning planned).
-- The bundled **Paperclip** control plane (`control-plane` profile) builds from source and runs headless. The unified create-agent flow (Hermes profile + Paperclip role, with model/role pickers), agent delete, and the Overview's real "waiting on you" + managed-agent roster are all working and verified on the test VM. **Activate-and-run** (executing work on a paused agent through the gateway) is the next phase.
-- The installer is **full-stack-or-nothing**: it requires 16 GB / 60 GB and refuses a too-small box rather than degrading (`--profiles` is an advanced subset escape hatch). A from-scratch one-command install has **not yet been run end-to-end on a fresh box** — that's the next validation (everything so far was verified via in-place updates).
+- Install, theme, branding, fixed sidebar, Overview, bubble chat.
+- Cloudflare Tunnel for the dashboard, Paperclip and n8n.
+- Agent templates, create/pause/resume, invite prompt, company resume.
+- Chat delegation end to end: chat assigns a task, the agent delivers it; the Automation Engineer built an inactive n8n workflow and the approval gate held.
+- Per-task run fast-stop, with halted tasks released from the Tasks page.
+- Honcho memory plugin installed and reporting available.
+
+Known limitations:
+
+- **Bookings and Mailboxes are view-only.** Agents cannot yet book appointments or send/draft email.
+- **Per-agent model choice does not apply to delegated tasks** (all Paperclip runs use the default Hermes profile).
+- **The dashboard has one shared login.** Per-person sign-in comes from Cloudflare Access in front of it; per-person roles are not built.
+- **Task completion by agents and the business profile** are built but not yet verified on a live box.
+- **Workflow failures do not surface in "Waiting on you"** on their own; the chat agent or Automation Engineer reads them on request.
+- **Token and cost figures** in the dashboard are incomplete (they exclude auxiliary model calls); the provider's own usage page is the source of truth.
+- n8n's license (Sustainable Use License) limits some commercial uses; review it for your deployment.
 
 ## Roadmap
 
-- First-run setup wizard in the dashboard.
-- Remote access with HTTPS (reverse proxy / Tailscale) and cloud-init for hosted clients.
-- Multi-conversation history in the chat.
-- Real approval queue + per-client managed-service config.
-- Uninstall path and an installable ISO.
+- Single sign-in for the dashboard (verify Cloudflare Access tokens at the proxy; the `admin` password stays as fallback).
+- Ready-made workflow templates in Automations.
+- Tab-by-tab redesign for non-technical owners, an Overview "Today" rail, a calendar view in Bookings, and owner/staff roles.
+- Agent actions for bookings and email, with owner approval.
+- Run each agent's tasks under its own Hermes profile (per-agent models).
+- Security backlog: signed/verified install, network segmentation, off-box backups, Content Security Policy.
 
 ---
 
@@ -295,8 +307,12 @@ Not yet done / known limitations:
 
 | Component | License | Notes |
 |---|---|---|
-| Suburban Cyber installer, scripts, plugins, themes | MIT | This repository |
-| Hermes Agent | MIT | Pulled as an upstream Docker image, unmodified |
-| Honcho | AGPL-3.0 | Built from upstream source at a pinned commit, unmodified |
+| Suburban Cyber installer, scripts, plugins, connectors, themes | MIT | This repository |
+| Hermes Agent | MIT | Official image, pinned by digest, unmodified |
+| Paperclip | MIT | Unmodified build of a pinned commit |
+| Honcho | AGPL-3.0 | Unmodified build of a pinned commit |
+| n8n | Sustainable Use License | Official image, pinned by digest, not redistributed |
+
+Full details in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 © 2026 Suburban Cyber Technologies LLC.
