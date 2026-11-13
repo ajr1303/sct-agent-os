@@ -2,6 +2,16 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.18.0] — 2026-11-12 — Hermes and n8n pinned
+
+- Hermes and n8n are now pinned by image digest to the builds verified on the
+  production box: **Hermes Agent v0.23.1 (2026.9.24)** and **n8n 2.47.5**. New
+  installs no longer take whatever `latest` is that day. (Two boxes installed days
+  apart had already drifted from Hermes 0.22.7 to 0.23.1.)
+- `HERMES_TAG` / `N8N_TAG` in `.env` are no longer used; override with
+  `HERMES_IMAGE` / `N8N_IMAGE` if a box must differ.
+- Updating an older box moves it to these versions.
+
 ## [0.17.2] — 2026-11-12 — One-step hostnames
 
 - `scripts/set-hostnames.sh <dashboard-hostname>` writes all the tunnel hostname

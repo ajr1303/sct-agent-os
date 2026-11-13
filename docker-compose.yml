@@ -1,8 +1,11 @@
 name: agent-os
 services:
   hermes:
-    # Pin with HERMES_IMAGE (ideally by digest) so every install runs the tested build.
-    image: ${HERMES_IMAGE:-nousresearch/hermes-agent:${HERMES_TAG:-latest}}
+    # Pinned by digest so every install runs the build this release was tested on
+    # (Hermes Agent v0.23.1, 2026.9.24). To upgrade: test the new image on the test
+    # box, run scripts/show-versions.sh there, and replace the digest here.
+    # Override per box with HERMES_IMAGE in .env.
+    image: ${HERMES_IMAGE:-nousresearch/hermes-agent@sha256:276d44685c65c0cb2a25f190b63c65c8906f9dc76486fb1c05ae71b5826bda08}
     container_name: agent-os-hermes
     restart: unless-stopped
     command: gateway run
@@ -139,7 +142,8 @@ services:
   n8n:
     profiles: ["automation"]
     # Pulled from n8n's official registry (not mirrored: see THIRD_PARTY_NOTICES.md).
-    image: ${N8N_IMAGE:-n8nio/n8n:${N8N_TAG:-latest}}
+    # Pinned by digest: n8n 2.47.5. Upgrade the same way as Hermes above.
+    image: ${N8N_IMAGE:-n8nio/n8n@sha256:e29e9cc965a16d07d989f115f729f8a1c7aff58688d4850247fa495d4d7aae2f}
     container_name: agent-os-n8n
     restart: unless-stopped
     ports:
