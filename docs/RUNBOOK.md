@@ -76,23 +76,15 @@ names** (`proxy`, `paperclip`, `n8n`), which `cloudflared` reaches over the inte
 network even though those ports are loopback-only on the host.
 
 ### Configure the box
-In `/opt/sct-agent-os/.env`:
-```
-ACCESS_MODE=cloudflare
-CLOUDFLARE_TUNNEL_TOKEN=<token from above>
-# so the dashboard's Open buttons and the services use the tunnel hostnames:
-PAPERCLIP_PUBLIC_URL=https://<client>-agentos-paperclip.suburbancyber.com
-PAPERCLIP_ALLOWED_HOSTNAMES=paperclip,localhost,127.0.0.1,<client>-agentos-paperclip.suburbancyber.com
-N8N_PUBLIC_URL=https://<client>-agentos-n8n.suburbancyber.com/
-N8N_PROTOCOL=https
-N8N_HOST=<client>-agentos-n8n.suburbancyber.com
-N8N_SECURE_COOKIE=true
-N8N_PROXY_HOPS=1
-```
-Add `,tunnel` to the `COMPOSE_PROFILES=` line, then:
+One command sets every hostname setting and applies it. Give it the dashboard
+hostname; it derives the `-paperclip` and `-n8n` names shown above:
 ```bash
-cd /opt/sct-agent-os && sudo ./scripts/update.sh
+cd /opt/sct-agent-os && sudo ./scripts/set-hostnames.sh <client>-agentos.suburbancyber.com
 ```
+It backs up `.env`, replaces any existing values, prints the three routes to create
+in Cloudflare, and runs `update.sh`. (If the installer was not run in Cloudflare
+mode, also set `ACCESS_MODE=cloudflare`, `CLOUDFLARE_TUNNEL_TOKEN=` and add `,tunnel`
+to `COMPOSE_PROFILES=` in `.env` first.)
 
 ### Team sign-in
 To give each person their own sign-in (and hide the login page from the internet), put

@@ -2,6 +2,14 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.17.2] — 2026-11-12 — One-step hostnames
+
+- `scripts/set-hostnames.sh <dashboard-hostname>` writes all the tunnel hostname
+  settings (Paperclip and n8n public URLs, allowed hosts, n8n proxy settings) and
+  applies them, replacing seven hand-edited `.env` lines.
+- `/orchestration/company` returns a clear "not connected" instead of a 500 on a
+  box where Paperclip has not been connected yet.
+
 ## [0.17.1] — 2026-11-12 — Memory plugin fixes from the first clean install
 
 - Memory plugin install no longer fails with a permission error: the plugins

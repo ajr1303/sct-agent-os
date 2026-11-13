@@ -1323,7 +1323,12 @@ def get_company(_auth=Depends(require_auth)):
     """Company-level run state. When the company is paused (manually, or by the
     budget hard-stop), every agent shows paused with reason company_paused and
     agent-level resume has no effect until the company is resumed."""
-    cid = _pc_company_id()
+    try:
+        cid = _pc_company_id()
+    except PermissionError:
+        raise HTTPException(status_code=409, detail="Paperclip is not connected yet.")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Could not reach Paperclip: " + str(e)[:140])
     if not cid:
         raise HTTPException(status_code=400, detail="No Paperclip company found.")
     return _company_brief(_pc_send("GET", "/api/companies/" + _safe_id(cid), what="read the company"))
