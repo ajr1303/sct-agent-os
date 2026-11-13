@@ -2,14 +2,28 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.19.0] — 2026-11-12 — Turn workflows on and off from the dashboard
+
+- **Automations: Turn on / Turn off per workflow.** Turning one on takes two clicks
+  (it can send email, post or publish); turning off is immediate. n8n's own reason
+  is shown if it refuses (no trigger, missing credential, retired step). This is an
+  owner action in the dashboard; agents still have no way to activate a workflow.
+- Workflow list now loads every workflow (it stopped at 100), sorts active first,
+  marks archived ones, and gains a filter box for long lists.
+- **Overview "managed" card no longer carries built-in names or dates.** It shows
+  `OPERATOR_NAME` / `SUPPORT_CONTACT` from `.env` when set and nothing otherwise;
+  the non-functional "Request a change" button is gone.
+- Docs and examples use neutral hostnames and addresses (`example.com`,
+  documentation IP ranges) throughout.
+
 ## [0.18.3] — 2026-11-12 — Documentation refresh
 
 - README, runbook and architecture brought up to date with everything through
   0.18: chat tools and routing, agent templates, business profile, fixed sidebar,
   tunnel hostnames, one-step Paperclip connect, memory plugin, pinned versions and
   prebuilt images, current status and limitations.
-- Removed the n8n workflow import script added in 0.18.2; it was a one-off for
-  Suburban Cyber's own instance and is not part of the product.
+- Removed the n8n workflow import script added in 0.18.2; it is not part of the
+  product.
 
 ## [0.18.1] — 2026-11-12 — One-step Paperclip connect
 
@@ -22,8 +36,8 @@ All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
 ## [0.18.0] — 2026-11-12 — Hermes and n8n pinned
 
-- Hermes and n8n are now pinned by image digest to the builds verified on the
-  production box: **Hermes Agent v0.23.1 (2026.9.24)** and **n8n 2.47.5**. New
+- Hermes and n8n are now pinned by image digest to the builds verified on a
+  clean install: **Hermes Agent v0.23.1 (2026.9.24)** and **n8n 2.47.5**. New
   installs no longer take whatever `latest` is that day. (Two boxes installed days
   apart had already drifted from Hermes 0.22.7 to 0.23.1.)
 - `HERMES_TAG` / `N8N_TAG` in `.env` are no longer used; override with

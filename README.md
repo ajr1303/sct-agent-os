@@ -1,6 +1,6 @@
 # Suburban Cyber Agent OS
 
-A branded, self-hosted **agent operating system** for Suburban Cyber Technologies clients — a thin, maintainable layer on top of the open-source [Hermes Agent](https://github.com/NousResearch/hermes-agent) (MIT). It turns a bare Linux box into a running AI-agent platform with a single command: an isolated agent runtime, a branded dashboard, a chat assistant that delegates work to a team of agents, bundled automations, and long-term memory.
+A branded, self-hosted **agent operating system** from Suburban Cyber Technologies: a thin, maintainable layer on top of the open-source [Hermes Agent](https://github.com/NousResearch/hermes-agent) (MIT). It turns a bare Linux box into a running AI-agent platform with a single command: an isolated agent runtime, a branded dashboard, a chat assistant that delegates work to a team of agents, bundled automations, and long-term memory.
 
 > **What this is:** an installer, a dashboard theme, seven dashboard plugins, a small connectors service, and the scripts to run it. It does **not** fork anything. [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Paperclip](https://github.com/paperclipai/paperclip), [n8n](https://n8n.io) and [Honcho](https://github.com/plastic-labs/honcho) run unmodified at pinned versions; everything Suburban Cyber adds lives in `plugins/`, `connectors/`, `brand/`, `skills/`, `scripts/` and `templates/`. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
@@ -42,7 +42,7 @@ Re-running the command updates the checkout in place. For routine updates, prefe
 | **Chat** | A clean bubble chat in place of the raw terminal. The chat agent acts as chief of staff: it answers quick questions, builds an automation for repeatable work, hands judgment work to the right agent, or asks the CEO agent for a hiring review. |
 | **Orchestration** | Bundled **Paperclip** control plane. Create an agent from nine starter **templates** (or blank), pause/resume, edit, delete, or **invite** an external agent with a paste-ready prompt. An **About your business** profile is shared with every agent. |
 | **Tasks** | Tasks delegated to agents, their status, replies and files. Agents close their own tasks; runaway tasks are halted automatically and can be released. |
-| **Automations** | Bundled **n8n**. Workflow and run status, one-click open, and **Waiting for your approval**: agents can build workflows but only the owner can switch one on. |
+| **Automations** | Bundled **n8n**. Workflow and run status, **turn workflows on and off** from the dashboard, one-click open, and **Waiting for your approval**: agents can build workflows but only the owner can switch one on. |
 | **Mailboxes** | Connect email accounts (Gmail, Microsoft 365, any IMAP) and see a combined unread/preview. View-only today. Credentials encrypted at rest. |
 | **Bookings** | Connect a scheduling app (Cal.com, Calendly, Acuity, Setmore, or an iCal link) and see upcoming appointments. View-only today. |
 | **Memory** | Self-hosted Honcho long-term memory (Postgres + pgvector + deriver), wired into Hermes. |
@@ -64,7 +64,7 @@ Agent OS installs the **full stack** — Hermes runtime, branded dashboard, conn
 | Free disk | **60 GB** | 80 GB+ |
 | Network | Outbound HTTPS to Docker Hub, GitHub (incl. ghcr.io), your LLM provider, and Cloudflare if tunnelled | |
 
-The installer's preflight enforces this and stops early if the box is too small. Numbers are conservative estimates, not yet load-benchmarked. Suburban Cyber's own production box runs 8 vCPU / 32 GB.
+The installer's preflight enforces this and stops early if the box is too small. Numbers are conservative estimates, not yet load-benchmarked.
 
 > **Advanced / development:** `--profiles "..."` installs a subset instead of the full stack (and relaxes the RAM floor to 4 GB). This is an escape hatch for dev boxes, not the supported product shape — a client install is always the full stack.
 
@@ -186,15 +186,20 @@ With the `control-plane` profile, Agent OS bundles its **own fresh [Paperclip](h
 
 Forgot the Paperclip password? `sudo ./scripts/paperclip-reset-password.sh`.
 
-## Hosting clients
+## Hosting it for clients
 
-The long-term model is **managed hosting**: Suburban Cyber spins up the full stack per client on an individual VPS. Each client gets their own box and their own isolated stack — nothing is shared.
+Agent OS is built so a consultant or MSP can run one isolated box per client: each
+client gets their own VM and their own stack, and nothing is shared between them.
 
-A per-client provision is the standard install on a 16 GB+ VPS (full stack is the default), with access served over a **Cloudflare Tunnel** under Suburban Cyber's own account — a branded HTTPS URL, no open ports at the client, and a free cert. The client never needs a Cloudflare account; all tunnels are managed from one dashboard.
+A per-client provision is the standard install on a 16 GB+ VM, reached over a
+**Cloudflare Tunnel** under the operator's own Cloudflare account: a branded HTTPS
+URL, no open ports at the client, and a free certificate. The client never needs a
+Cloudflare account. Optionally set `OPERATOR_NAME=` and `SUPPORT_CONTACT=` in `.env`
+to show who manages the box on the Overview page.
 
-**See [docs/RUNBOOK.md](docs/RUNBOOK.md)** for the full per-client checklist: VM prep (Secure Boot on), install, tunnel + route creation, the `.env` settings for the dashboard/Paperclip/n8n hostnames, and verification.
-
-The installer checks the box meets spec, generates all per-client secrets (dashboard password, API/encryption keys, Paperclip secrets), prints the dashboard login, and brings the full stack up — everything bound to loopback behind the tunnel.
+**See [docs/RUNBOOK.md](docs/RUNBOOK.md)** for the full per-client checklist: VM prep
+(Secure Boot on), install, tunnel and routes, hostnames, first-time setup, team
+sign-in and verification.
 
 ## Memory (Honcho)
 
@@ -271,7 +276,7 @@ docs/ARCHITECTURE.md        How the layer works
 
 ## Status
 
-**v0.18 — a clean one-command install has been run end to end** on a fresh 8 vCPU / 32 GB VM (Hermes v0.23.1, n8n 2.47.5) and reached through a Cloudflare Tunnel.
+**v0.19 — a clean one-command install has been run end to end** on a fresh VM (Hermes v0.23.1, n8n 2.47.5) and reached through a Cloudflare Tunnel.
 
 Verified live:
 

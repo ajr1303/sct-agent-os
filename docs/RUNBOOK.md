@@ -1,4 +1,4 @@
-# Suburban Cyber Agent OS — Deployment Runbook
+# Agent OS — Deployment Runbook
 
 The operator runbook for standing up and hosting an Agent OS box. This supersedes
 the older Hyper-V/LAN walkthrough. Two rules changed from that version:
@@ -60,17 +60,17 @@ messaging channels. The chat model chosen here is what delegated tasks run on.
 
 ## 3. Cloudflare Tunnel setup (recommended, per client)
 
-All tunnels live under the **one** Suburban Cyber Cloudflare account. The client
+All tunnels live under the **operator's** one Cloudflare account. The client
 never needs an account. One tunnel + one set of hostnames per box.
 
-**DNS prerequisite:** the domain you publish under (e.g. `suburbancyber.com`) must
+**DNS prerequisite:** the domain you publish under (e.g. `example.com`) must
 be on Cloudflare DNS. Per-client hostnames use one level so the free Universal SSL
-cert covers them (`acme-agentos.suburbancyber.com`, not a nested
-`acme.agentos.suburbancyber.com`, which would need Advanced Certificate Manager).
+cert covers them (`acme-agentos.example.com`, not a nested
+`acme.agentos.example.com`, which would need Advanced Certificate Manager).
 
 ### Create the tunnel
 1. Cloudflare → **Zero Trust → Networks → Tunnels → Create a tunnel → Cloudflared**.
-2. Name it for the box (e.g. `sct-aos-acme`). Save.
+2. Name it for the box (e.g. `agentos-acme`). Save.
 3. Copy the **token** from the install screen (ignore their install command — we run
    our own `cloudflared` container).
 
@@ -89,7 +89,7 @@ network even though those ports are loopback-only on the host.
 One command sets every hostname setting and applies it. Give it the dashboard
 hostname; it derives the `-paperclip` and `-n8n` names shown above:
 ```bash
-cd /opt/sct-agent-os && sudo ./scripts/set-hostnames.sh <client>-agentos.suburbancyber.com
+cd /opt/sct-agent-os && sudo ./scripts/set-hostnames.sh <client>-agentos.example.com
 ```
 It backs up `.env`, replaces any existing values, prints the three routes to create
 in Cloudflare, and runs `update.sh`. (If the installer was not run in Cloudflare
@@ -128,7 +128,7 @@ over with n8n's own `import:workflow` command; credentials are then re-entered.
 ## 4. Verify
 
 - Cloudflare tunnel shows **HEALTHY** (Tunnels → your tunnel → Overview).
-- `https://<client>-agentos.suburbancyber.com` loads the dashboard over real HTTPS.
+- `https://<client>-agentos.example.com` loads the dashboard over real HTTPS.
 - "Open Paperclip" / "Open builder" open the Paperclip/n8n hostnames (fresh login
   at each — new host = new session; n8n logs in by **email**, not `admin`).
 - `sudo docker compose ps` — all services healthy.
@@ -158,7 +158,7 @@ versions of Hermes and n8n, so click through the dashboard afterward.
 
 **Versions are pinned.** Hermes and n8n are locked by image digest in
 `docker-compose.yml`. To adopt a newer upstream version: set `HERMES_IMAGE=` or
-`N8N_IMAGE=` in the test box's `.env`, test, run `sudo ./scripts/show-versions.sh`,
+`N8N_IMAGE=` in a test box's `.env`, test, run `sudo ./scripts/show-versions.sh`,
 and put the printed digests into the next release.
 
 ## 7. Memory (Honcho)
@@ -269,7 +269,7 @@ passwords to reset. Menu names below are as of late 2026 and may move.
 2. **Create the application:** Access controls → Applications → Add web
    applications → **Self-hosted public application**.
    - Name: `<client> Agent OS`
-   - Domain: the dashboard hostname, e.g. `<client>-agentos.suburbancyber.com`
+   - Domain: the dashboard hostname, e.g. `<client>-agentos.example.com`
    - Session duration: 24 hours is a reasonable default for office staff.
 3. **Policy:** action **Allow**, include **Emails** (list each person) or **Emails
    ending in** `@clientdomain.com`. Add your own operator address.

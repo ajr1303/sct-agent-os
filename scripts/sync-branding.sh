@@ -50,12 +50,14 @@ pc_url=""; n8n_url=""
 if [ -f .env ]; then
   pc_url=$(sed -n 's/^PAPERCLIP_PUBLIC_URL=//p' .env | tail -n1)
   n8n_url=$(sed -n 's/^N8N_PUBLIC_URL=//p' .env | tail -n1)
+  op_name=$(sed -n 's/^OPERATOR_NAME=//p' .env | tail -n1)
+  op_support=$(sed -n 's/^SUPPORT_CONTACT=//p' .env | tail -n1)
 fi
 esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 aos_ver=$(tr -cd '0-9.' < VERSION 2>/dev/null)
 cat > "$H/brand/links.js" <<JS
 window.__SCT_LINKS__ = { "paperclip": "$(esc "$pc_url")", "n8n": "$(esc "$n8n_url")" };
-window.__SCT_BRAND__ = { "version": "$(esc "$aos_ver")" };
+window.__SCT_BRAND__ = { "version": "$(esc "$aos_ver")", "operator": "$(esc "${op_name:-}")", "support": "$(esc "${op_support:-}")" };
 JS
 
 chmod 755 "$H/brand"; chmod 644 "$H/brand/"*

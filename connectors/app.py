@@ -743,15 +743,63 @@ def automations_disconnect(_auth=Depends(require_auth)):
 
 @app.get("/automations/workflows")
 def automations_workflows(_auth=Depends(require_auth)):
+    wfs, cursor = [], None
     try:
-        data = _n8n_api("/api/v1/workflows", params={"limit": 100})
+        for _ in range(8):  # n8n pages at most 250 at a time
+            params = {"limit": 250}
+            if cursor:
+                params["cursor"] = cursor
+            data = _n8n_api("/api/v1/workflows", params=params)
+            wfs.extend(data.get("data") or [])
+            cursor = data.get("nextCursor")
+            if not cursor:
+                break
     except PermissionError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail="Could not reach n8n: " + str(e)[:140])
-    wfs = data.get("data") or []
-    out = [{"id": w.get("id"), "name": w.get("name") or "Workflow", "active": bool(w.get("active"))} for w in wfs]
+    out = [{"id": w.get("id"), "name": w.get("name") or "Workflow", "active": bool(w.get("active")),
+            "archived": bool(w.get("isArchived"))} for w in wfs]
+    out.sort(key=lambda w: (not w["active"], w["archived"], w["name"].lower()))
     return {"count": len(out), "active": sum(1 for w in out if w["active"]), "workflows": out}
+
+
+def _set_workflow_active(wid, on):
+    if not re.match(r"^[A-Za-z0-9_-]{1,64}$", str(wid)):
+        raise HTTPException(status_code=400, detail="Bad workflow id.")
+    conn = _n8n_conn()
+    if not conn:
+        raise HTTPException(status_code=400, detail="No n8n API key connected yet.")
+    try:
+        with httpx.Client(timeout=30.0) as c:
+            r = c.post(conn["base_url"] + "/api/v1/workflows/" + str(wid) + ("/activate" if on else "/deactivate"),
+                       headers={"X-N8N-API-KEY": conn["api_key"]}, json={})
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Could not reach n8n: " + str(e)[:140])
+    if r.status_code in (401, 403):
+        raise HTTPException(status_code=400, detail="n8n rejected the stored API key. Reconnect it below.")
+    if r.status_code == 404:
+        raise HTTPException(status_code=404, detail="n8n no longer has that workflow.")
+    if r.status_code >= 400:
+        try:
+            msg = (r.json() or {}).get("message") or r.text
+        except Exception:
+            msg = r.text
+        # n8n explains why (no trigger step, missing credential, retired step...).
+        raise HTTPException(status_code=400, detail="n8n would not " + ("turn it on" if on else "turn it off")
+                            + ": " + _scrub_secrets(str(msg))[:300])
+    return {"ok": True, "id": str(wid), "active": bool(on)}
+
+
+@app.post("/automations/workflows/{wid}/activate")
+def activate_workflow(wid: str, _auth=Depends(require_auth)):
+    """Owner action from the dashboard. Agents have no equivalent tool."""
+    return _set_workflow_active(wid, True)
+
+
+@app.post("/automations/workflows/{wid}/deactivate")
+def deactivate_workflow(wid: str, _auth=Depends(require_auth)):
+    return _set_workflow_active(wid, False)
 
 
 @app.get("/automations/executions")

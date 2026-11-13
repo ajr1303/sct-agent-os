@@ -4,6 +4,11 @@
   var BRAND = "Suburban Cyber";
 
   // Illustrative content for panels Hermes has no API for (approvals) + static managed-service info.
+  // Optional, set per install in .env (OPERATOR_NAME / SUPPORT_CONTACT) and
+  // published by sync-branding.sh. Nothing is shown when they are not set.
+  var BR = (typeof window !== "undefined" && window.__SCT_BRAND__) || {};
+  var OPERATOR = String(BR.operator || "").slice(0, 60);
+  var SUPPORT = String(BR.support || "").slice(0, 80);
   var SAMPLE = {
     approvals: [
       { agent: "Front Desk", risk: "medium", title: "Send 3 overdue-invoice reminders",
@@ -11,7 +16,7 @@
       { agent: "Books", risk: "high", title: "Delete 214 spam messages older than 90 days",
         detail: "Permanent deletion is always held for review. Nothing is removed until you approve." }
     ],
-    managed: { engineer: "Anibal Rodriguez", lastReview: "Last security review · Sept 30", backup: "Agent memory backup · nightly" }
+    managed: { backup: "Memory backup · nightly" }
   };
 
   function whenReady(cb, tries) {
@@ -202,13 +207,11 @@
                       h("span", null, String(title).slice(0, 60)));
                   })),
             h("div", { className: "sc-managed" },
-              h("div", { className: "sc-managed-h" }, "MANAGED BY SUBURBAN CYBER"),
-              h("div", { className: "sc-managed-row" }, h("span", { className: "sc-muted" }, "Your engineer"), h("span", null, SAMPLE.managed.engineer)),
+              h("div", { className: "sc-managed-h" }, OPERATOR ? "MANAGED BY " + OPERATOR.toUpperCase() : "YOUR SYSTEM"),
+              SUPPORT ? h("div", { className: "sc-managed-row" }, h("span", { className: "sc-muted" }, "Support"), h("span", null, SUPPORT)) : null,
               h("div", { className: "sc-managed-row" }, h("span", { className: "sc-muted" }, "Active sessions"), h("span", null, activeSessions == null ? "—" : String(activeSessions))),
               h("div", { className: "sc-managed-row" }, h("span", { className: "sc-muted" }, "Hermes version"), h("span", null, version || "—")),
-              h("div", { className: "sc-managed-sub" }, SAMPLE.managed.lastReview),
-              h("div", { className: "sc-managed-sub" }, SAMPLE.managed.backup),
-              h("button", { className: "sc-btn sc-btn-primary sc-managed-cta" }, "Request a change"))
+              h("div", { className: "sc-managed-sub" }, SAMPLE.managed.backup))
           )
         ),
         h("div", { className: "sc-foot" }, "Suburban Cyber Agent OS · built on Hermes Agent (Nous Research)")

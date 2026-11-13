@@ -52,6 +52,20 @@
       s = useState(false); var busy = s[0], setBusy = s[1];
       s = useState(null);  var err = s[0], setErr = s[1];
       s = useState(null);  var reqs = s[0], setReqs = s[1];
+      s = useState("");    var wfQ = s[0], setWfQ = s[1];
+      s = useState(null);  var wfBusy = s[0], setWfBusy = s[1];
+      s = useState(null);  var wfArm = s[0], setWfArm = s[1];   // id waiting for a second click
+      s = useState(null);  var wfErr = s[0], setWfErr = s[1];
+      // Turning a workflow ON can send email, post or publish, so it takes two
+      // clicks. Turning one off is immediate.
+      function toggleWf(w) {
+        setWfErr(null);
+        if (!w.active && wfArm !== w.id) { setWfArm(w.id); return; }
+        setWfArm(null); setWfBusy(w.id);
+        api("/automations/workflows/" + encodeURIComponent(w.id) + (w.active ? "/deactivate" : "/activate"), { method: "POST" })
+          .then(function () { setWfBusy(null); loadData(); })
+          .catch(function (e) { setWfBusy(null); setWfErr({ id: w.id, msg: String(e.message || e) }); });
+      }
       s = useState(null);  var reqBusy = s[0], setReqBusy = s[1];
       s = useState(null);  var reqErr = s[0], setReqErr = s[1];
 
@@ -170,11 +184,25 @@
               h("div", { className: "sa-panel-h" }, "WORKFLOWS"),
               wf == null ? h("div", { className: "sa-empty" }, "Loading…")
                 : wfs.length === 0 ? h("div", { className: "sa-empty" }, "No workflows yet. Open the builder to create one.")
-                : h("div", { className: "sa-list" }, wfs.map(function (w, i) {
-                    return h("div", { className: "sa-wf", key: i },
-                      h("span", { className: "sa-wf-name" }, w.name),
-                      h("span", { className: "sa-wf-state " + (w.active ? "on" : "off") }, w.active ? "active" : "inactive"));
-                  })))),
+                : h("div", null,
+                    wfs.length > 8 ? h("input", { className: "sa-wf-filter", value: wfQ, placeholder: "Filter " + wfs.length + " workflows…",
+                      onChange: function (e) { setWfQ(e.target.value); } }) : null,
+                    h("div", { className: "sa-list sa-wf-list" }, wfs.filter(function (w) {
+                      return !wfQ || String(w.name).toLowerCase().indexOf(wfQ.toLowerCase()) !== -1;
+                    }).map(function (w) {
+                      var busy = wfBusy === w.id, armed = wfArm === w.id;
+                      return h("div", { className: "sa-wf-wrap", key: w.id },
+                        h("div", { className: "sa-wf" },
+                          h("span", { className: "sa-wf-name", title: w.name }, w.name, w.archived ? h("span", { className: "sa-wf-arch" }, " archived") : null),
+                          h("span", { className: "sa-wf-acts" },
+                            h("span", { className: "sa-wf-state " + (w.active ? "on" : "off") }, w.active ? "active" : "inactive"),
+                            w.archived ? null : h("button", { type: "button", disabled: busy,
+                              className: "sa-btn sa-wf-btn" + (armed ? " sa-primary" : ""),
+                              onClick: function () { toggleWf(w); },
+                              onBlur: function () { if (armed) setWfArm(null); } },
+                              busy ? "Working…" : w.active ? "Turn off" : armed ? "Confirm turn on" : "Turn on"))),
+                        wfErr && wfErr.id === w.id ? h("div", { className: "sa-msg sa-err sa-wf-err" }, wfErr.msg) : null);
+                    }))))),
           h("div", { className: "sa-col" },
             h("div", { className: "sa-panel" },
               h("div", { className: "sa-panel-h" }, "RECENT RUNS"),
