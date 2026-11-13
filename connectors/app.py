@@ -894,7 +894,7 @@ def orchestration_connect(c: PcConnect, _auth=Depends(require_auth)):
     except Exception as e:
         raise HTTPException(status_code=502, detail="Could not reach Paperclip: " + str(e)[:140])
     if r.status_code in (401, 403):
-        raise HTTPException(status_code=400, detail="Paperclip rejected that board API key. Copy a company board key from Paperclip › Settings.")
+        raise HTTPException(status_code=400, detail="Paperclip rejected that board API key. On the server, run: sudo ./scripts/paperclip-connect.sh")
     try:
         r.raise_for_status()
     except Exception as e:

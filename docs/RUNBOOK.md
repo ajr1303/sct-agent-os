@@ -90,6 +90,26 @@ to `COMPOSE_PROFILES=` in `.env` first.)
 To give each person their own sign-in (and hide the login page from the internet), put
 **Cloudflare Access** in front of the box. See §11.
 
+## 3a. First-time Paperclip and n8n setup
+
+**Paperclip**
+1. Open Paperclip (dashboard → Orchestration → Open Paperclip) and create the owner
+   account.
+2. On the box, link the dashboard to it:
+   ```bash
+   cd /opt/sct-agent-os && sudo ./scripts/paperclip-connect.sh
+   ```
+   This issues a Paperclip board key for the owner and stores it in the dashboard's
+   encrypted key store. The key is never displayed. (Paperclip has an API for board
+   keys but no screen to create one, and keys made through its own flow expire after
+   30 days; this one does not.) Re-run it any time to replace the key.
+3. Refresh Orchestration. Agents can now be created.
+
+**n8n**
+1. Decide about restoring an old n8n first (encryption key, see below).
+2. Open n8n (Automations → Open builder), create the owner account, then
+   Settings → n8n API → create an API key and paste it into the Automations tab.
+
 ## 4. Verify
 
 - Cloudflare tunnel shows **HEALTHY** (Tunnels → your tunnel → Overview).
@@ -129,6 +149,8 @@ build it rather than pull it (handled by the compose build context).
 
 - **cloudflared "Unsupported" in the Cloudflare panel** — the pinned tag aged out.
   Set `CLOUDFLARED_TAG=<current>` in `.env` and `docker compose up -d cloudflared`.
+- **Orchestration says Paperclip rejected the request / not connected** — run
+  `sudo ./scripts/paperclip-connect.sh` (the stored key is missing, revoked or expired).
 - **Forgot the Paperclip password** — `sudo ./scripts/paperclip-reset-password.sh` (lists
   accounts, hidden prompt for the new password). Paperclip has no reset email.
 - **n8n login rejects `admin`** — n8n logs in by the owner **email**, not username.

@@ -2,6 +2,15 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.18.1] — 2026-11-12 — One-step Paperclip connect
+
+- `scripts/paperclip-connect.sh` links the dashboard to Paperclip: it issues a
+  board key for the owner account and stores it in the dashboard's encrypted key
+  store without ever displaying it. The dashboard used to tell you to create a
+  board key under Paperclip's Settings, but this Paperclip version has no such
+  screen. The key does not expire (Paperclip's default is 30 days).
+- Orchestration's connect steps and error message now point at the script.
+
 ## [0.18.0] — 2026-11-12 — Hermes and n8n pinned
 
 - Hermes and n8n are now pinned by image digest to the builds verified on the
