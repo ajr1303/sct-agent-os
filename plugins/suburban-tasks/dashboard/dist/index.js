@@ -63,6 +63,10 @@
       s = useState(null);  var err = s[0], setErr = s[1];
       s = useState([]);    var blocked = s[0], setBlocked = s[1];  // tasks halted by the fast-stop
       s = useState(null);  var unblk = s[0], setUnblk = s[1];      // session_key being unblocked
+      s = useState("");    var reply = s[0], setReply = s[1];      // owner reply being typed
+      s = useState(false); var rBusy = s[0], setRBusy = s[1];
+      s = useState(null);  var rErr = s[0], setRErr = s[1];
+      s = useState(false); var askCancel = s[0], setAskCancel = s[1];
 
       function loadList() {
         return api("/orchestration/tasks").then(function (d) { setList(d); setErr(null); return d; })
@@ -85,7 +89,25 @@
           .then(function (d) { setDLoad(false); setDetail(d); })
           .catch(function (e) { setDLoad(false); setDetail({ key: key, messages: [], deliverables: [], errors: [String(e.message || e)] }); });
       }
-      function open(key) { setSel(key); setDetail(null); loadDetail(key); }
+      function open(key) { setSel(key); setDetail(null); setReply(""); setRErr(null); setAskCancel(false); loadDetail(key); }
+      function isClosed(st) { return /^(done|cancelled)$/.test(String(st || "").toLowerCase()); }
+      function after(p) {
+        return p.then(function () { setRBusy(false); setAskCancel(false); return Promise.all([loadDetail(sel), loadList()]); })
+          .catch(function (e) { setRBusy(false); setRErr(String(e.message || e)); });
+      }
+      function sendReply(e, closed) {
+        if (e) e.preventDefault();
+        var text = reply.trim();
+        if (!text || rBusy) return;
+        setRBusy(true); setRErr(null);
+        after(api("/orchestration/tasks/" + encodeURIComponent(sel) + "/reply",
+          { method: "POST", body: JSON.stringify({ text: text, reopen: !!closed }) }).then(function () { setReply(""); }));
+      }
+      function setTaskStatus(st) {
+        if (rBusy) return;
+        setRBusy(true); setRErr(null);
+        after(api("/orchestration/tasks/" + encodeURIComponent(sel) + "/status", { method: "POST", body: JSON.stringify({ status: st }) }));
+      }
 
       useEffect(function () {
         loadList(); loadBlocked();
@@ -167,10 +189,40 @@
               cur.agentName ? h("span", { className: "st-agent" }, cur.agentName) : null,
               h("a", { className: "st-link", href: pcTaskUrl(sel), target: "_blank", rel: "noopener" }, "View in Paperclip ↗"))),
           dLoad && !d ? h("div", { className: "st-empty" }, "Loading…") : null,
-          h("div", { className: "st-section-h" }, "Output"),
+          d && d.description ? h("div", { className: "st-ask" },
+            h("div", { className: "st-section-h" }, "What was asked"),
+            h("div", { className: "st-ask-text" }, d.description)) : null,
+          h("div", { className: "st-section-h" }, "Conversation"),
           msgs.length === 0
             ? h("div", { className: "st-empty st-sm" }, dLoad ? "Loading…" : "No messages yet — the agent may still be working.")
             : h("div", { className: "st-thread" }, msgs.map(msg)),
+          d && d.can_reply ? (function () {
+            var st = d.issue_status || cur.status, closed = isClosed(st), who = cur.agentName || "the agent";
+            return h("form", { className: "st-reply", onSubmit: function (e) { sendReply(e, closed); } },
+              h("textarea", { className: "st-reply-in", value: reply, maxLength: 8000, rows: 3,
+                placeholder: closed ? "Reply to reopen this task and send " + who + " back to work…" : "Reply to " + who + "…",
+                onChange: function (e) { setReply(e.target.value); },
+                onKeyDown: function (e) { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) sendReply(e, closed); } }),
+              rErr ? h("div", { className: "st-msgbar st-err" }, rErr) : null,
+              h("div", { className: "st-reply-row" },
+                h("span", { className: "st-reply-hint" }, /^backlog$/i.test(String(st || ""))
+                  ? "This task is in the backlog: your reply is saved, but nobody starts on it until it is scheduled."
+                  : cur.agentName
+                  ? (closed ? "Sending reopens the task and wakes " + who + "." : who + " is woken to read your reply.")
+                  : "No agent is assigned, so nobody is woken by a reply."),
+                h("span", { className: "st-reply-acts" },
+                  askCancel
+                    ? h("span", { className: "st-confirm" }, "Cancel this task?",
+                        h("button", { type: "button", className: "st-btn st-danger", disabled: rBusy, onClick: function () { setTaskStatus("cancelled"); } }, "Yes, cancel it"),
+                        h("button", { type: "button", className: "st-btn", onClick: function () { setAskCancel(false); } }, "Keep"))
+                    : closed
+                      ? h("button", { type: "button", className: "st-btn", disabled: rBusy, onClick: function () { setTaskStatus("todo"); } }, "Reopen")
+                      : h("span", { className: "st-reply-acts" },
+                          h("button", { type: "button", className: "st-btn", disabled: rBusy, onClick: function () { setAskCancel(true); } }, "Cancel task"),
+                          h("button", { type: "button", className: "st-btn", disabled: rBusy, onClick: function () { setTaskStatus("done"); } }, "Mark done")),
+                  h("button", { type: "submit", className: "st-btn st-primary", disabled: rBusy || !reply.trim() },
+                    rBusy ? "Sending…" : (closed ? "Reply & reopen" : "Send reply")))));
+          })() : null,
           h("div", { className: "st-section-h" }, "Deliverables"),
           dels.length === 0
             ? h("div", { className: "st-empty st-sm" }, "No files produced for this task.")
@@ -212,7 +264,7 @@
         err ? h("div", { className: "st-msgbar st-err" }, err) : null,
         blockedBanner(),
         h("div", { className: "st-cols" }, listPane(), detailPane()),
-        h("div", { className: "st-foot" }, "Read-only view of your agents' work. Open a task in Paperclip for approvals, the full history, and file downloads."));
+        h("div", { className: "st-foot" }, "Reply, reopen, finish or cancel a task here. Approvals, the full history and file downloads still open in Paperclip."));
     }
 
     try { PLUGINS.register("suburban-tasks", Tasks); console.info(TAG, "registered"); }

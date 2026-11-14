@@ -2,6 +2,17 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.21.0] — 2026-11-14 — Answer tasks from the dashboard
+
+- **Tasks: reply, reopen, mark done and cancel without opening Paperclip.** A reply
+  is posted to the task as the owner and Paperclip wakes the assigned agent to
+  read it. Replying on a finished or cancelled task reopens it. Cancelling takes
+  two clicks. The task's original request is now shown above the conversation.
+- New endpoints `POST /orchestration/tasks/{key}/reply` and `/status` (owner
+  session only; refused when the install is connected to an external Paperclip in
+  read-only mode). Task keys are validated before they reach Paperclip.
+- Approvals, full history and file downloads still open in Paperclip.
+
 ## [0.20.0] — 2026-11-14 — Team chart
 
 - **Orchestration: team chart.** A new panel draws who reports to whom from

@@ -1538,7 +1538,16 @@ def task_detail(key: str, _auth=Depends(require_auth)):
     """One task's output: the message thread + deliverable files + latest run status."""
     if not _pc_key():
         raise HTTPException(status_code=400, detail="Connect Paperclip first (board API key).")
-    out = {"key": key, "status": None, "messages": [], "deliverables": [], "errors": []}
+    key = _safe_id(key)
+    out = {"key": key, "status": None, "messages": [], "deliverables": [], "errors": [],
+           "description": None, "issue_status": None, "can_reply": _pc_mode() != "external"}
+    try:
+        iss = _pc_get("/api/issues/" + key)
+        if isinstance(iss, dict):
+            out["description"] = _strip_footer(str(iss.get("description") or ""))[:6000] or None
+            out["issue_status"] = iss.get("status")
+    except Exception as e:
+        out["errors"].append("task: " + str(e)[:100])
     try:
         cm = _pc_get("/api/issues/" + key + "/recent-comments")
         comments = cm.get("comments") if isinstance(cm, dict) else cm
@@ -1567,6 +1576,52 @@ def task_detail(key: str, _auth=Depends(require_auth)):
     except Exception:
         pass
     return out
+
+
+class TaskReply(BaseModel):
+    text: str
+    reopen: bool = False
+
+
+class TaskStatus(BaseModel):
+    status: str
+
+
+_OWNER_TASK_STATUS = {"done": "mark the task done", "todo": "reopen the task", "cancelled": "cancel the task"}
+
+
+def _task_writable():
+    if _pc_mode() == "external":
+        raise HTTPException(status_code=400, detail="This install is connected to an external Paperclip in "
+                            "read-only mode. Reply to the task in that Paperclip.")
+
+
+@app.post("/orchestration/tasks/{key}/reply")
+def task_reply(key: str, body: TaskReply, _auth=Depends(require_auth)):
+    """Owner reply on a task, posted as a board comment. Paperclip wakes the
+    assigned agent on a new comment; `reopen` puts a finished task back to work."""
+    _task_writable()
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Write a reply first.")
+    if len(text) > 8000:
+        raise HTTPException(status_code=400, detail="That reply is too long (8,000 characters max).")
+    payload = {"body": text}
+    if body.reopen:
+        payload["reopen"] = True
+    _pc_send("POST", "/api/issues/" + _safe_id(key) + "/comments", payload, what="post the reply")
+    return {"ok": True}
+
+
+@app.post("/orchestration/tasks/{key}/status")
+def task_set_status(key: str, body: TaskStatus, _auth=Depends(require_auth)):
+    """Owner-only status changes from the Tasks tab: done, reopen (todo), cancel."""
+    _task_writable()
+    st = (body.status or "").strip().lower()
+    if st not in _OWNER_TASK_STATUS:
+        raise HTTPException(status_code=400, detail="Status must be one of: done, todo, cancelled.")
+    d = _pc_send("PATCH", "/api/issues/" + _safe_id(key), {"status": st}, what=_OWNER_TASK_STATUS[st])
+    return {"ok": True, "status": (d.get("status") if isinstance(d, dict) else None) or st}
 
 
 class BudgetSet(BaseModel):
