@@ -2,6 +2,23 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.22.0] — 2026-11-14 — Agents page
+
+- **New Agents page** under *Your team*: every agent Paperclip manages, wherever it
+  runs, with its status, title and where it runs. Open one to edit name, title,
+  role, who it reports to, what it does and its main instructions, or to pause and
+  resume it. Changes are saved to Paperclip and used from the agent's next task.
+- Instructions are read from and saved to the agent's main instruction file when
+  it has one; Paperclip refuses the save if the file changed since it was loaded.
+  Agents created from this dashboard keep their inline instructions.
+- An agent that runs on this server cannot be renamed here (its name links it to
+  its Hermes profile).
+- Hermes' built-in Profiles page is now labelled **Hermes profiles** (Advanced). It
+  only ever listed profiles on this server, which is why agents on other machines
+  never appeared there.
+- Gateway address, keys, budgets, extra instruction files and run history stay in
+  Paperclip.
+
 ## [0.21.1] — 2026-11-14 — Documentation
 
 - README, runbook and architecture updated for the team chart and task replies.

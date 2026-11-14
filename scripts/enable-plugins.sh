@@ -14,7 +14,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 
-AOS_PLUGINS="suburban-cyber suburban-chat suburban-mail suburban-bookings suburban-automations suburban-orchestration suburban-tasks"
+AOS_PLUGINS="suburban-cyber suburban-chat suburban-mail suburban-bookings suburban-automations suburban-orchestration suburban-tasks suburban-agents"
 warn() { echo "  ! $*" >&2; }
 
 wait_for_hermes() {

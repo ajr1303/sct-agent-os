@@ -292,7 +292,7 @@
           var inSidebar = r.left < 240, inHeader = r.top < 150 && r.left >= 240 && r.width < 700;
           if (!inSidebar && !inHeader) continue;
           if (t === "cron") n.nodeValue = "Scheduled Jobs";
-          else if (t === "profiles") n.nodeValue = "Agents";
+          else if (t === "profiles") n.nodeValue = "Hermes profiles";
           else if (t === "sessions" && inHeader && location.pathname === "/") n.nodeValue = "Overview";
         }
       } catch (e) {}

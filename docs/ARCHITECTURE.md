@@ -118,6 +118,12 @@ denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
   assignee) and `POST /orchestration/tasks/{key}/status` accepts `done`, `todo` or
   `cancelled`. Both require the dashboard session, validate the key, and are refused
   in external (read-only) mode.
+- **Agents page** (`suburban-agents`, tab `/team`): `GET /orchestration/team` lists every
+  non-terminated agent; `GET`/`PUT /orchestration/team/{id}` read and save name, title,
+  role, `reportsTo`, `capabilities` and instructions. Instructions are the agent's entry
+  instruction file when it has one (saved with the hash that was loaded, so a stale
+  edit is refused), otherwise the inline `adapterConfig.instructions` our own agents
+  use. Local agents (gateway on this box) cannot be renamed. Refused in external mode.
 - **Company selection:** first company Paperclip lists, or `PAPERCLIP_COMPANY_ID`.
 
 ## Supply chain

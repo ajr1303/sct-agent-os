@@ -24,6 +24,7 @@ import email
 import datetime
 from email.header import decode_header, make_header
 from contextlib import closing
+from urllib.parse import urlparse, quote
 
 import httpx
 from dateutil import parser as dtparse
@@ -1223,6 +1224,143 @@ def update_agent(aid: str, a: AgentUpdate, _auth=Depends(require_auth)):
     if r.status_code >= 400:
         raise HTTPException(status_code=400, detail="Paperclip could not update the agent: " + _scrub_secrets(r.text)[:240])
     return {"ok": True}
+
+
+# --- Agents page: every Paperclip agent, with the fields the owner edits ------
+
+def _agent_host(ac):
+    """Where an agent's gateway lives, for display. Local = this box's own Hermes."""
+    url = str((ac or {}).get("apiBaseUrl") or (ac or {}).get("url") or "")
+    host = ""
+    try:
+        host = (urlparse(url).hostname or "") if url else ""
+    except Exception:
+        host = ""
+    local = (not host) or ("." not in host) or host in ("localhost", "127.0.0.1")
+    return host, local
+
+
+def _agent_row(a):
+    ac = a.get("adapterConfig") if isinstance(a.get("adapterConfig"), dict) else {}
+    host, local = _agent_host(ac)
+    return {"id": a.get("id"), "name": a.get("name") or "Agent", "title": a.get("title"),
+            "role": a.get("role") or "general", "status": a.get("status"),
+            "pause_reason": a.get("pauseReason"), "reports_to": a.get("reportsTo"),
+            "capabilities": a.get("capabilities"), "adapter": a.get("adapterType"),
+            "runs_on": "This server" if local else host, "local": local,
+            "last_active": a.get("lastHeartbeatAt"), "url_key": a.get("urlKey")}
+
+
+def _agent_instructions(aid, ac):
+    """Instructions as the owner sees them in Paperclip: the agent's entry
+    instruction file when it has one, else the inline text our own agents use."""
+    try:
+        b = _pc_get("/api/agents/" + aid + "/instructions-bundle")
+        entry = b.get("entryFile") if isinstance(b, dict) else None
+        files = [f.get("path") for f in (b.get("files") or []) if isinstance(f, dict)] if isinstance(b, dict) else []
+        if entry and entry in files:
+            f = _pc_get("/api/agents/" + aid + "/instructions-bundle/file?path=" + quote(entry, safe=""))
+            if isinstance(f, dict) and isinstance(f.get("content"), str):
+                return {"source": "file", "path": entry, "hash": f.get("contentHash"),
+                        "text": f["content"][:200000], "other_files": max(0, len(files) - 1)}
+    except Exception:
+        pass
+    inline = ac.get("instructions") if isinstance(ac, dict) else None
+    if isinstance(inline, str) and inline.strip():
+        return {"source": "inline", "path": None, "hash": None, "text": _strip_footer(inline), "other_files": 0}
+    return {"source": None, "path": None, "hash": None, "text": "", "other_files": 0}
+
+
+@app.get("/orchestration/team")
+def team_list(_auth=Depends(require_auth)):
+    if not _pc_up():
+        return {"paperclip_up": False, "agents": [], "can_edit": False}
+    try:
+        cid = _pc_company_id()
+    except PermissionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Could not reach Paperclip: " + str(e)[:140])
+    if not cid:
+        return {"paperclip_up": True, "agents": [], "can_edit": False}
+    ag = _pc_get("/api/companies/" + str(cid) + "/agents")
+    items = ag if isinstance(ag, list) else (ag.get("agents") or ag.get("data") or [])
+    rows = [_agent_row(a) for a in items if isinstance(a, dict) and str(a.get("status")) != "terminated"]
+    rows.sort(key=lambda r: str(r["name"]).lower())
+    return {"paperclip_up": True, "company_id": cid, "agents": rows[:200], "can_edit": _pc_mode() != "external"}
+
+
+@app.get("/orchestration/team/{aid}")
+def team_get(aid: str, _auth=Depends(require_auth)):
+    aid = _safe_id(aid)
+    d = _pc_send("GET", "/api/agents/" + aid, what="read the agent")
+    row = _agent_row(d if isinstance(d, dict) else {})
+    row["instructions"] = _agent_instructions(aid, d.get("adapterConfig") if isinstance(d, dict) else {})
+    row["can_edit"] = _pc_mode() != "external"
+    return row
+
+
+class TeamUpdate(BaseModel):
+    name: str | None = None
+    title: str | None = None
+    role: str | None = None
+    reports_to: str | None = None        # "" clears the manager
+    capabilities: str | None = None
+    instructions: str | None = None
+    instructions_hash: str | None = None  # what the editor loaded; Paperclip refuses a stale save
+
+
+@app.put("/orchestration/team/{aid}")
+def team_update(aid: str, u: TeamUpdate, _auth=Depends(require_auth)):
+    """Edit an agent the way its Paperclip page does: name, title, role, manager,
+    description and instructions. Gateway address, keys and budgets stay in Paperclip."""
+    _task_writable()
+    aid = _safe_id(aid)
+    cur = _pc_send("GET", "/api/agents/" + aid, what="read the agent")
+    ac = cur.get("adapterConfig") if isinstance(cur.get("adapterConfig"), dict) else {}
+    _, local = _agent_host(ac)
+    body = {}
+    if u.name is not None and u.name.strip() != str(cur.get("name") or ""):
+        if local:
+            raise HTTPException(status_code=400, detail="This agent runs on this server and its name is tied to "
+                                "its Hermes profile, so it can't be renamed here. Create a new agent instead.")
+        nm = u.name.strip()
+        if not nm or len(nm) > 80:
+            raise HTTPException(status_code=400, detail="Name must be 1 to 80 characters.")
+        body["name"] = nm
+    if u.title is not None:
+        body["title"] = u.title.strip()[:120] or None
+    if u.role is not None:
+        role = u.role.strip().lower()
+        body["role"] = role if role in AGENT_ROLES else "general"
+    if u.reports_to is not None:
+        rt = u.reports_to.strip()
+        if rt:
+            rt = _safe_id(rt)
+            if rt == aid:
+                raise HTTPException(status_code=400, detail="An agent can't report to itself.")
+        body["reportsTo"] = rt or None
+    if u.capabilities is not None:
+        body["capabilities"] = u.capabilities.strip()[:4000] or None
+    done = []
+    if u.instructions is not None:
+        info = _agent_instructions(aid, ac)
+        if u.instructions.strip() != (info["text"] or "").strip():
+            if info["source"] == "file":
+                _pc_send("PUT", "/api/agents/" + aid + "/instructions-bundle/file",
+                         {"path": info["path"], "content": u.instructions,
+                          "baseHash": u.instructions_hash or info["hash"]}, what="save the instructions")
+                done.append("instructions")
+            else:
+                body["adapterConfig"] = {"instructions": _with_footer(u.instructions)}
+    if body:
+        _pc_send("PATCH", "/api/agents/" + aid, body, what="update the agent")
+        done.extend(k for k in body if k != "adapterConfig")
+        if "adapterConfig" in body:
+            done.append("instructions")
+    if not done:
+        return {"ok": True, "changed": []}
+    return {"ok": True, "changed": done}
 
 
 # --- Agent lifecycle + invite (board-key writes) ------------------------------

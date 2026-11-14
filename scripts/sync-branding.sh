@@ -61,7 +61,7 @@ window.__SCT_BRAND__ = { "version": "$(esc "$aos_ver")", "operator": "$(esc "${o
 JS
 
 chmod 755 "$H/brand"; chmod 644 "$H/brand/"*
-for plug in suburban-cyber suburban-chat suburban-mail suburban-bookings suburban-automations suburban-orchestration suburban-tasks; do
+for plug in suburban-cyber suburban-chat suburban-mail suburban-bookings suburban-automations suburban-orchestration suburban-tasks suburban-agents; do
   rm -rf "$H/plugins/$plug"
   mkdir -p "$H/plugins/$plug"
   cp -r "plugins/$plug/." "$H/plugins/$plug/"
