@@ -2,6 +2,12 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.27.1] — 2026-11-14 — Clearer Google Drive steps
+
+- The Backups page now walks through connecting Google Drive step by step, including
+  how to install rclone on Windows and Mac and exactly which part of its output to
+  paste. The runbook also says how to install `age` for the second key.
+
 ## [0.27.0] — 2026-11-14 — Full backups: encrypted, off-site, restorable
 
 - **The nightly backup now covers the whole system**, not just agent memory: the team

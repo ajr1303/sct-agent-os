@@ -381,13 +381,15 @@ Do this on the dashboard under **Connections > Backups**, or during `./install.s
    server (password manager, or printed), then confirm. The server deletes its copy
    and keeps only the public half. The kit opens every backup this install makes.
 2. **Second key (recommended when you manage the box for someone else).** On your
-   own computer, once: `age-keygen -o operator-backup.key`. Keep that file private;
+   own computer, once: `age-keygen -o operator-backup.key` (install `age` first:
+   Windows `winget install FiloSottile.age`, Mac `brew install age`, then a new terminal). Keep that file private;
    it prints a public key starting `age1`. Paste the public key on the Backups page,
    or set it for every install you do: `OPERATOR_BACKUP_PUBKEY=age1... ./install.sh`.
    You can then restore a client's backup even if they lose their kit. Without a
    second key, a lost kit means the backups cannot be opened by anyone.
 3. **Keep a copy somewhere else.**
-   - *Google Drive:* on a computer with a browser, install rclone and run
+   - *Google Drive:* on a computer with a browser, install rclone (Windows
+     `winget install Rclone.Rclone`, Mac `brew install rclone`) and run
      `rclone authorize "drive"`, sign in with the account that should hold the
      backups, and paste the `{...}` block it prints.
    - *S3-compatible* (Backblaze B2, Wasabi, Cloudflare R2, MinIO, Amazon S3): endpoint,
