@@ -33,3 +33,6 @@
 .su-btn:hover:not(:disabled){border-color:var(--color-primary,#25c9ee)}
 .su-btn:disabled{opacity:.45;cursor:default}
 .su-btn.su-primary{background:var(--color-primary,#25c9ee);border-color:var(--color-primary,#25c9ee);color:#04121a;font-weight:600}
+.su-agents{font-size:12px;line-height:1.6;opacity:.85}
+.su-agents-l{opacity:.65}
+.su-dim{opacity:.55}

@@ -1637,13 +1637,66 @@ def _minimax_usage(key):
     return {"ok": True, "groups": groups, "checked_at": now.replace(microsecond=0).isoformat() + "Z"}
 
 
+_PROVIDER_LABELS = {"minimax": "MiniMax", "anthropic": "Anthropic", "openai": "OpenAI", "openrouter": "OpenRouter",
+                    "gemini": "Google Gemini", "vertex": "Google Vertex AI", "xai": "xAI", "deepseek": "DeepSeek",
+                    "nous": "Nous Portal", "bedrock": "Amazon Bedrock", "copilot": "GitHub Copilot", "zai": "Z.ai",
+                    "huggingface": "Hugging Face", "nvidia": "NVIDIA", "fireworks": "Fireworks", "lmstudio": "LM Studio"}
+
+
+def _provider_family(slug):
+    """Fold a Hermes provider slug into the company it bills through, so 'minimax-oauth'
+    and 'minimax' share one card and 'openai-api' / 'openai-codex' share another."""
+    s = str(slug or "").strip().lower()
+    for fam in ("minimax", "openai", "anthropic", "kimi", "alibaba", "tencent", "copilot", "xai"):
+        if s == fam or s.startswith(fam + "-"):
+            return fam
+    return s
+
+
+def _providers_in_use():
+    """family -> [{name, model}] for every agent whose own Hermes reported a provider."""
+    models = _agent_models()
+    if not models:
+        return {}
+    names = {}
+    try:
+        cid = _pc_company_id() if _pc_up() else None
+        if cid:
+            ag = _pc_get("/api/companies/" + str(cid) + "/agents")
+            for a in (ag if isinstance(ag, list) else (ag.get("agents") or ag.get("data") or [])):
+                if isinstance(a, dict) and str(a.get("status")) != "terminated":
+                    names[str(a.get("id"))] = a.get("name") or "Agent"
+    except Exception:
+        return {}
+    out = {}
+    for aid, m in models.items():
+        if aid in names and m.get("provider"):
+            out.setdefault(_provider_family(m["provider"]), []).append({"name": names[aid], "model": m.get("model")})
+    for fam in out:
+        out[fam].sort(key=lambda x: str(x["name"]).lower())
+    return out
+
+
 @app.get("/usage")
 def usage_get(_auth=Depends(require_auth)):
     out = {"providers": []}
-    for pid, meta in USAGE_PROVIDERS.items():
+    in_use = _providers_in_use()
+    # One card per provider an agent is actually on, plus any plan already set up here.
+    order = [p for p in USAGE_PROVIDERS] + sorted(f for f in in_use if f not in USAGE_PROVIDERS)
+    for pid in order:
+        meta = USAGE_PROVIDERS.get(pid)
+        agents = in_use.get(pid, [])
+        if not meta:
+            out["providers"].append({"id": pid, "label": _PROVIDER_LABELS.get(pid) or pid.replace("-", " ").title(),
+                                     "supported": False, "configured": False, "plan_name": None, "monthly_price": None,
+                                     "usage": None, "agents": agents})
+            continue
         row = _usage_row(pid)
-        item = {"id": pid, "label": meta["label"], "configured": bool(row and row[0]),
-                "plan_name": row[1] if row else None, "monthly_price": row[2] if row else None, "usage": None}
+        if not agents and not (row and row[0]):
+            continue      # nobody uses it and nothing is set up: no card
+        item = {"id": pid, "label": meta["label"], "supported": True, "configured": bool(row and row[0]),
+                "plan_name": row[1] if row else None, "monthly_price": row[2] if row else None, "usage": None,
+                "agents": agents}
         if row and row[0]:
             hit = _USAGE_CACHE.get(pid)
             if hit and (datetime.datetime.utcnow() - hit[0]).total_seconds() < 60:

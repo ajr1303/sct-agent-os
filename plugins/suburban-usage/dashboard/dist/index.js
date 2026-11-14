@@ -92,10 +92,14 @@
           h("div", { className: "su-card-h" },
             h("div", null,
               h("div", { className: "su-name" }, p.label),
-              h("div", { className: "su-plan" }, p.configured ? ((p.plan_name || "Plan") + (p.monthly_price ? " · " + money(p.monthly_price) + " a month" : "")) : "Not set up")),
-            edit === p.id ? null : h("button", { type: "button", className: "su-btn", onClick: function () { startEdit(p); } }, p.configured ? "Edit" : "Set up")),
+              h("div", { className: "su-plan" }, !p.supported ? "Usage not connected yet" : p.configured ? ((p.plan_name || "Plan") + (p.monthly_price ? " · " + money(p.monthly_price) + " a month" : "")) : "Not set up")),
+            edit === p.id || !p.supported ? null : h("button", { type: "button", className: "su-btn", onClick: function () { startEdit(p); } }, p.configured ? "Edit" : "Set up")),
+          p.agents && p.agents.length ? h("div", { className: "su-agents" },
+            h("span", { className: "su-agents-l" }, p.agents.length + (p.agents.length === 1 ? " agent" : " agents") + " on this provider: "),
+            p.agents.map(function (a, i) { return h("span", { key: a.name }, (i ? ", " : "") + a.name, a.model ? h("span", { className: "su-dim" }, " (" + a.model + ")") : null); })) : null,
+          !p.supported ? h("div", { className: "su-empty" }, "Live usage for " + p.label + " isn't connected in this version, so there are no figures to show yet. The agents above were read from each agent's own Hermes.") : null,
           edit === p.id ? form(p) : null,
-          !p.configured && edit !== p.id ? h("div", { className: "su-empty" }, "Add this plan's key to see how much is used and what is left.") : null,
+          p.supported && !p.configured && edit !== p.id ? h("div", { className: "su-empty" }, "Add this plan's key to see how much is used and what is left.") : null,
           p.configured && u && !u.ok ? h("div", { className: "su-msg" }, u.error) : null,
           p.configured && u && u.ok ? u.groups.map(function (g) {
             return h("div", { key: g.name, className: "su-group" },
@@ -110,7 +114,9 @@
         h("div", { className: "su-h1" }, "Usage"),
         h("div", { className: "su-sub" }, "How much of your AI plan the team has used, what is left, and when it resets. Read live from the provider."),
         err ? h("div", { className: "su-msg" }, err) : null,
-        data == null ? h("div", { className: "su-empty" }, "Loading…") : h("div", { className: "su-cards" }, (data.providers || []).map(card)));
+        data == null ? h("div", { className: "su-empty" }, "Loading…")
+          : (data.providers || []).length === 0 ? h("div", { className: "su-empty" }, "No agent has reported an AI provider yet. A card appears here for each provider your agents use, within about half an hour of an agent being added.")
+          : h("div", { className: "su-cards" }, (data.providers || []).map(card)));
     }
     try { PLUGINS.register("suburban-usage", Usage); console.info(TAG, "registered"); }
     catch (e) { try { console.error(TAG, "register failed", e); } catch (e2) {} }

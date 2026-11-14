@@ -2,6 +2,16 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.26.1] — 2026-11-14 — Usage cards follow your agents
+
+- The Usage page now shows a card for **every AI provider at least one agent is
+  on**, as reported by each agent's own Hermes, and lists those agents and their
+  models on it. Put an agent on a new provider and its card appears after the next
+  model check (every 30 minutes), with nothing to configure.
+- Related provider names share a card (for example `minimax` and `minimax-oauth`).
+- Providers without a usage connection in this version say so plainly instead of
+  showing figures. MiniMax M Plan remains the one with live numbers.
+
 ## [0.26.0] — 2026-11-14 — AI plan usage
 
 - **New Usage page** (under *Your team*): how much of an AI provider plan the team
