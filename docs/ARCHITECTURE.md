@@ -124,6 +124,13 @@ denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
   instruction file when it has one (saved with the hash that was loaded, so a stale
   edit is refused), otherwise the inline `adapterConfig.instructions` our own agents
   use. Local agents (gateway on this box) cannot be renamed. Refused in external mode.
+- **Agent models:** `scripts/agent-models.sh` copies `scripts/lib/agent-models.mjs` into the
+  Paperclip container and runs it there. For each `hermes_gateway` agent it resolves the
+  gateway key (inline, or a `local_encrypted` secret decrypted with the instance key and
+  checked against its stored hash), calls `GET <gateway>/api/model/options`, and prints
+  one JSON line. The output is piped into `store_agent_models.py` in the connectors
+  container (table `agent_models`). Keys never leave the Paperclip container and are
+  not sent to non-HTTPS remote addresses. Run by `update.sh` and every 30 minutes by cron.
 - **Company selection:** first company Paperclip lists, or `PAPERCLIP_COMPANY_ID`.
 
 ## Supply chain

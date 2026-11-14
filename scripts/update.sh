@@ -55,5 +55,10 @@ docker compose restart gateway-tls 2>/dev/null || true
 if command -v crontab >/dev/null 2>&1 && ! crontab -l 2>/dev/null | grep -q 'check-updates.sh'; then
   { crontab -l 2>/dev/null; echo "17 */6 * * * $(pwd)/scripts/check-updates.sh # agent-os-managed"; } | crontab - && echo "Added update-check to cron"
 fi
+# Keep each agent's reported model fresh on the Agents page (every 30 minutes).
+if command -v crontab >/dev/null 2>&1 && ! crontab -l 2>/dev/null | grep -q 'agent-models.sh'; then
+  { crontab -l 2>/dev/null; echo "*/30 * * * * $(pwd)/scripts/agent-models.sh >/dev/null 2>&1 # agent-os-managed"; } | crontab - && echo "Added agent model check to cron"
+fi
+./scripts/agent-models.sh || echo "  ! could not read agent models; the Agents page will show them as not checked"
 ./scripts/check-updates.sh 2>/dev/null || true   # refresh update status (clears the banner)
 echo "Updated to $(cat VERSION 2>/dev/null). Hard-refresh the dashboard (Ctrl+Shift+R)."

@@ -110,12 +110,20 @@
         return h("button", { type: "button", key: a.id, className: "sg-row " + x[0] + (sel === a.id ? " on" : ""), onClick: function () { open(a.id); } },
           h("span", { className: "sg-row-main" },
             h("span", { className: "sg-row-name" }, a.name),
-            h("span", { className: "sg-row-sub" }, (a.title || roleLabel(a.role)) + " · " + a.runs_on)),
+            h("span", { className: "sg-row-sub" }, (a.title || roleLabel(a.role)) + " · " + (a.model || a.runs_on))),
           h("span", { className: "sg-row-st" }, h("span", { className: "sg-dot" }), x[1]));
       }
       function field(label, control, hint) {
         return h("label", { className: "sg-field" }, h("span", { className: "sg-flabel" }, label), control,
           hint ? h("span", { className: "sg-hint" }, hint) : null);
+      }
+      function modelFact(a) {
+        if (a.model) return h("span", null, a.model, a.provider ? h("span", { className: "sg-dim" }, " · " + a.provider) : null,
+          h("span", { className: "sg-fact-s" }, "Reported by its Hermes" + (a.hermes_version ? " " + a.hermes_version : "") + ", " + whenStr(a.model_checked_at)));
+        if (a.model_checked_at) return h("span", null, h("span", { className: "sg-dim" }, "Unknown"),
+          h("span", { className: "sg-fact-s" }, (a.model_error || "Its gateway did not answer.") + " Checked " + whenStr(a.model_checked_at) + "."));
+        return h("span", null, h("span", { className: "sg-dim" }, "Not checked yet"),
+          h("span", { className: "sg-fact-s" }, "Read from the agent's own Hermes every 30 minutes."));
       }
       function fact(label, val) { return h("div", { className: "sg-fact" }, h("div", { className: "sg-fact-l" }, label), h("div", { className: "sg-fact-v" }, val)); }
 
@@ -137,6 +145,7 @@
               h("a", { className: "sg-link", href: pcBase() + "/", target: "_blank", rel: "noopener" }, "Open Paperclip ↗"))),
           h("div", { className: "sg-facts" },
             fact("Runs on", det.runs_on),
+            fact("Model", modelFact(det)),
             fact("Last active", whenStr(det.last_active)),
             fact("Reports to", det.reports_to && byId[det.reports_to] ? byId[det.reports_to].name : "Nobody (top of the team)")),
           ro ? h("div", { className: "sg-note" }, "This dashboard is connected to an external Paperclip in read-only mode. Edit agents there.") : null,

@@ -144,7 +144,26 @@ def get_db():
             name TEXT, about TEXT, updated_at TEXT
         )
     """)
+    # What each agent's own Hermes gateway reports as its model (scripts/agent-models.sh).
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS agent_models (
+            agent_id TEXT PRIMARY KEY, model TEXT, provider TEXT, hermes_version TEXT,
+            ok INTEGER NOT NULL DEFAULT 0, error TEXT, checked_at TEXT
+        )
+    """)
     return con
+
+
+def _agent_models():
+    """agent_id -> last reported model. Empty when the collector has never run."""
+    try:
+        with closing(get_db()) as con:
+            rows = con.execute("SELECT agent_id, model, provider, hermes_version, ok, error, checked_at "
+                               "FROM agent_models").fetchall()
+    except Exception:
+        return {}
+    return {r[0]: {"model": r[1], "provider": r[2], "hermes_version": r[3], "model_ok": bool(r[4]),
+                   "model_error": r[5], "model_checked_at": r[6]} for r in rows}
 
 
 # --- Auth -------------------------------------------------------------------
@@ -1286,6 +1305,10 @@ def team_list(_auth=Depends(require_auth)):
     ag = _pc_get("/api/companies/" + str(cid) + "/agents")
     items = ag if isinstance(ag, list) else (ag.get("agents") or ag.get("data") or [])
     rows = [_agent_row(a) for a in items if isinstance(a, dict) and str(a.get("status")) != "terminated"]
+    models = _agent_models()
+    for r in rows:
+        r.update(models.get(str(r["id"])) or {"model": None, "provider": None, "hermes_version": None,
+                                              "model_ok": False, "model_error": None, "model_checked_at": None})
     rows.sort(key=lambda r: str(r["name"]).lower())
     return {"paperclip_up": True, "company_id": cid, "agents": rows[:200], "can_edit": _pc_mode() != "external"}
 
@@ -1297,6 +1320,8 @@ def team_get(aid: str, _auth=Depends(require_auth)):
     row = _agent_row(d if isinstance(d, dict) else {})
     row["instructions"] = _agent_instructions(aid, d.get("adapterConfig") if isinstance(d, dict) else {})
     row["can_edit"] = _pc_mode() != "external"
+    row.update(_agent_models().get(str(row["id"])) or {"model": None, "provider": None, "hermes_version": None,
+                                                         "model_ok": False, "model_error": None, "model_checked_at": None})
     return row
 
 

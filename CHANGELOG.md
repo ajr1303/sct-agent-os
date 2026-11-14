@@ -2,6 +2,22 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.23.0] — 2026-11-14 — Each agent's real model
+
+- **Agents page shows the model and provider each agent is actually configured
+  to use**, as reported by that agent's own Hermes gateway, with the Hermes version
+  and when it was last checked. Agents on other machines are included.
+- New `scripts/agent-models.sh` (run by `update.sh`, then every 30 minutes from
+  cron). The check runs inside the Paperclip container: each gateway's key is read
+  in place from Paperclip's encrypted secret store, used for one read-only request,
+  and never printed, copied out or stored elsewhere. A key is only sent over HTTPS,
+  or over plain HTTP to a gateway on the same Docker network or loopback. Only model
+  names reach the dashboard.
+- When a gateway cannot be asked, the page says why (unreachable, key refused, not
+  HTTPS, or a Hermes version that does not report its model) instead of guessing.
+- Hermes' built-in Models page is now labelled **Local models** (Advanced). It only
+  ever described the Hermes on this server.
+
 ## [0.22.0] — 2026-11-14 — Agents page
 
 - **New Agents page** under *Your team*: every agent Paperclip manages, wherever it

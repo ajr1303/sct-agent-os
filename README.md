@@ -182,6 +182,8 @@ With the `control-plane` profile, Agent OS bundles its **own fresh [Paperclip](h
 
 **Editing agents.** The Agents page lists every agent Paperclip manages, wherever it runs, and saves changes back to Paperclip: name, title, role, who it reports to, what it does, and its main instruction file. An agent that runs on this server keeps its name, because the name links it to its Hermes profile. Gateway address, keys, budgets and extra instruction files stay in Paperclip.
 
+**Which model each agent uses.** The Agents page shows the model and provider each agent's own Hermes reports, refreshed every 30 minutes by `scripts/agent-models.sh`. The check runs inside the Paperclip container using the gateway key Paperclip already holds; the key is not copied anywhere and only model names reach the dashboard. Hermes' own Models page (now *Local models*, under Advanced) only describes the Hermes on this server.
+
 **Answering tasks.** On the Tasks page, open a task to see what was asked and the conversation, then reply, reopen, mark it done or cancel it. A reply is posted as the owner and Paperclip wakes the assigned agent; replying on a finished task reopens it. Approvals, full run history and file downloads still open in Paperclip.
 
 **More than one company in Paperclip.** The dashboard shows the first company Paperclip lists. To pin it to another, set `PAPERCLIP_COMPANY_ID=<company id>` in `.env` and run `docker compose up -d connectors`. This alone keeps the dashboard fully writable.
@@ -286,7 +288,7 @@ docs/ARCHITECTURE.md        How the layer works
 
 ## Status
 
-**v0.22 — a clean one-command install has been run end to end** on a fresh VM (Hermes v0.23.1, n8n 2.47.5) and reached through a Cloudflare Tunnel.
+**v0.23 — a clean one-command install has been run end to end** on a fresh VM (Hermes v0.23.1, n8n 2.47.5) and reached through a Cloudflare Tunnel.
 
 Verified live:
 
@@ -300,7 +302,7 @@ Verified live:
 
 Known limitations:
 
-- **Team chart, task replies and the Agents page (v0.20 to v0.22) are tested against a stand-in board**, not yet confirmed on a live one.
+- **Team chart, task replies and the Agents page (v0.20 to v0.23) are tested against stand-ins** (a mock board, and for the model check a local database and mock gateways), not yet confirmed on a live one.
 - **Bookings and Mailboxes are view-only.** Agents cannot yet book appointments or send/draft email.
 - **Per-agent model choice does not apply to delegated tasks** (all Paperclip runs use the default Hermes profile).
 - **The dashboard has one shared login.** Per-person sign-in comes from Cloudflare Access in front of it; per-person roles are not built.

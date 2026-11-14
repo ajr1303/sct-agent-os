@@ -249,7 +249,8 @@ install_cron() {
     { crontab -l 2>/dev/null | grep -v '# agent-os-managed' || true
       echo "*/5 * * * * $here/scripts/watchdog.sh # agent-os-managed"
       echo "30 3 * * * $here/scripts/backup.sh # agent-os-managed"
-      echo "17 */6 * * * $here/scripts/check-updates.sh # agent-os-managed"; } | crontab - \
+      echo "17 */6 * * * $here/scripts/check-updates.sh # agent-os-managed"
+      echo "*/30 * * * * $here/scripts/agent-models.sh >/dev/null 2>&1 # agent-os-managed"; } | crontab - \
       && say "Scheduled watchdog (5m), backup (3:30am), update check (6h)"
   else
     warn "crontab not found - skipping watchdog/backup/update-check schedule."

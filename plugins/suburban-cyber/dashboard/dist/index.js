@@ -285,7 +285,7 @@
         var w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null), n;
         while ((n = w.nextNode())) {
           var t = norm(n.nodeValue);
-          if (t !== "cron" && t !== "profiles" && t !== "sessions") continue;
+          if (t !== "cron" && t !== "profiles" && t !== "sessions" && t !== "models") continue;
           var el = n.parentElement; if (!el) continue;
           if (el.id === "sc-overview-nav" || (el.closest && el.closest("#sc-overview-nav"))) continue;
           var r = el.getBoundingClientRect(); if (!r.width) continue;
@@ -293,6 +293,7 @@
           if (!inSidebar && !inHeader) continue;
           if (t === "cron") n.nodeValue = "Scheduled Jobs";
           else if (t === "profiles") n.nodeValue = "Hermes profiles";
+          else if (t === "models") n.nodeValue = "Local models";
           else if (t === "sessions" && inHeader && location.pathname === "/") n.nodeValue = "Overview";
         }
       } catch (e) {}

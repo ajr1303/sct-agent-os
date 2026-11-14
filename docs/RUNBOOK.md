@@ -207,6 +207,10 @@ chat and ask for it in a new chat.
 - **A script gets HTTP 403 from the Paperclip hostname behind Cloudflare** — Cloudflare
   blocks Python's default request signature. Send your own `User-Agent` header. A
   `curl` test passing does not prove a Python script will.
+- **Agents page shows a model as "Unknown" or "Not checked yet"** — run
+  `sudo ./scripts/agent-models.sh` and read its last line. The page states the reason per
+  agent: gateway unreachable, key refused, address not HTTPS, or a Hermes version without
+  `/api/model/options`.
 - **Sidebar order looks stock or reshuffles** — hard-refresh (Ctrl+Shift+R); the
   arrangement script is `brand/nav.js`.
 
