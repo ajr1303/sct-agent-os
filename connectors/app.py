@@ -147,6 +147,12 @@ def get_db():
             name TEXT, about TEXT, updated_at TEXT
         )
     """)
+    # AI provider plans the owner wants usage shown for (key encrypted, never returned).
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS usage_providers (
+            provider TEXT PRIMARY KEY, secret BLOB, plan_name TEXT, monthly_price REAL, updated_at TEXT
+        )
+    """)
     # What each agent's own Hermes gateway reports as its model (scripts/agent-models.sh).
     con.execute("""
         CREATE TABLE IF NOT EXISTS agent_models (
@@ -1564,6 +1570,146 @@ def team_model_set(aid: str, m: ModelChange, _auth=Depends(require_auth)):
     threading.Thread(target=_run_model_change, args=(aid, entry, provider if provider != (cur.get("provider") or "") else "", model),
                      daemon=True).start()
     return {"ok": True, "job": _model_job(aid)}
+
+
+# --- AI plan usage ------------------------------------------------------------
+# MiniMax M Plan (Token Plan): the plan's own "remains" endpoint reports, per model
+# group, the percent of the rolling 5-hour window and of the weekly window that is
+# LEFT, plus milliseconds until each resets. Field meanings below were checked
+# against a live response and the provider's usage page. Count fields can be 0 on
+# real plans, so only the percent and time fields are used.
+
+USAGE_PROVIDERS = {"minimax": {"label": "MiniMax", "url": "https://api.minimax.io/v1/token_plan/remains"}}
+_USAGE_CACHE = {}
+
+
+def _usage_row(provider):
+    with closing(get_db()) as con:
+        return con.execute("SELECT secret, plan_name, monthly_price, updated_at FROM usage_providers WHERE provider = ?",
+                           (provider,)).fetchone()
+
+
+def _window(remaining_pct, remains_ms, total_ms, now):
+    try:
+        left = max(0.0, min(100.0, float(remaining_pct)))
+        ms = max(0, int(remains_ms))
+    except (TypeError, ValueError):
+        return None
+    used = round(100.0 - left, 1)
+    w = {"used_percent": used, "remaining_percent": round(left, 1), "resets_in_seconds": ms // 1000,
+         "resets_at": (now + datetime.timedelta(milliseconds=ms)).replace(microsecond=0).isoformat() + "Z",
+         "runs_out_in_seconds": None, "on_pace_to_run_out": False}
+    elapsed = total_ms - ms if total_ms else 0
+    # Projection at the window's average pace so far. Only meaningful once some of the
+    # window has passed and something has been used.
+    if total_ms and elapsed > total_ms * 0.05 and used > 0:
+        to_empty = int(elapsed * (left / used))
+        w["runs_out_in_seconds"] = to_empty // 1000
+        w["on_pace_to_run_out"] = to_empty < ms
+    return w
+
+
+def _minimax_usage(key):
+    now = datetime.datetime.utcnow()
+    with httpx.Client(timeout=20.0) as c:
+        r = c.get(USAGE_PROVIDERS["minimax"]["url"], headers={"Authorization": "Bearer " + key,
+                                                              "Content-Type": "application/json"})
+    if r.status_code in (401, 403):
+        return {"ok": False, "error": "MiniMax refused the key. It must be the plan's Subscription Key."}
+    try:
+        d = r.json()
+    except Exception:
+        return {"ok": False, "error": "MiniMax returned something unreadable (HTTP %d)." % r.status_code}
+    base = d.get("base_resp") if isinstance(d.get("base_resp"), dict) else {}
+    if r.status_code != 200 or int(base.get("status_code") or 0) != 0:
+        return {"ok": False, "error": "MiniMax said: " + _scrub_secrets(str(base.get("status_msg") or ("HTTP %d" % r.status_code)))[:160]}
+    groups = []
+    for m in d.get("model_remains") or []:
+        if not isinstance(m, dict):
+            continue
+        five_total = (m.get("end_time") or 0) - (m.get("start_time") or 0)
+        week_total = (m.get("weekly_end_time") or 0) - (m.get("weekly_start_time") or 0)
+        groups.append({"name": str(m.get("model_name") or "general")[:60],
+                       "five_hour": _window(m.get("current_interval_remaining_percent"), m.get("remains_time"), five_total, now),
+                       "weekly": _window(m.get("current_weekly_remaining_percent"), m.get("weekly_remains_time"), week_total, now)})
+    if not groups:
+        return {"ok": False, "error": "MiniMax returned no plan usage for this key."}
+    return {"ok": True, "groups": groups, "checked_at": now.replace(microsecond=0).isoformat() + "Z"}
+
+
+@app.get("/usage")
+def usage_get(_auth=Depends(require_auth)):
+    out = {"providers": []}
+    for pid, meta in USAGE_PROVIDERS.items():
+        row = _usage_row(pid)
+        item = {"id": pid, "label": meta["label"], "configured": bool(row and row[0]),
+                "plan_name": row[1] if row else None, "monthly_price": row[2] if row else None, "usage": None}
+        if row and row[0]:
+            hit = _USAGE_CACHE.get(pid)
+            if hit and (datetime.datetime.utcnow() - hit[0]).total_seconds() < 60:
+                item["usage"] = hit[1]
+            else:
+                try:
+                    item["usage"] = _minimax_usage(fernet.decrypt(row[0]).decode())
+                except Exception as e:
+                    item["usage"] = {"ok": False, "error": "Could not reach MiniMax: " + str(e)[:100]}
+                _USAGE_CACHE[pid] = (datetime.datetime.utcnow(), item["usage"])
+        out["providers"].append(item)
+    # What the plan bought, from Paperclip's own 14-day record.
+    try:
+        cid = _pc_company_id() if _pc_up() else None
+        if cid:
+            d = _pc_get("/api/companies/" + str(cid) + "/dashboard")
+            days = d.get("runActivity") if isinstance(d, dict) else None
+            if isinstance(days, list):
+                out["runs"] = {"days": len(days), "total": sum(int(x.get("total") or 0) for x in days if isinstance(x, dict)),
+                               "succeeded": sum(int(x.get("succeeded") or 0) for x in days if isinstance(x, dict))}
+    except Exception:
+        pass
+    return out
+
+
+class UsageProviderSet(BaseModel):
+    key: str | None = None            # omit to keep the stored key
+    plan_name: str | None = None
+    monthly_price: float | None = None
+
+
+@app.put("/usage/{provider}")
+def usage_set(provider: str, u: UsageProviderSet, _auth=Depends(require_auth)):
+    if provider not in USAGE_PROVIDERS:
+        raise HTTPException(status_code=404, detail="Unknown provider.")
+    row = _usage_row(provider)
+    secret = row[0] if row else None
+    if u.key is not None and u.key.strip():
+        key = u.key.strip()
+        if len(key) < 20 or any(ch.isspace() for ch in key):
+            raise HTTPException(status_code=400, detail="That doesn't look like a key.")
+        test = _minimax_usage(key)
+        if not test.get("ok"):
+            raise HTTPException(status_code=400, detail=test.get("error") or "MiniMax did not accept the key.")
+        secret = fernet.encrypt(key.encode())
+    if not secret:
+        raise HTTPException(status_code=400, detail="Add the plan's key first.")
+    price = u.monthly_price if u.monthly_price is not None else (row[2] if row else None)
+    if price is not None and not (0 <= float(price) <= 100000):
+        raise HTTPException(status_code=400, detail="Monthly price looks wrong.")
+    name = (u.plan_name.strip()[:80] or None) if u.plan_name is not None else (row[1] if row else None)
+    with closing(get_db()) as con:
+        con.execute("INSERT OR REPLACE INTO usage_providers (provider, secret, plan_name, monthly_price, updated_at) "
+                    "VALUES (?,?,?,?,?)", (provider, secret, name, price, _now().isoformat()))
+        con.commit()
+    _USAGE_CACHE.pop(provider, None)
+    return {"ok": True}
+
+
+@app.delete("/usage/{provider}")
+def usage_delete(provider: str, _auth=Depends(require_auth)):
+    with closing(get_db()) as con:
+        con.execute("DELETE FROM usage_providers WHERE provider = ?", (provider,))
+        con.commit()
+    _USAGE_CACHE.pop(provider, None)
+    return {"ok": True}
 
 
 # --- Agent lifecycle + invite (board-key writes) ------------------------------

@@ -19,7 +19,7 @@
   // path -> [group, position]. Anything not listed lands at the end of Advanced.
   var GROUPS = [
     { id: "main", label: "", items: ["/chat"] },                    // Overview is added in front of Chat
-    { id: "team", label: "Your team", items: ["/tasks", "/team", "/orchestration", "/automations"] },
+    { id: "team", label: "Your team", items: ["/tasks", "/team", "/orchestration", "/automations", "/usage"] },
     { id: "conn", label: "Connections", items: ["/bookings", "/mailboxes"] },
     { id: "adv", label: "Advanced", items: ["/profiles", "/models", "/skills", "/mcp", "/plugins", "/cron",
         "/sessions", "/files", "/channels", "/webhooks", "/pairing", "/env", "/config", "/system", "/logs",

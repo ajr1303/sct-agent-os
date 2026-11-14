@@ -138,6 +138,12 @@ denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
   (`hermes config set model.default|model.provider`, restart, verify via the gateway's
   `/api/model/options`, restore `config.yaml.bak-agent-os` on failure). The page polls
   `GET .../model` for the job state. Host keys are pinned at `add` time.
+- **Plan usage** (`suburban-usage`, tab `/usage`): `GET /usage` calls each configured
+  provider's quota endpoint with a Fernet-encrypted key from table `usage_providers`
+  (60-second cache) and adds Paperclip's 14-day run count. MiniMax: `GET
+  https://api.minimax.io/v1/token_plan/remains`, using `current_interval_remaining_percent`,
+  `current_weekly_remaining_percent`, `remains_time` and `weekly_remains_time`.
+  `PUT /usage/{provider}` validates a key against the provider before storing it.
 - **Company selection:** first company Paperclip lists, or `PAPERCLIP_COMPANY_ID`.
 
 ## Supply chain

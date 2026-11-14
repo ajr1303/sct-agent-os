@@ -60,6 +60,7 @@
       var sc = useState(null), analytics = sc[0], setAnalytics = sc[1];
       var sd = useState(null), agents = sd[0], setAgents = sd[1];
       var se = useState(null), pcOv = se[0], setPcOv = se[1];
+      var su = useState(null), planUse = su[0], setPlanUse = su[1];
       var sg = useState(null), upd = sg[0], setUpd = sg[1];
       var sh = useState(0), updBump = sh[0], setUpdBump = sh[1];
 
@@ -70,6 +71,8 @@
           var p3 = call("getAnalytics", 14); if (p3) p3.then(setAnalytics).catch(function () {});
           var p4 = call("getProfiles"); if (p4) p4.then(function (v) { setAgents(toList(v)); }).catch(function () {});
           try {
+            fetch("/api/connectors/usage", { credentials: "same-origin" }).then(function (r) { return r.ok ? r.json() : null; })
+              .then(function (v) { if (v) setPlanUse(v); }).catch(function () {});
             fetch("/api/connectors/orchestration/overview", { credentials: "same-origin" })
               .then(function (r) { return r.ok ? r.json() : null; })
               .then(function (v) { if (v) setPcOv(v); }).catch(function () {});
@@ -130,6 +133,16 @@
         return null;
       }
       var work = useManaged && pcOv.work ? pcOv.work : null;
+      function planTile() {
+        var ps = (planUse && planUse.providers) || [];
+        for (var i = 0; i < ps.length; i++) {
+          var u = ps[i].usage; if (!u || !u.ok || !u.groups || !u.groups[0] || !u.groups[0].weekly) continue;
+          var w = u.groups[0].weekly, hrs = Math.round((w.resets_in_seconds || 0) / 3600);
+          var note = w.on_pace_to_run_out ? "On pace to run out before it resets" : ("Resets in " + (hrs >= 48 ? Math.round(hrs / 24) + " days" : hrs + " h"));
+          return Stat(ps[i].label + " plan, this week", w.remaining_percent + "% left", note, w.on_pace_to_run_out || w.remaining_percent <= 25);
+        }
+        return null;
+      }
       var agentTileLabel = useManaged ? "Agents" : "Active agents";
       var agentTileVal = useManaged ? String(managedAgents.length) : (status ? String(activeAgents != null ? activeAgents : 0) : "—");
       var agentTileSub = useManaged ? "Managed by Paperclip" : "Running right now";
@@ -163,6 +176,7 @@
             (work.succeeded || 0) + " succeeded · " + (work.failed || 0) + " failed · " + (work.runs_today || 0) + " today") : null,
           work ? Stat("Tasks in progress", String(work.tasks_in_progress != null ? work.tasks_in_progress : "—"),
             (work.tasks_open != null ? work.tasks_open : "—") + " open in total") : null,
+          planTile(),
           Stat("Chat sessions, 14 days", analytics ? String(tot.total_sessions || 0) : "—", useManaged ? "On this server only" : "Conversations and automations"),
           Stat("Tokens, 14 days", analytics ? fmtNum(tokens) : "—", useManaged ? "This server only · input + output" : "Input + output"),
           Stat("AI spend, 14 days", analytics ? fmtCost(tot.total_estimated_cost) : "—", useManaged ? "This server only · estimated" : "Estimated from usage")),

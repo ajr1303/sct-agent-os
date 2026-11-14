@@ -2,6 +2,26 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.26.0] — 2026-11-14 — AI plan usage
+
+- **New Usage page** (under *Your team*): how much of an AI provider plan the team
+  has used, what is left and when it resets, read live from the provider.
+- **MiniMax M Plan (Token Plan)** is supported first: the rolling 5-hour window and
+  the weekly window, each with percent left, time to reset, and a projection at the
+  window's average pace that warns when the plan is on course to run out before it
+  resets. Field meanings were checked against a live response and the provider's
+  own usage page; only the percent and time fields are used, because the count
+  fields can be zero on real plans.
+- With a monthly price entered, the page shows an approximate cost per agent run
+  from Paperclip's 14-day record.
+- The plan key is typed in by the owner, checked with the provider before it is
+  saved, stored encrypted on the server and never returned. Results are cached for
+  a minute.
+- **Overview** gains a tile for the plan's weekly allowance, highlighted when it is
+  low or on pace to run out.
+- OpenAI and Anthropic usage (spend against a budget, via their admin usage APIs)
+  is planned and not in this release.
+
 ## [0.25.0] — 2026-11-14 — Tasks page on large boards, activity tiles
 
 - **Tasks page now shows current work on boards with thousands of tasks.** It used

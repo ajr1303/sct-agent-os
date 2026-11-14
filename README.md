@@ -42,6 +42,7 @@ Re-running the command updates the checkout in place. For routine updates, prefe
 | **Chat** | A clean bubble chat in place of the raw terminal. The chat agent acts as chief of staff: it answers quick questions, builds an automation for repeatable work, hands judgment work to the right agent, or asks the CEO agent for a hiring review. |
 | **Orchestration** | Bundled **Paperclip** control plane. Create an agent from nine starter **templates** (or blank), pause/resume, edit, delete, or **invite** an external agent with a paste-ready prompt. A live **team chart** shows who reports to whom and each agent's status. An **About your business** profile is shared with every agent. |
 | **Agents** | Every agent on the team in one list. Open one to edit its name, title, role, manager, description and instructions, or pause it. Hermes' own Profiles page moves to Advanced as *Hermes profiles*. |
+| **Usage** | How much of your AI provider plan is used, what is left, when it resets, and whether it is on pace to run out first. MiniMax M Plan supported today. |
 | **Tasks** | Tasks delegated to agents, their status, replies and files. **Reply, reopen, mark done or cancel** from the dashboard; a reply wakes the assigned agent. Agents close their own tasks; runaway tasks are halted automatically and can be released. |
 | **Automations** | Bundled **n8n**. Workflow and run status, **turn workflows on and off** from the dashboard, one-click open, and **Waiting for your approval**: agents can build workflows but only the owner can switch one on. |
 | **Mailboxes** | Connect email accounts (Gmail, Microsoft 365, any IMAP) and see a combined unread/preview. View-only today. Credentials encrypted at rest. |
@@ -290,7 +291,7 @@ docs/ARCHITECTURE.md        How the layer works
 
 ## Status
 
-**v0.24 — a clean one-command install has been run end to end** on a fresh VM (Hermes v0.23.1, n8n 2.47.5) and reached through a Cloudflare Tunnel.
+**v0.26 — a clean one-command install has been run end to end** on a fresh VM (Hermes v0.23.1, n8n 2.47.5) and reached through a Cloudflare Tunnel.
 
 Verified live:
 
@@ -304,7 +305,7 @@ Verified live:
 
 Known limitations:
 
-- **Team chart, task replies and the Agents page (v0.20 to v0.24) are tested against stand-ins** (a mock board, and for the model check a local database and mock gateways), not yet confirmed on a live one.
+- **Team chart, task replies and the Agents page (v0.20 to v0.26) are tested against stand-ins** (a mock board, and for the model check a local database and mock gateways), not yet confirmed on a live one.
 - **Bookings and Mailboxes are view-only.** Agents cannot yet book appointments or send/draft email.
 - **Per-agent model choice does not apply to delegated tasks** (all Paperclip runs use the default Hermes profile).
 - **The dashboard has one shared login.** Per-person sign-in comes from Cloudflare Access in front of it; per-person roles are not built.

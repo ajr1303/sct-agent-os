@@ -1,0 +1,10 @@
+{
+  "name": "suburban-usage",
+  "label": "Usage",
+  "description": "How much of your AI plan is used, what is left, and when it resets",
+  "icon": "Gauge",
+  "version": "0.1.0",
+  "tab": { "path": "/usage" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css"
+}
