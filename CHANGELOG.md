@@ -2,6 +2,17 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.20.0] — 2026-11-14 — Team chart
+
+- **Orchestration: team chart.** A new panel draws who reports to whom from
+  Paperclip's own reporting lines, with each agent's title and live status
+  (working, ready, needs attention, paused). It refreshes with the rest of the
+  tab every 30 seconds, so agents added, removed or re-parented in Paperclip or
+  from this dashboard appear without a reload. A manager with more than four
+  direct reports gets them wrapped in rows instead of one very wide line; agents
+  with no manager sit at the top; a reporting loop is shown, not hidden.
+- `/orchestration/overview` now returns each agent's `title` and `reports_to`.
+
 ## [0.19.0] — 2026-11-12 — Turn workflows on and off from the dashboard
 
 - **Automations: Turn on / Turn off per workflow.** Turning one on takes two clicks

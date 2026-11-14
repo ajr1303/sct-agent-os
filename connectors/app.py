@@ -1442,7 +1442,9 @@ def orchestration_overview(_auth=Depends(require_auth)):
         out["agents"] = [{"id": a.get("id"),
                           "name": a.get("name") or a.get("agentName") or a.get("displayName") or "Agent",
                           "status": a.get("status") or a.get("state"),
-                          "role": a.get("role")} for a in items][:50]
+                          "role": a.get("role"),
+                          "title": a.get("title"),
+                          "reports_to": a.get("reportsTo")} for a in items][:50]
     except Exception as e:
         out["errors"].append("agents: " + str(e)[:120])
     try:

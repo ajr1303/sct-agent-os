@@ -239,6 +239,51 @@
           h("div", { className: "so-stat-label" }, label));
       }
 
+      // ---- Team chart: who reports to whom, built from each agent's manager. ----
+      var ST = { running: ["so-st-run", "Working"], active: ["so-st-ok", "Ready"], idle: ["so-st-ok", "Ready"],
+                 paused: ["so-st-off", "Paused"], error: ["so-st-warn", "Needs attention"],
+                 pending_approval: ["so-st-warn", "Awaiting approval"] };
+      function roleLabel(a) {
+        if (a.title) return a.title;
+        for (var i = 0; i < ROLES.length; i++) if (ROLES[i][0] === a.role) return ROLES[i][1];
+        return a.role || "Agent";
+      }
+      function orgNode(a) {
+        var st = ST[String(a.status || "").toLowerCase()] || ["so-st-off", a.status || "Unknown"];
+        return h("div", { className: "so-node " + st[0], title: a.name + " · " + roleLabel(a) + " · " + st[1] },
+          h("div", { className: "so-node-name" }, a.name),
+          h("div", { className: "so-node-role" }, roleLabel(a)),
+          h("div", { className: "so-node-st" }, h("span", { className: "so-node-dot" }), st[1]));
+      }
+      function orgChart(list) {
+        var live = list.filter(function (a) { return String(a.status || "").toLowerCase() !== "terminated"; });
+        var by = {}, kids = {}, roots = [], seen = {};
+        live.forEach(function (a) { by[a.id] = a; });
+        live.forEach(function (a) {
+          var p = a.reports_to;
+          if (p && by[p] && p !== a.id) (kids[p] = kids[p] || []).push(a); else roots.push(a);
+        });
+        function byName(x, y) { return String(x.name).localeCompare(String(y.name)); }
+        function branch(a) {
+          if (seen[a.id]) return null;          // guard against a reporting loop
+          seen[a.id] = 1;
+          var ch = (kids[a.id] || []).slice().sort(byName).filter(function (c) { return !seen[c.id]; });
+          var allLeaves = ch.every(function (c) { return !(kids[c.id] || []).length; });
+          var sub = null;
+          if (ch.length) {
+            sub = (allLeaves && ch.length > 4)
+              ? h("ul", { className: "so-leaves" }, ch.map(function (c) { seen[c.id] = 1; return h("li", { key: c.id }, orgNode(c)); }))
+              : h("ul", null, ch.map(branch));
+          }
+          return h("li", { key: a.id }, orgNode(a), sub);
+        }
+        var top = roots.slice().sort(function (x, y) {
+          var d = (kids[y.id] || []).length - (kids[x.id] || []).length; return d || byName(x, y); }).map(branch);
+        // Anyone only reachable through a loop still gets shown, as their own top-level card.
+        live.forEach(function (a) { if (!seen[a.id]) top.push(branch(a)); });
+        return h("div", { className: "so-org-scroll" }, h("ul", { className: "so-org" }, top));
+      }
+
       return h("div", { className: "so-wrap" },
         h("div", { className: "so-top" },
           h("div", null,
@@ -305,6 +350,16 @@
             bMsg ? h("div", { className: "so-msg" }, bMsg) : null,
             h("div", { className: "so-createactions" },
               h("button", { type: "submit", className: "so-btn so-primary", disabled: bBusy }, bBusy ? "Saving…" : "Save"))) : null) : null,
+
+        up && connected && agents.length ? h("div", { className: "so-panel" },
+          h("div", { className: "so-panel-h so-panel-h-row" },
+            h("span", null, "TEAM CHART"),
+            h("span", { className: "so-org-legend" },
+              h("span", { className: "so-st-run" }, h("span", { className: "so-node-dot" }), "Working"),
+              h("span", { className: "so-st-ok" }, h("span", { className: "so-node-dot" }), "Ready"),
+              h("span", { className: "so-st-warn" }, h("span", { className: "so-node-dot" }), "Needs attention"),
+              h("span", { className: "so-st-off" }, h("span", { className: "so-node-dot" }), "Paused"))),
+          orgChart(agents)) : null,
 
         up && connected ? h("div", { className: "so-panel" },
           h("div", { className: "so-panel-h so-panel-h-row" },
