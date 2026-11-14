@@ -23,11 +23,13 @@ def main():
             continue
         cut = lambda v, n: (str(v)[:n] if v not in (None, "") else None)
         rows.append((aid, cut(d.get("model"), 120), cut(d.get("provider"), 120), cut(d.get("hermes_version"), 40),
-                     1 if d.get("ok") else 0, cut(d.get("error"), 200), cut(d.get("checked_at"), 40)))
+                     1 if d.get("ok") else 0, cut(d.get("error"), 200), cut(d.get("checked_at"), 40),
+                     json.dumps(d.get("options") if isinstance(d.get("options"), list) else [])[:60000]))
     with closing(get_db()) as con:
         if rows:  # keep the last good picture if a run produced nothing at all
             con.execute("DELETE FROM agent_models")
-            con.executemany("INSERT OR REPLACE INTO agent_models VALUES (?,?,?,?,?,?,?)", rows)
+            con.executemany("INSERT OR REPLACE INTO agent_models (agent_id, model, provider, hermes_version, ok, error, "
+                            "checked_at, options_json) VALUES (?,?,?,?,?,?,?,?)", rows)
             con.commit()
     print("stored model info for %d agent(s)" % len(rows))
 

@@ -54,10 +54,68 @@
       s = useState(null);  var msg = s[0], setMsg = s[1];          // {ok, text}
       s = useState(null);  var err = s[0], setErr = s[1];
       s = useState("");    var q = s[0], setQ = s[1];
+      s = useState(null);  var mi = s[0], setMi = s[1];            // model-change info for the open agent
+      s = useState(null);  var mSel = s[0], setMSel = s[1];        // {provider, model} picked
+      s = useState(false); var mAsk = s[0], setMAsk = s[1];
 
       function load() {
         return api("/orchestration/team").then(function (d) { setData(d); setErr(null); return d; })
           .catch(function (e) { setErr(String(e.message || e)); });
+      }
+      function loadModel(id) {
+        return api("/orchestration/team/" + encodeURIComponent(id) + "/model").then(function (m) { setMi(m); return m; })
+          .catch(function () { setMi({ can_change: false, why_not: null, options: [] }); });
+      }
+      function pollModel(id) {
+        setTimeout(function () {
+          loadModel(id).then(function (m) {
+            if (m && m.job && m.job.state === "running") { pollModel(id); return; }
+            api("/orchestration/team/" + encodeURIComponent(id)).then(function (d) {
+              setDet(function (old) { return old && old.id === id ? Object.assign({}, old, { model: d.model, provider: d.provider, hermes_version: d.hermes_version, model_checked_at: d.model_checked_at, model_error: d.model_error }) : old; });
+            }).catch(function () {});
+            load();
+          });
+        }, 5000);
+      }
+      function changeModel() {
+        var id = sel, pick = mSel;
+        setMAsk(false);
+        api("/orchestration/team/" + encodeURIComponent(id) + "/model", { method: "POST", body: JSON.stringify(pick) })
+          .then(function (r) { setMi(function (old) { return Object.assign({}, old || {}, { job: r.job }); }); setMSel(null); pollModel(id); })
+          .catch(function (e) { setMi(function (old) { return Object.assign({}, old || {}, { job: { state: "failed", message: String(e.message || e) } }); }); });
+      }
+      function modelPanel() {
+        if (!mi) return null;
+        var job = mi.job, running = job && job.state === "running";
+        var jobLine = job ? h("div", { className: "sg-msg " + (job.state === "done" ? "sg-msg-ok" : job.state === "running" ? "" : "sg-msg-err") }, job.message) : null;
+        if (!mi.can_change) return (mi.why_not || jobLine) ? h("div", { className: "sg-model" },
+          h("div", { className: "sg-flabel" }, "Change model"), jobLine,
+          mi.why_not ? h("div", { className: "sg-hint" }, mi.why_not) : null) : null;
+        var opts = mi.options || [];
+        var curP = (mSel && mSel.provider) || det.provider || (opts[0] && opts[0].slug) || "";
+        var prov = opts.filter(function (o) { return o.slug === curP; })[0] || opts[0] || { slug: "", models: [] };
+        var curM = (mSel && mSel.model) || (prov.models.indexOf(det.model) >= 0 ? det.model : prov.models[0]) || "";
+        var changed = prov.slug !== det.provider || curM !== det.model;
+        return h("div", { className: "sg-model" },
+          h("div", { className: "sg-flabel" }, "Change model"),
+          h("div", { className: "sg-model-row" },
+            h("select", { className: "sg-in", "aria-label": "Provider", value: prov.slug, disabled: running,
+              onChange: function (e) { var o = opts.filter(function (x) { return x.slug === e.target.value; })[0]; setMSel({ provider: o.slug, model: o.models[0] }); setMAsk(false); } },
+              opts.map(function (o) { return h("option", { key: o.slug, value: o.slug }, o.name || o.slug); })),
+            h("select", { className: "sg-in", "aria-label": "Model", value: curM, disabled: running,
+              onChange: function (e) { setMSel({ provider: prov.slug, model: e.target.value }); setMAsk(false); } },
+              prov.models.map(function (m) { return h("option", { key: m, value: m }, m); })),
+            mAsk
+              ? h("span", { className: "sg-dacts" },
+                  h("button", { type: "button", className: "sg-btn sg-primary", onClick: changeModel }, "Yes, switch and restart"),
+                  h("button", { type: "button", className: "sg-btn", onClick: function () { setMAsk(false); } }, "Cancel"))
+              : h("button", { type: "button", className: "sg-btn", disabled: running || !changed || mi.busy,
+                  onClick: function () { setMSel({ provider: prov.slug, model: curM }); setMAsk(true); } }, running ? "Switching…" : "Change model")),
+          jobLine,
+          h("div", { className: "sg-hint" }, mAsk
+            ? "This restarts " + det.name + "'s gateway on its own machine, which takes about a minute. If the new model doesn't come up, the previous one is restored."
+            : mi.busy ? det.name + " is working on a task right now. Change its model when it is idle."
+            : "Only providers that machine already has a key for are listed. To use another provider, add its key on the machine first."));
       }
       function toForm(d) {
         return { name: d.name || "", title: d.title || "", role: d.role || "general", reports_to: d.reports_to || "",
@@ -65,6 +123,7 @@
       }
       function open(id) {
         setSel(id); setDet(null); setF(null); setMsg(null);
+        setMi(null); setMSel(null); setMAsk(false); loadModel(id);
         api("/orchestration/team/" + encodeURIComponent(id)).then(function (d) { setDet(d); setF(toForm(d)); })
           .catch(function (e) { setDet({ id: id, error: String(e.message || e) }); });
       }
@@ -148,6 +207,7 @@
             fact("Model", modelFact(det)),
             fact("Last active", whenStr(det.last_active)),
             fact("Reports to", det.reports_to && byId[det.reports_to] ? byId[det.reports_to].name : "Nobody (top of the team)")),
+          modelPanel(),
           ro ? h("div", { className: "sg-note" }, "This dashboard is connected to an external Paperclip in read-only mode. Edit agents there.") : null,
           h("div", { className: "sg-grid" },
             field("Name", h("input", { className: "sg-in", value: f.name, maxLength: 80, disabled: ro || det.local, onChange: set("name") }),

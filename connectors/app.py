@@ -25,6 +25,9 @@ import datetime
 from email.header import decode_header, make_header
 from contextlib import closing
 from urllib.parse import urlparse, quote
+import shlex
+import subprocess
+import threading
 
 import httpx
 from dateutil import parser as dtparse
@@ -151,6 +154,10 @@ def get_db():
             ok INTEGER NOT NULL DEFAULT 0, error TEXT, checked_at TEXT
         )
     """)
+    try:
+        con.execute("ALTER TABLE agent_models ADD COLUMN options_json TEXT")
+    except sqlite3.OperationalError:
+        pass   # already there
     return con
 
 
@@ -164,6 +171,17 @@ def _agent_models():
         return {}
     return {r[0]: {"model": r[1], "provider": r[2], "hermes_version": r[3], "model_ok": bool(r[4]),
                    "model_error": r[5], "model_checked_at": r[6]} for r in rows}
+
+
+def _agent_model_options(aid):
+    """Providers and models this agent's machine says it can use right now."""
+    try:
+        with closing(get_db()) as con:
+            r = con.execute("SELECT options_json FROM agent_models WHERE agent_id = ?", (aid,)).fetchone()
+        opts = json.loads(r[0]) if r and r[0] else []
+    except Exception:
+        opts = []
+    return [o for o in opts if isinstance(o, dict) and o.get("slug") and isinstance(o.get("models"), list)]
 
 
 # --- Auth -------------------------------------------------------------------
@@ -1386,6 +1404,166 @@ def team_update(aid: str, u: TeamUpdate, _auth=Depends(require_auth)):
     if not done:
         return {"ok": True, "changed": []}
     return {"ok": True, "changed": done}
+
+
+# --- Changing an agent's model on its own machine (over SSH) ------------------
+# The box may hold an SSH key for agent machines (scripts/agent-ssh.sh). A model
+# change edits that machine's Hermes config with Hermes' own command, restarts its
+# gateway, checks the gateway reports the new model, and restores the previous
+# config if it does not. Only choices the machine itself listed are accepted.
+
+AGENT_SSH_DIR = os.environ.get("AGENT_SSH_DIR", "/agent-ssh")
+_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,119}$")
+_MODEL_JOBS = {}          # agent id -> {"state", "message", "at"}
+_MODEL_JOBS_LOCK = threading.Lock()
+
+_REMOTE_SET_MODEL = r"""
+set -u
+MODEL="$1"; PROVIDER="$2"; SVC="$3"; SCOPE="$4"
+H=$(command -v hermes 2>/dev/null || true); [ -x "$H" ] || H="$HOME/.local/bin/hermes"
+[ -x "$H" ] || { echo "ERR The hermes command was not found on that machine."; exit 10; }
+CFG="$HOME/.hermes/config.yaml"; ENVF="$HOME/.hermes/.env"; BAK="$CFG.bak-agent-os"
+val() { awk -F= -v k="$1" '$0 ~ "^"k"=" {print substr($0, index($0, "=") + 1)}' "$ENVF" | head -1 | tr -d "\"'\r"; }
+KEY=$(val API_SERVER_KEY); PORT=$(val API_SERVER_PORT); PORT=${PORT:-8443}
+cur() { curl -s -m 20 -H "Authorization: Bearer $KEY" "http://127.0.0.1:$PORT/api/model/options?include_unconfigured=false" \
+  | python3 -c 'import sys,json; d=json.load(sys.stdin); print((d.get("provider") or "")+"|"+(d.get("model") or ""))' 2>/dev/null; }
+restart() { if [ "$SCOPE" = user ]; then systemctl --user restart "$SVC"; else sudo -n systemctl restart "$SVC"; fi; }
+up() { for _ in $(seq 1 36); do sleep 5; [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:$PORT/health")" = 200 ] && return 0; done; return 1; }
+BEFORE=$(cur); [ -n "$BEFORE" ] || { echo "ERR The gateway on that machine did not answer, so nothing was changed."; exit 11; }
+WANT_P="${PROVIDER:-${BEFORE%%|*}}"
+cp -p "$CFG" "$BAK" || { echo "ERR Could not back up the Hermes config, so nothing was changed."; exit 12; }
+undo() { cp -p "$BAK" "$CFG"; }
+"$H" config set model.default "$MODEL" >/dev/null 2>&1 || { undo; echo "ERR This Hermes version could not set the model from a command. Nothing was changed."; exit 13; }
+if [ -n "$PROVIDER" ] && [ "$PROVIDER" != "${BEFORE%%|*}" ]; then
+  "$H" config set model.provider "$PROVIDER" >/dev/null 2>&1 || { undo; echo "ERR This Hermes version could not set the provider from a command. Nothing was changed."; exit 13; }
+fi
+restart || { undo; echo "ERR The gateway restart was refused, so the old settings were put back."; exit 14; }
+if up && [ "$(cur)" = "$WANT_P|$MODEL" ]; then echo "OK $WANT_P|$MODEL"; exit 0; fi
+undo; restart; up
+echo "ERR The gateway did not come back reporting the new model, so the previous settings were restored (now: $(cur))."; exit 20
+"""
+
+
+def _ssh_hosts():
+    try:
+        with open(os.path.join(AGENT_SSH_DIR, "hosts.json"), "r", encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _agent_ssh(ac):
+    """The SSH entry for the machine an agent's gateway runs on, if the box has one."""
+    host, local = _agent_host(ac)
+    if local or not host:
+        return host, None
+    return host, _ssh_hosts().get(host.lower())
+
+
+def _model_job(aid):
+    with _MODEL_JOBS_LOCK:
+        j = _MODEL_JOBS.get(aid)
+        return dict(j) if j else None
+
+
+def _run_model_change(aid, entry, provider, model):
+    args = " ".join(shlex.quote(x) for x in (model, provider or "", entry.get("service") or "hermes-gateway.service",
+                                             entry.get("scope") or "system"))
+    cmd = ["ssh", "-i", os.path.join(AGENT_SSH_DIR, "id_ed25519"), "-o", "BatchMode=yes",
+           "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile=" + os.path.join(AGENT_SSH_DIR, "known_hosts"),
+           "-o", "ConnectTimeout=15", "-o", "IdentitiesOnly=yes", str(entry.get("target")), "bash -s -- " + args]
+    state, msg = "failed", "The change did not finish."
+    try:
+        r = subprocess.run(cmd, input=_REMOTE_SET_MODEL, capture_output=True, text=True, timeout=480)
+        lines = [ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip()]
+        last = lines[-1] if lines else ""
+        if r.returncode == 0 and last.startswith("OK "):
+            prov, _, mod = last[3:].partition("|")
+            state, msg = "done", "Now using " + mod + (" on " + prov if prov else "") + "."
+            try:
+                with closing(get_db()) as con:
+                    con.execute("UPDATE agent_models SET model = ?, provider = ?, ok = 1, error = NULL, checked_at = ? "
+                                "WHERE agent_id = ?", (mod, prov or None,
+                                                      datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z", aid))
+                    con.commit()
+            except Exception:
+                pass
+        elif last.startswith("ERR "):
+            msg = last[4:][:300]
+        else:
+            msg = "Could not log in to that machine or run the change (" + _scrub_secrets((r.stderr or "").strip())[-160:] + ")."
+    except subprocess.TimeoutExpired:
+        msg = "The change took too long and was stopped. Check that agent's gateway."
+    except Exception as e:
+        msg = "Could not start the change: " + str(e)[:140]
+    with _MODEL_JOBS_LOCK:
+        _MODEL_JOBS[aid] = {"state": state, "message": msg, "at": datetime.datetime.utcnow().isoformat() + "Z"}
+
+
+@app.get("/orchestration/team/{aid}/model")
+def team_model_info(aid: str, _auth=Depends(require_auth)):
+    """What the Agents page needs to offer a model change for one agent."""
+    aid = _safe_id(aid)
+    d = _pc_send("GET", "/api/agents/" + aid, what="read the agent")
+    ac = d.get("adapterConfig") if isinstance(d.get("adapterConfig"), dict) else {}
+    host, entry = _agent_ssh(ac)
+    _, local = _agent_host(ac)
+    why = None
+    if _pc_mode() == "external":
+        why = "This dashboard is connected to an external Paperclip in read-only mode."
+    elif local:
+        why = "This agent runs on this server. Change its model under Advanced, Local models."
+    elif not entry:
+        why = "This server has no SSH access to " + (host or "that machine") + " yet. On this server run: sudo ./scripts/agent-ssh.sh add <user>@" + (host or "<host>")
+    elif not entry.get("can_set"):
+        why = "The Hermes on that machine cannot change its model from a command."
+    elif not entry.get("can_restart"):
+        why = "This server is not allowed to restart the gateway on that machine. Re-run scripts/agent-ssh.sh add for it and follow the note it prints."
+    opts = _agent_model_options(aid)
+    if not why and not opts:
+        why = "That machine has not reported which models it can use yet. Run sudo ./scripts/agent-models.sh on this server."
+    return {"can_change": why is None, "why_not": why, "options": opts, "job": _model_job(aid),
+            "busy": str(d.get("status") or "").lower() == "running"}
+
+
+class ModelChange(BaseModel):
+    model: str
+    provider: str | None = None
+
+
+@app.post("/orchestration/team/{aid}/model")
+def team_model_set(aid: str, m: ModelChange, _auth=Depends(require_auth)):
+    _task_writable()
+    aid = _safe_id(aid)
+    d = _pc_send("GET", "/api/agents/" + aid, what="read the agent")
+    ac = d.get("adapterConfig") if isinstance(d.get("adapterConfig"), dict) else {}
+    _, entry = _agent_ssh(ac)
+    if not entry or not entry.get("can_set") or not entry.get("can_restart"):
+        raise HTTPException(status_code=400, detail="This server cannot change the model on that agent's machine yet.")
+    if str(d.get("status") or "").lower() == "running":
+        raise HTTPException(status_code=409, detail="This agent is working on a task. Changing its model restarts its "
+                            "gateway and would interrupt it. Try again when it is idle, or pause it first.")
+    model = (m.model or "").strip()
+    provider = (m.provider or "").strip()
+    if not _MODEL_RE.match(model) or (provider and not _MODEL_RE.match(provider)):
+        raise HTTPException(status_code=400, detail="That model or provider name is not valid.")
+    opts = _agent_model_options(aid)
+    cur = _agent_models().get(aid) or {}
+    prov = provider or (cur.get("provider") or "")
+    match = [o for o in opts if o.get("slug") == prov and model in o.get("models", [])]
+    if not match:
+        raise HTTPException(status_code=400, detail="That machine did not list this model for this provider. "
+                            "Pick one of the choices shown, or add the provider's key on the machine first.")
+    with _MODEL_JOBS_LOCK:
+        j = _MODEL_JOBS.get(aid)
+        if j and j.get("state") == "running":
+            raise HTTPException(status_code=409, detail="A model change is already in progress for this agent.")
+        _MODEL_JOBS[aid] = {"state": "running", "message": "Applying the change and restarting the gateway…",
+                            "at": datetime.datetime.utcnow().isoformat() + "Z"}
+    threading.Thread(target=_run_model_change, args=(aid, entry, provider if provider != (cur.get("provider") or "") else "", model),
+                     daemon=True).start()
+    return {"ok": True, "job": _model_job(aid)}
 
 
 # --- Agent lifecycle + invite (board-key writes) ------------------------------

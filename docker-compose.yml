@@ -131,6 +131,9 @@ services:
       N8N_TOOLS_PROFILES: "${N8N_TOOLS_PROFILES:-}"
     volumes:
       - connectors-data:/data
+      # Optional SSH key + host list for changing an agent's model on its own machine.
+      # Empty until scripts/agent-ssh.sh adds a machine. Read-only in the container.
+      - ./data/agent-ssh:/agent-ssh:ro
     expose:
       - "8000"
     mem_limit: 256M

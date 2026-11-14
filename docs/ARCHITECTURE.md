@@ -131,6 +131,13 @@ denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
   one JSON line. The output is piped into `store_agent_models.py` in the connectors
   container (table `agent_models`). Keys never leave the Paperclip container and are
   not sent to non-HTTPS remote addresses. Run by `update.sh` and every 30 minutes by cron.
+- **Model change:** `scripts/agent-ssh.sh` keeps an SSH key and `hosts.json` (gateway host ->
+  ssh target, service, scope) in `data/agent-ssh/`, mounted read-only at `/agent-ssh` in
+  connectors. `POST /orchestration/team/{id}/model` validates the choice against what the
+  machine reported, then runs a fixed remote script over SSH in a background thread
+  (`hermes config set model.default|model.provider`, restart, verify via the gateway's
+  `/api/model/options`, restore `config.yaml.bak-agent-os` on failure). The page polls
+  `GET .../model` for the job state. Host keys are pinned at `add` time.
 - **Company selection:** first company Paperclip lists, or `PAPERCLIP_COMPANY_ID`.
 
 ## Supply chain

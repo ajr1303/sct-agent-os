@@ -56,10 +56,20 @@ async function getJson(url, key) {
 const short = (v) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 120) : null);
 export async function probe(baseUrl, key) {
   const base = String(baseUrl).replace(/\/+$/, "");
-  const out = { model: null, provider: null, hermes_version: null, ok: false, error: null };
+  const out = { model: null, provider: null, hermes_version: null, ok: false, error: null, options: [] };
   try {
     const d = await getJson(base + "/api/model/options?include_unconfigured=false", key);
     out.model = short(d && d.model); out.provider = short(d && d.provider);
+    // Providers this machine holds credentials for, with the models it lists for each:
+    // the only choices a "change model" control should offer.
+    const opts = [];
+    for (const r of Array.isArray(d && d.providers) ? d.providers : []) {
+      if (!r || !r.authenticated || !Array.isArray(r.models) || !r.models.length) continue;
+      const ids = r.models.map((m) => short(typeof m === "string" ? m : m && (m.id || m.name))).filter(Boolean).slice(0, 80);
+      if (short(r.slug) && ids.length) opts.push({ slug: short(r.slug), name: short(r.name) || short(r.slug), models: ids });
+      if (opts.length >= 12) break;
+    }
+    out.options = opts;
   } catch (e) {
     out.error = e.status === 401 || e.status === 403 ? "The gateway refused the stored key."
       : e.status === 404 ? "This Hermes version does not report its model." : "Could not reach the gateway (" + String(e.message || e).slice(0, 60) + ").";

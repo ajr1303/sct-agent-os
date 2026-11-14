@@ -36,6 +36,7 @@ fi
 ./scripts/gen-tls.sh || echo "  ! gateway TLS generation failed - agents won't run until this is fixed"
 
 ./scripts/sync-branding.sh
+mkdir -p data/agent-ssh && chmod 700 data/agent-ssh   # mounted into connectors (see scripts/agent-ssh.sh)
 # Prefer prebuilt images for this release; fall back to a local build if unavailable.
 docker compose pull -q --ignore-pull-failures 2>/dev/null || true
 docker compose build connectors

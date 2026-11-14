@@ -2,6 +2,27 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.24.0] — 2026-11-14 — Change an agent's model from the dashboard
+
+- **Agents page: Change model.** For an agent on its own Linux machine, pick a
+  provider and model and the server applies it there: it backs up that machine's
+  Hermes config, sets the model with Hermes' own `config set` command, restarts the
+  gateway, and checks the gateway comes back reporting the new model. If it does
+  not, the previous config is restored and the gateway restarted again.
+- The choices offered are the providers that machine already holds a key for and
+  the models it lists for each, as reported by its gateway. Nothing else is
+  accepted. To use a new provider, add its key on the machine first.
+- A change is refused while the agent is working on a task (the restart would
+  interrupt it).
+- New `scripts/agent-ssh.sh add <user>@<host>`: creates this server's SSH key
+  (root only, in `data/agent-ssh/`), installs it on the machine, and records the
+  gateway service and whether it can be restarted without a password. Where it
+  cannot, it prints a one-line sudoers rule limited to that restart. `list` and
+  `remove` are also available. The connectors image now includes an SSH client and
+  mounts that folder read-only.
+- Agents on this server keep using *Local models*; Windows machines are not
+  supported by this path yet.
+
 ## [0.23.0] — 2026-11-14 — Each agent's real model
 
 - **Agents page shows the model and provider each agent is actually configured
