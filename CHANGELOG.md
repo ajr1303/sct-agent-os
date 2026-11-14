@@ -2,6 +2,13 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.26.3] — 2026-11-14 — Readable dropdowns on the Agents page
+
+- The Agents page set its own dark text colour on dropdown options, which overrode
+  the dashboard-wide rule and gave dark text on a dark list (role, reports to,
+  provider and model). The page now uses the shared rule: light text on a dark list,
+  with the highlighted option in the accent colour.
+
 ## [0.26.2] — 2026-11-14 — agent-ssh fixes
 
 - `scripts/agent-ssh.sh add` now finds the `hermes` command when it is not on the
