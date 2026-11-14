@@ -157,6 +157,22 @@ denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
 ## Operations
 
 - `watchdog.sh` (cron, */5) restarts stopped/unhealthy `agent-os` containers and writes `data/health.json`.
-- `backup.sh` (cron, 03:30) runs `pg_dump` of Honcho into `backups/`, pruning past 14 days.
+- `backup.sh` (cron, 03:30; and every 5 minutes with `--if-requested` for the dashboard's
+  "Back up now") collects every component into `backups/.stage`: Honcho `pg_dump`, a
+  Paperclip database dump plus its instance files (keys, uploads, instructions), n8n
+  workflow and credential exports, the connectors SQLite database, the Hermes home
+  (no logs or caches) and settings (`.env`, certificates, agent SSH access). It then
+  calls `connectors/backup_tool.py finish` inside the connectors container, which
+  writes a manifest with a SHA-256 per part, packs one `tar.gz`, encrypts it with
+  `age` to every recipient, uploads it with `rclone`, prunes old copies and writes
+  `backups/status.json`. `age` and `rclone` ship in the connectors image.
+- Backup encryption has up to two recipients: the owner's recovery kit (generated on
+  the box, downloaded once, then deleted from it) and an optional operator public key
+  (`OPERATOR_BACKUP_PUBKEY` or the Backups page). Either private key opens an archive;
+  the box keeps public keys only. Unencrypted archives are never uploaded.
+- Backups page (`suburban-backups`, tab `/backups`): `GET /backups` and the setup
+  endpoints under it. Settings live in `data/backup/` (`settings.json`, `rclone.conf`).
+- `restore.sh <file> [key]` decrypts, verifies every part against the manifest and
+  changes nothing; `--apply` restores onto an installed box.
 - `smoke-test.sh` checks the dashboard (`:9119`), the gateway health (`:8642/health`), Honcho, connectors, n8n and Paperclip health, and that the theme is installed.
 - Operator scripts: `set-hostnames.sh`, `paperclip-connect.sh`, `paperclip-reset-password.sh`, `install-memory-plugin.sh`, `show-versions.sh` (see the runbook).

@@ -50,7 +50,7 @@ Re-running the command updates the checkout in place. For routine updates, prefe
 | **Memory** | Self-hosted Honcho long-term memory (Postgres + pgvector + deriver), wired into Hermes. |
 | **Access** | Loopback by default; SSH tunnel, **Cloudflare Tunnel** (HTTPS, no open ports), or LAN. Per-person team sign-in via Cloudflare Access. |
 | **Spend protection** | Per-task run fast-stop, a task-creation rate limit, and a provider-side monthly limit as the dollar ceiling. |
-| **Operations** | Watchdog (every 5 min), nightly backup (03:30, 14-day retention), smoke test, update check, in-place updater, and one-step scripts for hostnames, Paperclip connect and password reset. |
+| **Operations** | Watchdog (every 5 min), nightly **full backup** (encrypted, copied to Google Drive / S3 / any rclone storage, with a tested restore check), smoke test, update check, in-place updater, and one-step scripts for hostnames, Paperclip connect and password reset. |
 
 ---
 
@@ -280,7 +280,8 @@ scripts/
   show-versions.sh          Print the upstream image digests a box is running (for pinning)
   sync-branding.sh          Copy theme, plugins and brand files; generate links.js
   sync-chat-tools.sh        Install the chat-tools config and routing skill
-  enable-plugins.sh, gen-tls.sh, watchdog.sh, backup.sh, smoke-test.sh, check-updates.sh
+  backup.sh, restore.sh     Nightly full backup; open, check and restore one
+  enable-plugins.sh, gen-tls.sh, watchdog.sh, smoke-test.sh, check-updates.sh
 templates/                  nginx configs, dashboard themes, Honcho wiring
 .github/workflows/          check.yml (lint, compose validation), images.yml (prebuilt images)
 docs/RUNBOOK.md             Operator runbook: install, tunnel, first-time setup, logins, troubleshooting
@@ -321,7 +322,8 @@ Known limitations:
 - Tab-by-tab redesign for non-technical owners, an Overview "Today" rail, a calendar view in Bookings, and owner/staff roles.
 - Agent actions for bookings and email, with owner approval.
 - Run each agent's tasks under its own Hermes profile (per-agent models).
-- Security backlog: signed/verified install, network segmentation, off-box backups, Content Security Policy.
+- Security backlog: signed/verified install, network segmentation, Content Security Policy.
+- Backups: one-click "Sign in with Google / Microsoft" for storage, and automatic reload of the team database on restore.
 
 ---
 

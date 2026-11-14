@@ -1765,6 +1765,111 @@ def usage_delete(provider: str, _auth=Depends(require_auth)):
     return {"ok": True}
 
 
+# --- Backups -------------------------------------------------------------------
+# scripts/backup.sh (cron, nightly) builds the archive; backup_tool encrypts it and
+# copies it off this server. These endpoints only read the result and hold settings.
+
+import backup_tool
+
+
+class BackupKit(BaseModel):
+    replace: bool = False
+
+
+class BackupOperatorKey(BaseModel):
+    key: str = ""
+
+
+class BackupRemote(BaseModel):
+    kind: str
+    path: str
+    fields: dict = {}
+
+
+class BackupKeep(BaseModel):
+    keep_local_days: int | None = None
+    keep_remote_days: int | None = None
+
+
+@app.get("/backups")
+def backups_get(_auth=Depends(require_auth)):
+    return backup_tool.summary()
+
+
+@app.post("/backups/kit")
+def backups_kit_create(b: BackupKit, _auth=Depends(require_auth)):
+    try:
+        backup_tool.init_kit(force=bool(b.replace))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)[:200])
+    return backup_tool.summary()
+
+
+@app.get("/backups/kit")
+def backups_kit_download(_auth=Depends(require_auth)):
+    text = backup_tool.kit_text()
+    if text is None:
+        raise HTTPException(status_code=404, detail="The recovery kit was already saved and removed from this server.")
+    return Response(content=text, media_type="text/plain",
+                    headers={"Content-Disposition": 'attachment; filename="agent-os-recovery-kit.txt"',
+                             "Cache-Control": "no-store"})
+
+
+@app.post("/backups/kit/saved")
+def backups_kit_saved(_auth=Depends(require_auth)):
+    backup_tool.kit_saved()
+    return backup_tool.summary()
+
+
+@app.put("/backups/operator-key")
+def backups_operator_key(b: BackupOperatorKey, _auth=Depends(require_auth)):
+    try:
+        backup_tool.set_operator_key(b.key)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return backup_tool.summary()
+
+
+@app.put("/backups/remote")
+def backups_remote_set(b: BackupRemote, _auth=Depends(require_auth)):
+    if not backup_tool.recipients():
+        raise HTTPException(status_code=400, detail="Create the recovery kit first: backups are only sent off this server encrypted.")
+    try:
+        backup_tool.set_remote(b.kind, b.path, b.fields or {})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=400, detail="That storage did not answer in time.")
+    return backup_tool.summary()
+
+
+@app.delete("/backups/remote")
+def backups_remote_clear(_auth=Depends(require_auth)):
+    backup_tool.clear_remote()
+    return backup_tool.summary()
+
+
+@app.put("/backups/settings")
+def backups_keep(b: BackupKeep, _auth=Depends(require_auth)):
+    s = backup_tool.load_settings()
+    for name, val in (("keep_local_days", b.keep_local_days), ("keep_remote_days", b.keep_remote_days)):
+        if val is not None:
+            if not 1 <= int(val) <= 3650:
+                raise HTTPException(status_code=400, detail="Days to keep must be between 1 and 3650.")
+            s[name] = int(val)
+    backup_tool.save_settings(s)
+    return backup_tool.summary()
+
+
+@app.post("/backups/run")
+def backups_run(_auth=Depends(require_auth)):
+    """Ask for a backup now. The host picks this up within five minutes (backup.sh --if-requested)."""
+    os.makedirs(backup_tool.CFG, exist_ok=True)
+    with open(os.path.join(backup_tool.CFG, "run-now"), "w") as f:
+        f.write(datetime.datetime.now(datetime.timezone.utc).isoformat())
+    return backup_tool.summary()
+
+
 # --- Agent lifecycle + invite (board-key writes) ------------------------------
 
 _ID_RE = re.compile(r"^[A-Za-z0-9-]{1,80}$")

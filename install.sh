@@ -125,7 +125,7 @@ write_env() {
   if [ -f .env ]; then
     cp -p .env ".env.bak.$(date +%Y%m%d%H%M%S)"
     say "Existing install detected — keeping your secrets in .env (backup written)."
-    mkdir -p data/hermes/dashboard-themes backups
+    mkdir -p data/hermes/dashboard-themes backups data/backup data/agent-ssh
     if [ "$MEMORY_MODE" = honcho ]; then
       [ -f honcho.env ] || write_honcho_env
       [ -f data/hermes/honcho.json ] || write_honcho_json
@@ -174,7 +174,7 @@ PAPERCLIP_PUBLIC_URL=http://${pc_host}:3100
 PAPERCLIP_ALLOWED_HOSTNAMES=paperclip,localhost,127.0.0.1,${lan_ip}
 COMPOSE_PROFILES=${profs}
 ENV
-  mkdir -p data/hermes/dashboard-themes backups
+  mkdir -p data/hermes/dashboard-themes backups data/backup data/agent-ssh
   if [ "$MEMORY_MODE" = honcho ]; then write_honcho_env; write_honcho_json; fi
   ./scripts/sync-branding.sh
 }
@@ -248,7 +248,8 @@ install_cron() {
   if command -v crontab >/dev/null 2>&1; then
     { crontab -l 2>/dev/null | grep -v '# agent-os-managed' || true
       echo "*/5 * * * * $here/scripts/watchdog.sh # agent-os-managed"
-      echo "30 3 * * * $here/scripts/backup.sh # agent-os-managed"
+      echo "30 3 * * * $here/scripts/backup.sh >/dev/null 2>&1 # agent-os-managed"
+      echo "*/5 * * * * $here/scripts/backup.sh --if-requested >/dev/null 2>&1 # agent-os-managed"
       echo "17 */6 * * * $here/scripts/check-updates.sh # agent-os-managed"
       echo "*/30 * * * * $here/scripts/agent-models.sh >/dev/null 2>&1 # agent-os-managed"; } | crontab - \
       && say "Scheduled watchdog (5m), backup (3:30am), update check (6h)"
@@ -257,6 +258,49 @@ install_cron() {
     warn "Install cron (apt: cron / dnf: cronie), then re-run: $here/install.sh (or add the 3 jobs in scripts/ by hand)."
   fi
   ./scripts/check-updates.sh 2>/dev/null || true   # seed the status now
+}
+
+# Optional: lock backups and send a copy to cloud storage, right at install. The
+# same steps live on the dashboard's Backups page, so skipping here loses nothing.
+# An operator can pre-set their own key for every client install:
+#   OPERATOR_BACKUP_PUBKEY=age1... ./install.sh
+setup_backups() {
+  local bt="docker exec -i agent-os-connectors python backup_tool.py" opkey choice folder tok ep ak sk
+  if [ -n "${OPERATOR_BACKUP_PUBKEY:-}" ] && ! grep -q '^OPERATOR_BACKUP_PUBKEY=' .env; then
+    echo "OPERATOR_BACKUP_PUBKEY=${OPERATOR_BACKUP_PUBKEY}" >> .env
+    docker compose up -d connectors >/dev/null 2>&1 || true
+  fi
+  [ "$ASSUME_YES" = 1 ] && return 0
+  say "Backups"
+  echo "A full backup runs every night. Right now it stays on this server, unlocked." >"$TTY"
+  echo "Locking it and keeping a copy in cloud storage protects you if this machine is lost." >"$TTY"
+  confirm "Set that up now? (You can also do it later on the dashboard: Connections > Backups)" || return 0
+  $bt init || { warn "could not create the recovery kit; set backups up from the dashboard instead"; return 0; }
+  if [ -z "${OPERATOR_BACKUP_PUBKEY:-}" ]; then
+    echo "If someone manages this system for you, paste their public backup key (starts with age1)." >"$TTY"
+    ask opkey "Second key, or Enter to skip" ""
+    [ -n "$opkey" ] && { $bt operator-key "$opkey" || warn "that key was not accepted; add it later on the Backups page"; }
+  fi
+  echo "Where should the copy go?  1) Google Drive  2) S3-compatible (Backblaze, Wasabi, R2...)  3) Decide later" >"$TTY"
+  ask choice "Choice" "3"
+  case "$choice" in
+    1)
+      echo "On a computer with a web browser, install rclone and run:  rclone authorize \"drive\"" >"$TTY"
+      echo "Sign in with the Google account for the backups, then paste the {...} block it prints." >"$TTY"
+      ask folder "Folder name in Google Drive" "Agent OS backups"
+      ask_secret tok "Token (input hidden)"
+      [ -n "$tok" ] && { printf 'token=%s\n' "$tok" | $bt remote gdrive "$folder" \
+        || warn "Google Drive was not connected; finish on the Backups page"; } ;;
+    2)
+      ask folder "Bucket/folder" "my-bucket/agent-os"
+      ask ep "Endpoint URL" "https://"
+      ask ak "Access key ID" ""
+      ask_secret sk "Secret access key (input hidden)"
+      printf 'access_key_id=%s\nsecret_access_key=%s\nendpoint=%s\n' "$ak" "$sk" "$ep" | $bt remote s3 "$folder" \
+        || warn "that storage was not connected; finish on the Backups page" ;;
+  esac
+  echo "IMPORTANT: download your recovery kit from the dashboard (Connections > Backups) and" >"$TTY"
+  echo "keep it off this server. Without it (or the second key) a backup cannot be opened." >"$TTY"
 }
 
 # Enable the Suburban Cyber dashboard plugins on every profile. Delegated to a
@@ -277,6 +321,7 @@ main() {
   start_stack
   enable_plugins
   install_cron
+  setup_backups
   say "Smoke test"
   ./scripts/smoke-test.sh || warn "Some checks failed - see above. Logs: docker compose logs"
   if [ "$MEMORY_MODE" = honcho ]; then docker compose exec -T hermes hermes memory status || true; fi

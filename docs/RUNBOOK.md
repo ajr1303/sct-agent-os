@@ -354,3 +354,75 @@ repointed or stopped separately. Agent ids change on import.
 **Windows agents.** There is usually no inbound SSH, so run the key exchange from the
 agent's machine. Hermes lives in `%LOCALAPPDATA%\hermes`, and the gateway is started
 by a scheduled task or `hermes gateway restart`.
+
+## 13. Backups
+
+A full backup runs every night at 03:30 (`scripts/backup.sh`) and lands in `backups/`
+as one file, `agent-os-<date>.tar.gz` (or `.tar.gz.age` once encryption is on).
+
+| In the backup | What it is |
+|---|---|
+| Team database | Paperclip: agents, tasks, routines, history |
+| Team files and keys | Paperclip's secrets key, uploads, agent instructions |
+| Agent memory | Honcho database |
+| Automations | n8n workflows and credentials (credentials stay encrypted) |
+| Dashboard connections | Mailboxes, bookings, usage plans, agent settings |
+| Hermes | Profiles, skills, sessions, plugins (no logs or caches) |
+| Settings | `.env`, certificates, agent SSH access, backup settings |
+
+Not included: n8n run history and logins (workflows and credentials are), logs, and
+agents that run on their own machines (section 12), which keep their own data.
+
+### Turn on encryption and an off-site copy
+
+Do this on the dashboard under **Connections > Backups**, or during `./install.sh`.
+
+1. **Lock your backups.** Create the recovery kit, download it, store it off the
+   server (password manager, or printed), then confirm. The server deletes its copy
+   and keeps only the public half. The kit opens every backup this install makes.
+2. **Second key (recommended when you manage the box for someone else).** On your
+   own computer, once: `age-keygen -o operator-backup.key`. Keep that file private;
+   it prints a public key starting `age1`. Paste the public key on the Backups page,
+   or set it for every install you do: `OPERATOR_BACKUP_PUBKEY=age1... ./install.sh`.
+   You can then restore a client's backup even if they lose their kit. Without a
+   second key, a lost kit means the backups cannot be opened by anyone.
+3. **Keep a copy somewhere else.**
+   - *Google Drive:* on a computer with a browser, install rclone and run
+     `rclone authorize "drive"`, sign in with the account that should hold the
+     backups, and paste the `{...}` block it prints.
+   - *S3-compatible* (Backblaze B2, Wasabi, Cloudflare R2, MinIO, Amazon S3): endpoint,
+     access key and secret. Use a key limited to the one bucket.
+   - *OneDrive, SharePoint, Dropbox, anything else:* run `rclone config` on a computer
+     with a browser, then paste that section from `rclone config show`.
+
+   The connection is tested by writing and deleting a small file. Backups are only
+   uploaded when they are encrypted. Kept 14 days on the server and 30 days in the
+   cloud by default; both are adjustable on the page.
+
+**Back up now** on the page starts a backup within five minutes. From a shell:
+`sudo ./scripts/backup.sh`.
+
+### Check a backup opens
+
+```bash
+sudo ./scripts/restore.sh backups/agent-os-<date>.tar.gz.age /path/to/recovery-kit.txt
+```
+This decrypts the backup into a temporary folder, checks every part against the
+fingerprints recorded when it was made, and changes nothing. Do it after first setup
+and every few months. The temporary folder contains secrets; delete it afterwards.
+
+### Restore onto a server
+
+1. On the new or repaired server, run `./install.sh` so the services exist.
+2. Copy the backup file and the key file to it (download the backup from your cloud
+   storage first).
+3. `sudo ./scripts/restore.sh <backup file> <key file> --apply`, and type `RESTORE`.
+
+This restores settings, Hermes, dashboard connections, agent memory, the team's files
+and keys, and automations (workflows come back switched off). **The team database is
+not loaded automatically yet.** The dump is left in the unpacked folder as
+`paperclip-db.sql.gz`; it is a plain SQL file that drops and recreates each table.
+Load it into Paperclip's embedded database from inside the container (it listens on
+`127.0.0.1:54329`, database, user and password all `paperclip`) and restart Paperclip.
+This last step has not yet been proven end to end on a live server, so rehearse a
+restore on a spare machine before you rely on it.

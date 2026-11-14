@@ -57,6 +57,11 @@ if command -v crontab >/dev/null 2>&1 && ! crontab -l 2>/dev/null | grep -q 'che
   { crontab -l 2>/dev/null; echo "17 */6 * * * $(pwd)/scripts/check-updates.sh # agent-os-managed"; } | crontab - && echo "Added update-check to cron"
 fi
 # Keep each agent's reported model fresh on the Agents page (every 30 minutes).
+# Backups: the "Back up now" button is picked up by a 5-minute check.
+mkdir -p backups data/backup && chmod 700 backups data/backup
+if command -v crontab >/dev/null 2>&1 && ! crontab -l 2>/dev/null | grep -q 'backup.sh --if-requested'; then
+  { crontab -l 2>/dev/null; echo "*/5 * * * * $(pwd)/scripts/backup.sh --if-requested >/dev/null 2>&1 # agent-os-managed"; } | crontab - && echo "Added on-demand backup check to cron"
+fi
 if command -v crontab >/dev/null 2>&1 && ! crontab -l 2>/dev/null | grep -q 'agent-models.sh'; then
   { crontab -l 2>/dev/null; echo "*/30 * * * * $(pwd)/scripts/agent-models.sh >/dev/null 2>&1 # agent-os-managed"; } | crontab - && echo "Added agent model check to cron"
 fi

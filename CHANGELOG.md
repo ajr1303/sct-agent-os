@@ -2,6 +2,27 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.27.0] — 2026-11-14 — Full backups: encrypted, off-site, restorable
+
+- **The nightly backup now covers the whole system**, not just agent memory: the team
+  database and its files and keys, agent memory, automations, dashboard connections,
+  Hermes profiles and skills, and settings. One file per night in `backups/`.
+- **Encryption with a recovery kit.** Create the kit on the new **Backups** page
+  (under Connections), download it once, and the server deletes its copy. An optional
+  **second key** lets whoever manages the install restore it if the owner loses the
+  kit; the server only ever holds public keys.
+- **Off-site copy** to Google Drive, any S3-compatible storage, or anything rclone
+  supports (OneDrive, SharePoint, Dropbox). The connection is tested before it is
+  saved, and a backup is only uploaded once it is encrypted.
+- **`scripts/restore.sh`** opens a backup with either key, checks every part against
+  fingerprints recorded at backup time, and with `--apply` restores it. Reloading the
+  team database is still a manual step (see the runbook).
+- **The Overview shows what the last backup actually did** (off-site copy, this
+  server only, failed, or how old) instead of the fixed text "Memory backup · nightly".
+- **Back up now** button, adjustable retention, and an optional backup step in the
+  installer. Operators can pre-set their key: `OPERATOR_BACKUP_PUBKEY=age1... ./install.sh`.
+- `age` and `rclone` ship inside the connectors image, so the host still needs only Docker.
+
 ## [0.26.3] — 2026-11-14 — Readable dropdowns on the Agents page
 
 - The Agents page set its own dark text colour on dropdown options, which overrode

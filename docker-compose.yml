@@ -129,11 +129,18 @@ services:
       CHAT_TOOLS_TOKEN: "${CHAT_TOOLS_TOKEN:-}"
       CHAT_TASKS_PER_HOUR: "${CHAT_TASKS_PER_HOUR:-20}"
       N8N_TOOLS_PROFILES: "${N8N_TOOLS_PROFILES:-}"
+      # Optional second key that can open this install's backups (public half only).
+      # Lets whoever manages the install restore it if the owner loses the recovery kit.
+      OPERATOR_BACKUP_PUBKEY: "${OPERATOR_BACKUP_PUBKEY:-}"
     volumes:
       - connectors-data:/data
       # Optional SSH key + host list for changing an agent's model on its own machine.
       # Empty until scripts/agent-ssh.sh adds a machine. Read-only in the container.
       - ./data/agent-ssh:/agent-ssh:ro
+      # Backups: the archives themselves, and the backup settings (storage
+      # connection, public keys). scripts/backup.sh fills /backups/.stage.
+      - ./backups:/backups
+      - ./data/backup:/backup-config
     expose:
       - "8000"
     mem_limit: 256M

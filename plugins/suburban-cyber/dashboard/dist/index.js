@@ -16,7 +16,7 @@
       { agent: "Books", risk: "high", title: "Delete 214 spam messages older than 90 days",
         detail: "Permanent deletion is always held for review. Nothing is removed until you approve." }
     ],
-    managed: { backup: "Memory backup · nightly" }
+    managed: { backup: "Backups" }
   };
 
   function whenReady(cb, tries) {
@@ -61,6 +61,7 @@
       var sd = useState(null), agents = sd[0], setAgents = sd[1];
       var se = useState(null), pcOv = se[0], setPcOv = se[1];
       var su = useState(null), planUse = su[0], setPlanUse = su[1];
+      var sk = useState(null), bk = sk[0], setBk = sk[1];
       var sg = useState(null), upd = sg[0], setUpd = sg[1];
       var sh = useState(0), updBump = sh[0], setUpdBump = sh[1];
 
@@ -73,6 +74,8 @@
           try {
             fetch("/api/connectors/usage", { credentials: "same-origin" }).then(function (r) { return r.ok ? r.json() : null; })
               .then(function (v) { if (v) setPlanUse(v); }).catch(function () {});
+            fetch("/api/connectors/backups", { credentials: "same-origin" }).then(function (r) { return r.ok ? r.json() : null; })
+              .then(function (v) { if (v) setBk(v); }).catch(function () {});
             fetch("/api/connectors/orchestration/overview", { credentials: "same-origin" })
               .then(function (r) { return r.ok ? r.json() : null; })
               .then(function (v) { if (v) setPcOv(v); }).catch(function () {});
@@ -102,6 +105,17 @@
 
       var ATT_KINDS = [["approval", "Approvals"], ["decision", "Decisions"], ["review", "Reviews"], ["failed_run", "Failed runs"], ["budget_alert", "Budget alerts"], ["agent_error_alert", "Agent errors"], ["blocker_attention", "Blockers"], ["join_request", "Join requests"], ["recovery_action", "Recovery actions"], ["productivity_review", "Productivity reviews"], ["issue_thread_interaction", "Messages"]];
       function orchHref() { return "/orchestration" + (location.search || ""); }
+      // What the last backup actually did, not what is scheduled.
+      function backupLine(b) {
+        var st = b && b.status;
+        if (!b) return "—";
+        if (!st) return "None yet";
+        var hrs = (Date.now() - new Date(st.at).getTime()) / 3600000;
+        if (!st.ok) return "Last one failed";
+        if (hrs > 36) return Math.round(hrs / 24) + " days old";
+        var age = hrs < 1.5 ? "under an hour ago" : Math.round(hrs) + " h ago";
+        return (st.uploaded ? "Off-site copy · " : "This server only · ") + age;
+      }
       function waitingBody() {
         if (pcOv == null) return h("div", { className: "sc-empty" }, "Checking the control plane…");
         if (!pcOv.paperclip_up) return h("div", { className: "sc-empty" }, h("span", null, "Control plane is off. ", h("a", { href: orchHref(), className: "sc-link" }, "Set it up in Orchestration →")));
@@ -230,7 +244,8 @@
               SUPPORT ? h("div", { className: "sc-managed-row" }, h("span", { className: "sc-muted" }, "Support"), h("span", null, SUPPORT)) : null,
               h("div", { className: "sc-managed-row" }, h("span", { className: "sc-muted" }, "Active sessions"), h("span", null, activeSessions == null ? "—" : String(activeSessions))),
               h("div", { className: "sc-managed-row" }, h("span", { className: "sc-muted" }, "Hermes version"), h("span", null, version || "—")),
-              h("div", { className: "sc-managed-sub" }, SAMPLE.managed.backup))
+              h("div", { className: "sc-managed-row" }, h("span", { className: "sc-muted" }, SAMPLE.managed.backup),
+                h("a", { href: "/backups" + (location.search || ""), className: "sc-link" }, backupLine(bk))))
           )
         ),
         h("div", { className: "sc-foot" }, "Suburban Cyber Agent OS · built on Hermes Agent (Nous Research)")

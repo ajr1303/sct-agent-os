@@ -20,7 +20,7 @@
   var GROUPS = [
     { id: "main", label: "", items: ["/chat"] },                    // Overview is added in front of Chat
     { id: "team", label: "Your team", items: ["/tasks", "/team", "/orchestration", "/automations", "/usage"] },
-    { id: "conn", label: "Connections", items: ["/bookings", "/mailboxes"] },
+    { id: "conn", label: "Connections", items: ["/bookings", "/mailboxes", "/backups"] },
     { id: "adv", label: "Advanced", items: ["/profiles", "/models", "/skills", "/mcp", "/plugins", "/cron",
         "/sessions", "/files", "/channels", "/webhooks", "/pairing", "/env", "/config", "/system", "/logs",
         "/kanban", "/achievements", "/docs"] }
