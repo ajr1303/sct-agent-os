@@ -1425,8 +1425,8 @@ _MODEL_JOBS_LOCK = threading.Lock()
 
 _REMOTE_SET_MODEL = r"""
 set -u
-MODEL="$1"; PROVIDER="$2"; SVC="$3"; SCOPE="$4"
-H=$(command -v hermes 2>/dev/null || true); [ -x "$H" ] || H="$HOME/.local/bin/hermes"
+MODEL="$1"; PROVIDER="$2"; SVC="$3"; SCOPE="$4"; H="${5:-}"
+[ -x "$H" ] || H=$(command -v hermes 2>/dev/null || true); [ -x "$H" ] || H="$HOME/.local/bin/hermes"
 [ -x "$H" ] || { echo "ERR The hermes command was not found on that machine."; exit 10; }
 CFG="$HOME/.hermes/config.yaml"; ENVF="$HOME/.hermes/.env"; BAK="$CFG.bak-agent-os"
 val() { awk -F= -v k="$1" '$0 ~ "^"k"=" {print substr($0, index($0, "=") + 1)}' "$ENVF" | head -1 | tr -d "\"'\r"; }
@@ -1475,7 +1475,7 @@ def _model_job(aid):
 
 def _run_model_change(aid, entry, provider, model):
     args = " ".join(shlex.quote(x) for x in (model, provider or "", entry.get("service") or "hermes-gateway.service",
-                                             entry.get("scope") or "system"))
+                                             entry.get("scope") or "system", str(entry.get("hermes") or "")))
     cmd = ["ssh", "-i", os.path.join(AGENT_SSH_DIR, "id_ed25519"), "-o", "BatchMode=yes",
            "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile=" + os.path.join(AGENT_SSH_DIR, "known_hosts"),
            "-o", "ConnectTimeout=15", "-o", "IdentitiesOnly=yes", str(entry.get("target")), "bash -s -- " + args]

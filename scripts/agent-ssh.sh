@@ -47,9 +47,6 @@ PY
       || ssh-copy-id -i "$KEY.pub" -o "UserKnownHostsFile=$KH" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 "$T" \
       || { echo "Could not install the key on $T."; exit 1; }
     OUT=$(ssh "${SSHO[@]}" -o BatchMode=yes -o StrictHostKeyChecking=yes "$T" 'bash -s' <<'REMOTE'
-H=$(command -v hermes 2>/dev/null || true); [ -x "$H" ] || H="$HOME/.local/bin/hermes"
-echo "hermes=$([ -x "$H" ] && echo "$H")"
-echo "can_set=$([ -x "$H" ] && "$H" config set --help >/dev/null 2>&1 && echo 1 || echo 0)"
 svc=""; scope=""
 for s in hermes-gateway.service hgw.service; do
   if systemctl --user is-active --quiet "$s" 2>/dev/null; then svc=$s; scope=user; break; fi
@@ -58,8 +55,21 @@ if [ -z "$svc" ]; then for s in hermes-gateway.service hgw.service; do
   if systemctl is-active --quiet "$s" 2>/dev/null; then svc=$s; scope=system; break; fi
 done; fi
 echo "service=$svc"; echo "scope=$scope"
+# Find the hermes command: on the path, in the usual per-user spot, or wherever the
+# gateway service itself starts it from.
+H=$(command -v hermes 2>/dev/null || true); [ -x "$H" ] || H="$HOME/.local/bin/hermes"
+EXEC=""
+if [ -n "$svc" ]; then
+  if [ "$scope" = user ]; then EXEC=$(systemctl --user cat "$svc" 2>/dev/null | sed -n 's/^ExecStart=//p' | head -1)
+  else EXEC=$(systemctl cat "$svc" 2>/dev/null | sed -n 's/^ExecStart=//p' | head -1); fi
+fi
+if [ ! -x "$H" ]; then for t in $EXEC; do case "$t" in */hermes) [ -x "$t" ] && H="$t";; esac; done; fi
+echo "hermes=$([ -x "$H" ] && echo "$H")"
+echo "hermes_version=$([ -x "$H" ] && "$H" --version 2>/dev/null | head -1 | tr -d '=' | cut -c1-60)"
+echo "can_set=$([ -x "$H" ] && "$H" config set --help >/dev/null 2>&1 && echo 1 || echo 0)"
+echo "execstart=$(printf %s "$EXEC" | tr -d '=' | cut -c1-160)"
 if [ "$scope" = user ]; then echo "can_restart=1"
-elif [ -n "$svc" ] && sudo -n systemctl restart --dry-run "$svc" >/dev/null 2>&1; then echo "can_restart=1"
+elif [ -n "$svc" ] && sudo -n -l "$(command -v systemctl)" restart "$svc" >/dev/null 2>&1; then echo "can_restart=1"
 else echo "can_restart=0"; fi
 echo "user=$(id -un)"; echo "systemctl=$(command -v systemctl)"
 REMOTE
@@ -68,11 +78,12 @@ REMOTE
 import json, os, sys
 p, host, target = sys.argv[1:4]
 kv = dict(l.split("=", 1) for l in os.environ.get("AOS_OUT", "").splitlines() if "=" in l)
-e = {"target": target, "service": kv.get("service") or "", "scope": kv.get("scope") or "",
+e = {"target": target, "service": kv.get("service") or "", "scope": kv.get("scope") or "", "hermes": kv.get("hermes") or "",
      "can_set": kv.get("can_set") == "1", "can_restart": kv.get("can_restart") == "1" and bool(kv.get("service"))}
 d = json.load(open(p)); d[host] = e; json.dump(d, open(p, "w"), indent=1)
 print("Added %s: gateway service %s (%s)" % (host, e["service"] or "NOT FOUND", e["scope"] or "-"))
-if not kv.get("hermes"): print("  ! The hermes command was not found on that machine.")
+if kv.get("hermes"): print("  Hermes: %s (%s)" % (kv["hermes"], kv.get("hermes_version") or "version unknown"))
+if not kv.get("hermes"): print("  ! The hermes command was not found on that machine. Its gateway starts with: " + (kv.get("execstart") or "unknown"))
 elif not e["can_set"]: print("  ! That Hermes version has no 'config set' command, so its model cannot be changed from here.")
 if not e["service"]: print("  ! No running Hermes gateway service was found (looked for hermes-gateway.service and hgw.service).")
 elif not e["can_restart"]:

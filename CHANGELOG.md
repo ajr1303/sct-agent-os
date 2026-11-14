@@ -2,6 +2,16 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.26.2] — 2026-11-14 — agent-ssh fixes
+
+- `scripts/agent-ssh.sh add` now finds the `hermes` command when it is not on the
+  path, by reading where the machine's own gateway service starts it from, and
+  remembers that location for model changes. It prints the Hermes version it found.
+- The "can this server restart the gateway" check now asks `sudo` about the exact
+  restart command. The earlier check used a dry-run variant that a narrowly scoped
+  sudoers rule (the one the script itself recommends) does not match, so it kept
+  reporting "no" after the rule was added.
+
 ## [0.26.1] — 2026-11-14 — Usage cards follow your agents
 
 - The Usage page now shows a card for **every AI provider at least one agent is
