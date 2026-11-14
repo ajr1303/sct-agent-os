@@ -401,6 +401,12 @@ Do this on the dashboard under **Connections > Backups**, or during `./install.s
    uploaded when they are encrypted. Kept 14 days on the server and 30 days in the
    cloud by default; both are adjustable on the page.
 
+If an upload fails (Google Drive sometimes answers `rateLimitExceeded` when signed in
+through rclone's shared app), the backup stays on the server and the upload is retried
+about every 30 minutes. Send it again immediately with
+`sudo ./scripts/backup.sh --retry-upload`. If it keeps happening, reconnect Google Drive
+with your own Google client ID (the option is on the Backups page).
+
 **Back up now** on the page starts a backup within five minutes. From a shell:
 `sudo ./scripts/backup.sh`.
 

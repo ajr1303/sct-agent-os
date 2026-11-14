@@ -146,7 +146,7 @@ def set_operator_key(key):
 # --- remote storage -------------------------------------------------------------
 
 def _rclone(args, timeout=600):
-    return subprocess.run(["rclone", "--config", _p("rclone.conf"), "--retries", "2", "--low-level-retries", "3"] + args,
+    return subprocess.run(["rclone", "--config", _p("rclone.conf"), "--retries", "2"] + args,
                           capture_output=True, text=True, timeout=timeout)
 
 
@@ -156,6 +156,10 @@ def _clean_err(text):
     last = re.sub(r"^\d{4}/\d\d/\d\d \d\d:\d\d:\d\d \w+\s*:\s*", "", lines[-1]) if lines else "unknown error"
     if re.search(r"(?i)invalid_grant|unauthorized|401|token.*(expired|revoked)|couldn't fetch token", t):
         return "the storage refused the sign-in. Make a fresh token and paste it again."
+    if re.search(r"(?i)rateLimitExceeded|userRateLimitExceeded|too many requests|\b429\b", t):
+        return ("the storage is turning requests away as too frequent (rate limit). It will be tried again "
+                "automatically. If this keeps happening with Google Drive, connect it with your own Google "
+                "client ID (see the Backups page).")
     return last[:200]
 
 
@@ -185,6 +189,11 @@ def set_remote(kind, path, fields):
         except Exception:
             raise ValueError("That is not the token rclone prints. Paste the whole {...} block, including the braces.")
         conf = "[%s]\ntype = drive\ntoken = %s\n" % (REMOTE, json.dumps(tj, separators=(",", ":")))
+        # Optional: your own Google client, which gets its own request allowance instead
+        # of sharing rclone's. The token must have been made with the same client.
+        cid, csec = str(fields.get("client_id") or "").strip(), str(fields.get("client_secret") or "").strip()
+        if cid or csec:
+            conf += "client_id = %s\nclient_secret = %s\n" % (_one_line(cid, "The client ID"), _one_line(csec, "The client secret"))
     elif kind == "s3":
         conf = ("[%s]\ntype = s3\nprovider = Other\naccess_key_id = %s\nsecret_access_key = %s\nendpoint = %s\n"
                 % (REMOTE, _one_line(fields.get("access_key_id"), "The access key ID"),
@@ -294,7 +303,10 @@ def pack(stage):
 def upload(path):
     s = load_settings()
     target = "%s:%s" % (REMOTE, s.get("remote_path") or "")
-    r = _rclone(["copyto", path, target + "/" + os.path.basename(path)], timeout=3 * 3600)
+    # Slow and patient: shared sign-in apps (rclone's own Google one) are rate limited,
+    # so pace the requests and let rclone back off and retry rather than give up.
+    r = _rclone(["copyto", path, target + "/" + os.path.basename(path), "--retries", "5", "--retries-sleep", "30s",
+                 "--low-level-retries", "20", "--tpslimit", "3", "--drive-chunk-size", "16M"], timeout=3 * 3600)
     if r.returncode != 0:
         raise RuntimeError("Upload failed: " + _clean_err(r.stderr))
     chk = _rclone(["lsjson", target + "/" + os.path.basename(path)], timeout=120)
@@ -307,6 +319,30 @@ def upload(path):
     keep = int(s.get("keep_remote_days") or 30)
     _rclone(["delete", target, "--min-age", "%dd" % keep, "--include", "agent-os-*.tar.gz.age"], timeout=600)
     return target
+
+
+def retry_upload(min_gap_seconds=1800):
+    """Send the newest backup again if its upload failed. Called every few minutes by
+    scripts/backup.sh, so it spaces its own attempts. Returns None when there is nothing to do."""
+    st = read_status()
+    if not st or not st.get("ok") or st.get("uploaded") or not st.get("encrypted") or not remote_configured():
+        return None
+    path = os.path.join(OUT, st.get("file") or "")
+    if not os.path.isfile(path) or int(st.get("upload_tries") or 1) >= 12:
+        return None
+    if time.time() - float(st.get("upload_tried_at") or 0) < min_gap_seconds:
+        return None
+    st["upload_tries"] = int(st.get("upload_tries") or 1) + 1
+    st["upload_tried_at"] = time.time()
+    try:
+        st["remote"] = upload(path)
+        st["uploaded"] = True
+        st["upload_error"] = None
+    except Exception as e:
+        st["upload_error"] = str(e)[:400]
+    with open(os.path.join(OUT, "status.json"), "w", encoding="utf-8") as f:
+        json.dump(st, f, indent=1)
+    return st
 
 
 def prune_local():
@@ -344,11 +380,13 @@ def finish(stage, version="", failed=None):
             if not encrypted:
                 st["upload_error"] = "Not uploaded: backups are only sent off this server once encryption is set up."
             else:
+                st["upload_tries"] = 1
+                st["upload_tried_at"] = time.time()
                 try:
                     st["remote"] = upload(path)
                     st["uploaded"] = True
                 except Exception as e:
-                    st["upload_error"] = str(e)[:300]
+                    st["upload_error"] = str(e)[:400]
         prune_local()
     except Exception as e:
         st["error"] = str(e)[:300]
@@ -394,6 +432,11 @@ def main(argv):
         else:
             print("backup: FAILED: " + str(st["error"]))
         return 0 if st["ok"] else 1
+    if argv[:1] == ["retry-upload"]:
+        st = retry_upload(0 if "--now" in argv else 1800)
+        if st:
+            print("backup: " + ("uploaded " + st["file"] + " to " + st["remote"] if st["uploaded"] else st["upload_error"]))
+        return 0
     if argv[:1] == ["init"]:
         init_kit()
         print("recovery kit ready" if kit_text() else "recovery kit already saved")

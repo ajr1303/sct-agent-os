@@ -43,7 +43,7 @@
       s = useState("");    var opKey = s[0], setOpKey = s[1];
       s = useState(false); var opEdit = s[0], setOpEdit = s[1];
       s = useState(false); var stEdit = s[0], setStEdit = s[1];
-      s = useState({ kind: "gdrive", path: "Agent OS backups", token: "", access_key_id: "", secret_access_key: "", endpoint: "", region: "", config: "" });
+      s = useState({ kind: "gdrive", path: "Agent OS backups", token: "", client_id: "", client_secret: "", access_key_id: "", secret_access_key: "", endpoint: "", region: "", config: "" });
       var f = s[0], setF = s[1];
 
       function load() { return api("/backups").then(function (x) { setD(x); setErr(null); }).catch(function (e) { setErr(String(e.message || e)); }); }
@@ -98,7 +98,8 @@
           h("div", null, h("span", { className: "sbk-dim" }, "Parts saved"), h("b", null, (st.components || []).filter(function (c) { return c.ok; }).length + " of " + ((st.components || []).length + (st.missing || []).filter(function (m) { return !(st.components || []).some(function (c) { return c.file === m; }); }).length)))) : null,
         st && st.ok && (st.missing || []).length ? h("div", { className: "sbk-msg" }, "Not in this backup: " +
           st.missing.map(function (m) { return PART[m] || m; }).join(", ") + ". Everything else was saved.") : null,
-        st && st.upload_error ? h("div", { className: "sbk-msg" }, st.upload_error) : null,
+        st && st.upload_error ? h("div", { className: "sbk-msg" }, st.upload_error,
+          st.encrypted && rem.configured ? " The copy on this server is fine; the upload is tried again about every 30 minutes." : "") : null,
         st && st.ok && !st.uploaded && !st.upload_error ? h("div", { className: "sbk-dim sbk-p" },
           "This copy lives on the same server as the system it protects. It covers a bad update, not a lost or broken machine. Finish the two steps below to keep a copy somewhere else.") : null);
 
@@ -162,7 +163,7 @@
         storeBody = h("div", { className: "sbk-dim sbk-p" }, "Finish step 1 first. Backups only leave this server locked.");
       } else {
         var k = f.kind, fields = {};
-        if (k === "gdrive") fields = { token: f.token.trim() };
+        if (k === "gdrive") { fields = { token: f.token.trim() }; if (f.client_id.trim()) { fields.client_id = f.client_id.trim(); fields.client_secret = f.client_secret.trim(); } }
         if (k === "s3") fields = { access_key_id: f.access_key_id.trim(), secret_access_key: f.secret_access_key.trim(), endpoint: f.endpoint.trim(), region: f.region.trim() };
         if (k === "custom") fields = { config: f.config };
         storeBody = h("form", { className: "sbk-col", onSubmit: function (e) {
@@ -183,7 +184,13 @@
               h("li", null, "Paste it into Token and click Connect. Treat the token like a password.")),
             h("pre", { className: "sbk-code" }, "rclone authorize \"drive\""),
             h("label", { className: "sbk-field" }, h("span", null, "Token"),
-              h("textarea", { className: "sbk-in sbk-ta", value: f.token, onChange: set("token"), placeholder: "{\"access_token\":\"…\",\"refresh_token\":\"…\",…}", spellCheck: false, autoComplete: "off" }))) : null,
+              h("textarea", { className: "sbk-in sbk-ta", value: f.token, onChange: set("token"), placeholder: "{\"access_token\":\"…\",\"refresh_token\":\"…\",…}", spellCheck: false, autoComplete: "off" })),
+            h("details", { className: "sbk-more" },
+              h("summary", null, "Uploads being turned away as too frequent? Use your own Google client"),
+              h("div", { className: "sbk-col" },
+                h("div", { className: "sbk-p" }, "The command above signs in through rclone's shared Google app, which everyone using rclone shares, so Google sometimes refuses large uploads. With your own client ID you get your own allowance. Create one in Google Cloud Console (APIs & Services: enable the Google Drive API, then Credentials > OAuth client ID > Desktop app), make the token with the command below, and enter the same ID and secret here."),
+                h("pre", { className: "sbk-code" }, "rclone authorize \"drive\" \"YOUR_CLIENT_ID\" \"YOUR_CLIENT_SECRET\""),
+                h("div", { className: "sbk-row" }, field("Client ID", "client_id"), field("Client secret", "client_secret", { type: "password" }))))) : null,
           k === "s3" ? h("div", { className: "sbk-col" },
             h("div", { className: "sbk-p" }, "Works with Backblaze B2, Wasabi, Cloudflare R2, MinIO and Amazon S3. Use a key that can only reach this one bucket."),
             h("div", { className: "sbk-row" }, field("Endpoint", "endpoint", { placeholder: "https://s3.us-west-002.backblazeb2.com" }), field("Region (if required)", "region", { placeholder: "optional" })),

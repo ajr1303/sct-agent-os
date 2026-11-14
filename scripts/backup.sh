@@ -4,6 +4,7 @@
 #
 #   scripts/backup.sh                 run a backup now (cron runs this nightly)
 #   scripts/backup.sh --if-requested  run only if "Back up now" was pressed in the dashboard
+#   scripts/backup.sh --retry-upload  send the newest backup to cloud storage again, now
 #
 # The archive is encrypted and copied to cloud storage once those are set up on the
 # dashboard's Backups page (or in the installer). Until then it stays on this server,
@@ -13,8 +14,16 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 
 if [ "${1:-}" = "--if-requested" ]; then
-  [ -f data/backup/run-now ] || exit 0
+  if [ ! -f data/backup/run-now ]; then
+    # Nothing asked for. If the last backup could not be uploaded, try that again
+    # (the tool spaces its own attempts, so this is cheap to call every 5 minutes).
+    docker ps --format '{{.Names}}' | grep -qx agent-os-connectors \
+      && docker exec agent-os-connectors python /app/backup_tool.py retry-upload
+    exit 0
+  fi
   rm -f data/backup/run-now
+elif [ "${1:-}" = "--retry-upload" ]; then
+  exec docker exec agent-os-connectors python /app/backup_tool.py retry-upload --now
 fi
 
 mkdir -p backups data/backup

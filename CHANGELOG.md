@@ -2,6 +2,17 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.27.2] — 2026-11-14 — Backup uploads that survive rate limits
+
+- A first real upload to Google Drive was refused with `rateLimitExceeded`. Uploads
+  gave up too quickly: they now pace their requests, back off and retry several times.
+- **A failed upload is retried automatically** about every 30 minutes (up to 12
+  times) without making a new backup. To send it again right away:
+  `sudo ./scripts/backup.sh --retry-upload`.
+- Google Drive can be connected with **your own Google client ID**, which has its own
+  request allowance instead of sharing rclone's. Optional, on the Backups page.
+- Rate-limit errors are explained in plain words on the page.
+
 ## [0.27.1] — 2026-11-14 — Clearer Google Drive steps
 
 - The Backups page now walks through connecting Google Drive step by step, including
