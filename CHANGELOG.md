@@ -2,6 +2,20 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.25.0] — 2026-11-14 — Tasks page on large boards, activity tiles
+
+- **Tasks page now shows current work on boards with thousands of tasks.** It used
+  to take an arbitrary first 50 tasks, so on a large board "Working" could be empty
+  while agents were busy. It now asks Paperclip for tasks in progress, tasks waiting
+  on the owner, queued tasks and the most recently finished, newest first.
+- Tasks with an agent run in flight are marked **Running now** and listed first;
+  other in-progress tasks read **In progress**. Filter buttons show counts. Task
+  keys use Paperclip's identifier (for example `ABC-123`).
+- **Overview: two new tiles**, from Paperclip: agent runs over the last 14 days
+  (succeeded, failed, today) and tasks in progress (with total open). The chat
+  session, token and spend tiles are labelled "this server only" when the team is
+  managed by Paperclip, because they never included agents on other machines.
+
 ## [0.24.0] — 2026-11-14 — Change an agent's model from the dashboard
 
 - **Agents page: Change model.** For an agent on its own Linux machine, pick a

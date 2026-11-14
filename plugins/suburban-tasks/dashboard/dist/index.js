@@ -48,9 +48,10 @@
       return { k: "queued", label: s ? (s.charAt(0).toUpperCase() + s.slice(1)) : "Queued" };
     }
 
-    function chip(status) {
+    function chip(status, running) {
       var b = bucket(status);
-      return h("span", { className: "st-chip st-" + b.k }, b.k === "working" ? h("span", { className: "st-spin" }) : null, b.label);
+      if (running) return h("span", { className: "st-chip st-working" }, h("span", { className: "st-spin" }), "Running now");
+      return h("span", { className: "st-chip st-" + b.k }, b.k === "working" ? "In progress" : b.label);
     }
 
     function Tasks() {
@@ -123,7 +124,10 @@
 
       var tasks = (list && list.tasks) ? list.tasks : [];
       var up = list ? list.paperclip_up : null;
-      var shown = tasks.filter(function (t) { return filter === "all" || bucket(t.status).k === filter; });
+      function inFilter(t, f) { return f === "all" || bucket(t.status).k === f || (f === "working" && t.running); }
+      var shown = tasks.filter(function (t) { return inFilter(t, filter); })
+        .sort(function (x, y) { return (y.running ? 1 : 0) - (x.running ? 1 : 0); });   // live work first; otherwise newest first as delivered
+      function countFor(f) { var n = 0; for (var i = 0; i < tasks.length; i++) if (inFilter(tasks[i], f)) n++; return n; }
 
       function pcBase() { var L = window.__SCT_LINKS__; if (L && L.paperclip) return L.paperclip.replace(/\/+$/, ""); return location.protocol + "//" + location.hostname + ":3100"; }
       function pcTaskUrl(key) {
@@ -135,14 +139,14 @@
         return h("div", { className: "st-top" },
           h("div", null,
             h("div", { className: "st-h1" }, "Tasks"),
-            h("div", { className: "st-sub" }, "What your agents are working on — and everything they've produced.")));
+            h("div", { className: "st-sub" }, "What your agents are working on and what they've produced. Shows work in progress, what's waiting on you, and the most recent finished tasks.")));
       }
 
       function filters() {
         var opts = [["all", "All"], ["working", "Working"], ["attn", "Needs you"], ["done", "Done"]];
         return h("div", { className: "st-filters" }, opts.map(function (o) {
           return h("button", { key: o[0], className: "st-filt" + (filter === o[0] ? " on" : ""),
-            onClick: function () { setFilter(o[0]); } }, o[1]);
+            onClick: function () { setFilter(o[0]); } }, o[1], o[0] !== "all" && list ? h("span", { className: "st-count" }, countFor(o[0])) : null);
         }));
       }
 
@@ -154,7 +158,7 @@
               t.agentName ? h("span", { className: "st-agent" }, t.agentName) : null,
               h("span", { className: "st-key" }, t.key),
               t.updatedAt ? h("span", { className: "st-time" }, whenStr(t.updatedAt)) : null)),
-          chip(t.status));
+          chip(t.status, t.running));
       }
 
       function listPane() {

@@ -129,6 +129,7 @@
         for (var i = 0; i < list.length; i++) { if (slug(pick(list[i], ["name", "display_name"])) === n) return pick(list[i], ["model"]); }
         return null;
       }
+      var work = useManaged && pcOv.work ? pcOv.work : null;
       var agentTileLabel = useManaged ? "Agents" : "Active agents";
       var agentTileVal = useManaged ? String(managedAgents.length) : (status ? String(activeAgents != null ? activeAgents : 0) : "—");
       var agentTileSub = useManaged ? "Managed by Paperclip" : "Running right now";
@@ -157,10 +158,14 @@
             h("span", null, h("span", { className: "sc-dot " + (up ? "sc-ok" : "sc-bad") }), up ? "Gateway running" : "Gateway down"))),
 
         h("div", { className: "sc-stats" },
-          Stat("Sessions, 14 days", analytics ? String(tot.total_sessions || 0) : "—", "Conversations and automations"),
-          Stat("Tokens, 14 days", analytics ? fmtNum(tokens) : "—", "Input + output"),
           Stat(agentTileLabel, agentTileVal, agentTileSub, true),
-          Stat("AI spend, 14 days", analytics ? fmtCost(tot.total_estimated_cost) : "—", "Estimated from usage")),
+          work ? Stat("Agent runs, " + (work.days || 14) + " days", fmtNum(work.runs || 0),
+            (work.succeeded || 0) + " succeeded · " + (work.failed || 0) + " failed · " + (work.runs_today || 0) + " today") : null,
+          work ? Stat("Tasks in progress", String(work.tasks_in_progress != null ? work.tasks_in_progress : "—"),
+            (work.tasks_open != null ? work.tasks_open : "—") + " open in total") : null,
+          Stat("Chat sessions, 14 days", analytics ? String(tot.total_sessions || 0) : "—", useManaged ? "On this server only" : "Conversations and automations"),
+          Stat("Tokens, 14 days", analytics ? fmtNum(tokens) : "—", useManaged ? "This server only · input + output" : "Input + output"),
+          Stat("AI spend, 14 days", analytics ? fmtCost(tot.total_estimated_cost) : "—", useManaged ? "This server only · estimated" : "Estimated from usage")),
 
         h("div", { className: "sc-cols" },
           h("div", { className: "sc-col" },

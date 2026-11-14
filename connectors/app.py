@@ -1793,6 +1793,19 @@ def orchestration_overview(_auth=Depends(require_auth)):
         out["attention"] = att
     except Exception as e:
         out["errors"].append("attention: " + str(e)[:120])
+    try:
+        # Paperclip's own 14-day picture: how many agent runs, how they ended, open work.
+        d = _pc_get("/api/companies/" + str(cid) + "/dashboard")
+        days = d.get("runActivity") if isinstance(d, dict) else None
+        if isinstance(days, list):
+            num = lambda k: sum(int(x.get(k) or 0) for x in days if isinstance(x, dict))
+            t = d.get("tasks") if isinstance(d.get("tasks"), dict) else {}
+            today = days[-1] if days and isinstance(days[-1], dict) else {}
+            out["work"] = {"days": len(days), "runs": num("total"), "succeeded": num("succeeded"), "failed": num("failed"),
+                           "runs_today": int(today.get("total") or 0), "tasks_in_progress": t.get("inProgress"),
+                           "tasks_open": t.get("open"), "tasks_done": t.get("done")}
+    except Exception as e:
+        out["errors"].append("activity: " + str(e)[:120])
     return out
 
 
@@ -1839,14 +1852,36 @@ def list_tasks(agent: str = "", _auth=Depends(require_auth)):
                 names[a.get("id")] = a.get("name") or a.get("displayName") or "Agent"
     except Exception:
         pass
-    issues = []
-    for q in ("?view=rows&limit=50", "?limit=50", ""):
+    def _rows(q):
+        data = _pc_get("/api/companies/" + str(cid) + "/issues" + q)
+        return data if isinstance(data, list) else (data.get("issues") or data.get("items") or data.get("rows") or data.get("data") or [])
+
+    # A board can hold thousands of tasks, so ask for what the page shows instead of an
+    # arbitrary first page: everything being worked on, what is waiting on the owner,
+    # what is queued, and the most recently finished. Newest activity first.
+    issues, seen = [], set()
+    for st, lim in (("in_progress", 60), ("in_review,blocked", 80), ("todo", 40), ("done", 60)):
         try:
-            data = _pc_get("/api/companies/" + str(cid) + "/issues" + q)
-            issues = data if isinstance(data, list) else (data.get("issues") or data.get("items") or data.get("rows") or data.get("data") or [])
-            break
+            for i in _rows("?status=" + st + "&sortField=updated&sortDir=desc&limit=" + str(lim)):
+                if isinstance(i, dict) and i.get("id") not in seen:
+                    seen.add(i.get("id")); issues.append(i)
         except Exception:
             continue
+    if not issues:   # older Paperclip without those filters
+        for q in ("?view=rows&limit=50", "?limit=50", ""):
+            try:
+                issues = _rows(q)
+                break
+            except Exception:
+                continue
+    live = set()     # tasks with an agent run in flight right now
+    try:
+        lr = _pc_get("/api/companies/" + str(cid) + "/live-runs")
+        for r in (lr if isinstance(lr, list) else (lr.get("runs") or lr.get("data") or [])):
+            if isinstance(r, dict) and r.get("issueId") and str(r.get("status")) in ("running", "queued"):
+                live.add(r.get("issueId"))
+    except Exception:
+        pass
     tasks = []
     for i in issues:
         if not isinstance(i, dict):
@@ -1855,10 +1890,11 @@ def list_tasks(agent: str = "", _auth=Depends(require_auth)):
         if agent and aid != agent:
             continue
         tasks.append({
-            "key": i.get("humanKey") or i.get("key") or i.get("reference") or i.get("id"),
+            "key": i.get("identifier") or i.get("humanKey") or i.get("key") or i.get("reference") or i.get("id"),
             "id": i.get("id"),
             "title": i.get("title") or "(untitled task)",
             "status": i.get("status"),
+            "running": i.get("id") in live,
             "agentId": aid,
             "agentName": names.get(aid),
             "updatedAt": i.get("updatedAt") or i.get("lastActivityAt") or i.get("createdAt"),
