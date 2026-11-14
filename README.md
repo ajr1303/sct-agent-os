@@ -40,8 +40,8 @@ Re-running the command updates the checkout in place. For routine updates, prefe
 | **Agent runtime** | One isolated Hermes instance in Docker (pinned to a tested version). Dashboard on `9119`, agent API on `127.0.0.1:8642`. |
 | **Dashboard** | Suburban Cyber branding, favicon and theme. A fixed, grouped sidebar: Overview, Chat · *Your team*: Tasks, Orchestration, Automations · *Connections*: Bookings, Mailboxes · *Advanced* (operator tabs, collapsed). |
 | **Chat** | A clean bubble chat in place of the raw terminal. The chat agent acts as chief of staff: it answers quick questions, builds an automation for repeatable work, hands judgment work to the right agent, or asks the CEO agent for a hiring review. |
-| **Orchestration** | Bundled **Paperclip** control plane. Create an agent from nine starter **templates** (or blank), pause/resume, edit, delete, or **invite** an external agent with a paste-ready prompt. An **About your business** profile is shared with every agent. |
-| **Tasks** | Tasks delegated to agents, their status, replies and files. Agents close their own tasks; runaway tasks are halted automatically and can be released. |
+| **Orchestration** | Bundled **Paperclip** control plane. Create an agent from nine starter **templates** (or blank), pause/resume, edit, delete, or **invite** an external agent with a paste-ready prompt. A live **team chart** shows who reports to whom and each agent's status. An **About your business** profile is shared with every agent. |
+| **Tasks** | Tasks delegated to agents, their status, replies and files. **Reply, reopen, mark done or cancel** from the dashboard; a reply wakes the assigned agent. Agents close their own tasks; runaway tasks are halted automatically and can be released. |
 | **Automations** | Bundled **n8n**. Workflow and run status, **turn workflows on and off** from the dashboard, one-click open, and **Waiting for your approval**: agents can build workflows but only the owner can switch one on. |
 | **Mailboxes** | Connect email accounts (Gmail, Microsoft 365, any IMAP) and see a combined unread/preview. View-only today. Credentials encrypted at rest. |
 | **Bookings** | Connect a scheduling app (Cal.com, Calendly, Acuity, Setmore, or an iCal link) and see upcoming appointments. View-only today. |
@@ -177,12 +177,19 @@ With the `control-plane` profile, Agent OS bundles its **own fresh [Paperclip](h
 - **Invite an agent** that already runs elsewhere: generates a paste-ready, single-use prompt (72 hours); approve the join under Waiting on you.
 - **Pause / resume / edit / delete** agents, and resume the company if it was paused.
 - **About your business:** name and a free-text description every agent can read, attached to every task created from chat.
+- **Team chart:** drawn from Paperclip's reporting lines, with each agent's title and live status. It refreshes every 30 seconds, so agents added, removed or moved under another manager show up on their own.
+
+**Answering tasks.** On the Tasks page, open a task to see what was asked and the conversation, then reply, reopen, mark it done or cancel it. A reply is posted as the owner and Paperclip wakes the assigned agent; replying on a finished task reopens it. Approvals, full run history and file downloads still open in Paperclip.
+
+**More than one company in Paperclip.** The dashboard shows the first company Paperclip lists. To pin it to another, set `PAPERCLIP_COMPANY_ID=<company id>` in `.env` and run `docker compose up -d connectors`. This alone keeps the dashboard fully writable.
+
+**Agents that run on their own machines.** An agent can keep its own Hermes gateway elsewhere and be managed from this Paperclip. This Paperclip build refuses a gateway address that is plain `http://` unless it is on the same machine, so give each remote gateway an HTTPS address (for example `tailscale serve --bg --https=443 http://127.0.0.1:<port>` on the agent's machine) and use that as the agent's gateway URL. See [docs/RUNBOOK.md](docs/RUNBOOK.md) §12.
 
 **How delegated work runs.** A task assigned to an agent is executed by Paperclip through the Hermes gateway. Agents finish with `complete_task` or park the task with `need_owner_input`. All Paperclip-run agents currently execute on Hermes' **default profile**, so the model chosen when creating an agent applies to chatting with that agent's profile, not to its delegated tasks.
 
 **Spend protection.** Paperclip's dollar budget is off by default because it cannot price Hermes runs and pauses the company at $0. Protection comes from the per-task run fast-stop (`RUN_MAX_ATTEMPTS`), the chat task limit (`CHAT_TASKS_PER_HOUR`) and a hard monthly limit at the LLM provider. See [docs/RUNBOOK.md](docs/RUNBOOK.md) §9.
 
-**Connect-to-existing (optional):** point the bridge at an existing Paperclip with `PAPERCLIP_URL` (and `PAPERCLIP_API_KEY`, `PAPERCLIP_COMPANY_ID`). That path is **read-only by design**: Agent OS shows status but never creates tasks, approves or changes anything on an instance it does not own.
+**Connect-to-existing (optional):** point the bridge at an existing Paperclip with `PAPERCLIP_URL` (and `PAPERCLIP_API_KEY`, `PAPERCLIP_COMPANY_ID`). That path is **read-only by design**: Agent OS shows status but never creates tasks, replies, approves or changes anything on an instance it does not own.
 
 Forgot the Paperclip password? `sudo ./scripts/paperclip-reset-password.sh`.
 
@@ -276,7 +283,7 @@ docs/ARCHITECTURE.md        How the layer works
 
 ## Status
 
-**v0.19 — a clean one-command install has been run end to end** on a fresh VM (Hermes v0.23.1, n8n 2.47.5) and reached through a Cloudflare Tunnel.
+**v0.21 — a clean one-command install has been run end to end** on a fresh VM (Hermes v0.23.1, n8n 2.47.5) and reached through a Cloudflare Tunnel.
 
 Verified live:
 
@@ -285,10 +292,12 @@ Verified live:
 - Agent templates, create/pause/resume, invite prompt, company resume.
 - Chat delegation end to end: chat assigns a task, the agent delivers it; the Automation Engineer built an inactive n8n workflow and the approval gate held.
 - Per-task run fast-stop, with halted tasks released from the Tasks page.
+- A dozen agents on their own Hermes gateways (Linux and Windows) managed from the bundled Paperclip over HTTPS.
 - Honcho memory plugin installed and reporting available.
 
 Known limitations:
 
+- **Team chart and task replies (v0.20, v0.21) are tested against a stand-in board**, not yet confirmed on a live one.
 - **Bookings and Mailboxes are view-only.** Agents cannot yet book appointments or send/draft email.
 - **Per-agent model choice does not apply to delegated tasks** (all Paperclip runs use the default Hermes profile).
 - **The dashboard has one shared login.** Per-person sign-in comes from Cloudflare Access in front of it; per-person roles are not built.

@@ -107,6 +107,19 @@ skill is not always loaded.
 to connectors `/gateway/authorize`, which meters `POST /v1/runs` per session key and
 denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
 
+## Orchestration and Tasks plugins
+
+- **Team chart** (`suburban-orchestration`): `/orchestration/overview` returns each
+  agent's `title`, `status` and `reports_to`; the plugin builds the tree client-side
+  and re-reads it every 30 seconds. Managers with more than four leaf reports wrap
+  them in rows. Read-only.
+- **Task actions** (`suburban-tasks`): `POST /orchestration/tasks/{key}/reply` posts an
+  owner comment to Paperclip (`reopen` for finished tasks; Paperclip wakes the
+  assignee) and `POST /orchestration/tasks/{key}/status` accepts `done`, `todo` or
+  `cancelled`. Both require the dashboard session, validate the key, and are refused
+  in external (read-only) mode.
+- **Company selection:** first company Paperclip lists, or `PAPERCLIP_COMPANY_ID`.
+
 ## Supply chain
 
 - Hermes and n8n: official images pinned by digest in `docker-compose.yml`.

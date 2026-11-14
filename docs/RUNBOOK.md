@@ -197,6 +197,16 @@ chat and ask for it in a new chat.
   harmless.
 - **Open Paperclip / Open builder go to localhost** — hostnames not set; run
   `sudo ./scripts/set-hostnames.sh <dashboard-hostname>`.
+- **Dashboard shows the wrong company** — Paperclip has more than one and the dashboard
+  takes the first. Set `PAPERCLIP_COMPANY_ID=<company id>` in `.env`, then
+  `docker compose up -d connectors`.
+- **An agent's tasks stay "queued" and never start** — Paperclip is still running its
+  connection check on that agent. `GET /api/agents/{id}` shows `lifecycleState`
+  (`verifying` until it passes) and the reason in `lifecycleError`. The usual cause is
+  a gateway address that is plain `http://` on another machine; see §12.
+- **A script gets HTTP 403 from the Paperclip hostname behind Cloudflare** — Cloudflare
+  blocks Python's default request signature. Send your own `User-Agent` header. A
+  `curl` test passing does not prove a Python script will.
 - **Sidebar order looks stock or reshuffles** — hard-refresh (Ctrl+Shift+R); the
   arrangement script is `brand/nav.js`.
 
@@ -297,3 +307,46 @@ Limits:
 Offboarding: remove the person's email from the policy. If they knew the dashboard
 password, rotate `DASHBOARD_PASSWORD` too.
 
+## 12. Agents on their own machines
+
+An agent does not have to run on the box. It can keep its own Hermes gateway on
+another machine and take its work from this Paperclip. Only the management layer is
+shared; the agent's files, model keys and tools stay where they are.
+
+**What Paperclip needs for each such agent**
+
+1. **An HTTPS gateway address.** This Paperclip build refuses a gateway URL that is
+   plain `http://` unless the host is loopback, and its "allow insecure" setting does
+   not get past the connection check. On a tailnet the simplest fix is, on the agent's
+   machine:
+   ```bash
+   sudo tailscale serve --bg --https=443 http://127.0.0.1:<gateway port>
+   ```
+   and then use `https://<machine>.<tailnet>.ts.net` as the agent's gateway URL
+   (`adapterConfig.apiBaseUrl`). The address is reachable only inside the tailnet.
+2. **The gateway's key**, stored as a Paperclip company secret and referenced from the
+   agent (`adapterConfig.apiKey = {type: "secret_ref", secretId, version: "latest"}`).
+   On Hermes this is `API_SERVER_KEY` in the Hermes `.env`.
+3. **The address agents report back to**: `adapterConfig.paperclipApiUrl` set to this
+   Paperclip's public hostname.
+4. **A Paperclip key on the agent's machine** (`POST /api/agents/{id}/keys`), saved in
+   the Hermes `.env` as `PAPERCLIP_API_KEY` with `PAPERCLIP_API_URL`, followed by a
+   gateway restart. Without it the agent can reply but cannot change a task's status.
+
+Pipe keys between machines; do not display or paste them.
+
+**Checking it worked.** Resume the agent and wait for `lifecycleState` to become
+`ready`. Then give it one small task with a unique title and confirm it replies and
+sets the task to done. Allow several minutes for a first run.
+
+**Moving agents from another Paperclip.** Import the company paused, hold every agent
+individually before resuming the company (resuming releases agents held only by the
+company pause), then move agents one at a time: pause the agent on the old instance
+before testing it on the new one, and switch each schedule off there as you switch it
+on here. Anything outside Paperclip that files tasks (monitoring bridges, mail intake,
+self-healing scripts) carries the old address, company id and agent ids and must be
+repointed or stopped separately. Agent ids change on import.
+
+**Windows agents.** There is usually no inbound SSH, so run the key exchange from the
+agent's machine. Hermes lives in `%LOCALAPPDATA%\hermes`, and the gateway is started
+by a scheduled task or `hermes gateway restart`.

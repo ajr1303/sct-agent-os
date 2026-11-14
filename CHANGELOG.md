@@ -2,6 +2,17 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.21.1] — 2026-11-14 — Documentation
+
+- README, runbook and architecture updated for the team chart and task replies.
+- New runbook §12, **Agents on their own machines**: what Paperclip needs to manage
+  an agent whose Hermes gateway runs elsewhere (HTTPS gateway address, gateway key
+  as a secret, report-back address, a Paperclip key on the agent's machine), how to
+  check it, moving agents from another Paperclip, and Windows agents.
+- Troubleshooting: dashboard showing the wrong company (`PAPERCLIP_COMPANY_ID`),
+  tasks stuck "queued" while an agent's connection check fails, and Cloudflare
+  returning 403 to Python scripts that use the default request signature.
+
 ## [0.21.0] — 2026-11-14 — Answer tasks from the dashboard
 
 - **Tasks: reply, reopen, mark done and cancel without opening Paperclip.** A reply
