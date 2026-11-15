@@ -2,6 +2,17 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.32.2] — 2026-11-15 — Documentation caught up
+
+- README: new sections for the Website page (Google Analytics, several sites),
+  Backups and two-step sign-in. Status lists what has now been confirmed on a live
+  install: the Website page, two-step sign-in, creating an agent, and the stuck-agent
+  watch's "Check now".
+- Runbook: new §17 Website visitors and §18 Overview tiles; the per-client checklist
+  now includes backups, two-step sign-in, the stuck-agent watch and a reboot test;
+  Verify checks the six scheduled jobs.
+- No code changes.
+
 ## [0.32.1] — 2026-11-15 — Recovery codes and keys were invisible
 
 - On the Security page the recovery codes and the manual setup key were drawn in dark

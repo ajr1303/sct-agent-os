@@ -132,6 +132,10 @@ over with n8n's own `import:workflow` command; credentials are then re-entered.
 - "Open Paperclip" / "Open builder" open the Paperclip/n8n hostnames (fresh login
   at each — new host = new session; n8n logs in by **email**, not `admin`).
 - `sudo docker compose ps` — all services healthy.
+- `sudo crontab -l | grep -c agent-os-managed` prints **6** (watchdog, nightly backup,
+  backup requests, upload retry, update check, dashboard requests). If not,
+  `sudo ./scripts/install-cron.sh`.
+- Overview shows the business name, the tiles for what is connected, and a backup line.
 
 ## 5. Per-client provisioning checklist
 
@@ -143,7 +147,16 @@ over with n8n's own `import:workflow` command; credentials are then re-entered.
 6. Verify (§4), including `hermes memory status` (§7).
 7. **Set a hard monthly spend limit at the LLM provider** (Nous Portal, OpenRouter, Anthropic/OpenAI console). That is the real dollar ceiling — see §9.
 8. Set up team sign-in with Cloudflare Access if more than one person will use it (§11).
-9. Hand the client their dashboard URL + login. Rotate the dashboard password first
+9. Backups (§13): save the recovery kit with the client, connect their storage, run
+   one backup and see the file arrive. Set `OPERATOR_BACKUP_PUBKEY` if you will hold
+   the second key.
+10. Two-step sign-in (§16): turn it on with the client's phone and have them store
+    the recovery codes away from the server.
+11. Optional connections: bookings, mailboxes, website visitors (§17).
+12. Turn on the stuck-agent watch once the team is linked and Automations is
+    connected (§15).
+13. Reboot the server once and confirm everything returns (§14).
+14. Hand the client their dashboard URL + login. Rotate the dashboard password first
    if it was ever shown over a non-tunnel connection.
 
 ## 6. Updating
@@ -498,3 +511,47 @@ Dashboard > Security. Adds a code from an authenticator app to the dashboard pas
 - It protects the dashboard address only. Turn on n8n's own two-factor setting inside
   n8n (Settings > Personal), and keep the Paperclip owner password strong.
 
+## 17. Website visitors (Google Analytics)
+
+Dashboard > Website. Read-only visitor numbers from Google Analytics 4, and the
+**Website visitors** tile on the Overview.
+
+1. Google Cloud Console: pick or create a project, enable the **Google Analytics Data
+   API**.
+2. IAM & Admin > Service Accounts: create a service account, then Keys > Add key >
+   Create new key > JSON. A file downloads.
+3. Google Analytics > Admin > Property access management: add the service account's
+   address (ends in `gserviceaccount.com`) as **Viewer**.
+4. Admin > Property details: copy the numeric **Property ID** (not the `G-` tag ID).
+5. On the Website page enter a name, the Property ID, and paste the whole key file.
+
+- **More sites:** no new key. Add the same address as Viewer on the other property,
+  then **Add a site** with its name and Property ID. **Make this my main site** chooses
+  which site the Overview shows.
+- **Client sites:** the client adds the address on their own property and can remove
+  it whenever they like. Every site on the page is visible to anyone who can sign in
+  to this dashboard, so do not mix clients on a dashboard they share.
+- **Replace the key:** use it after making a new key for the same service account.
+- Numbers cover the last 7 full days, are cached for 30 minutes and can be a few
+  hours behind Google's own screens.
+
+| Message | Cause |
+|---|---|
+| This is not a Google service-account key | The paste is not the JSON file's contents. Open the file in a plain text editor and copy all of it. |
+| This service account cannot see that property | The address is not a Viewer on that property yet. |
+| Google did not recognise that property number | Use the numeric Property ID, not the `G-` measurement ID. |
+| Google Analytics is limiting requests | Wait and try again later. |
+
+## 18. Overview tiles
+
+The top row adapts to what is connected. Nothing needs configuring.
+
+| Tile | Shown when | Source |
+|---|---|---|
+| Active automations | Automations is connected | Workflows switched on in n8n |
+| Appointments today | A booking account is connected | Appointments on today's date in the viewer's time zone |
+| Website visitors | A website is connected | Main site, last 7 full days against the 7 before |
+| Backup line | Always | Last backup time and whether the off-site copy worked |
+
+A tile that stays empty after connecting: reload the page, then check the matching
+page (Automations, Bookings, Website) for an error message.

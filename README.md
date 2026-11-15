@@ -167,6 +167,56 @@ Each account is verified with a live API call before it's saved, credentials are
 
 > **Scope note:** this reads upcoming appointments across providers. Native OAuth sign-in for Google/Microsoft, and booking/reschedule actions for agents, are later additions.
 
+## Connecting your website (Google Analytics)
+
+The **Website** page shows how many people visit your site: visitors and page views for
+the last 7 full days against the 7 before, the top pages, and where visitors came from.
+The main site's visitors also show as a tile on the Overview.
+
+1. In Google Cloud Console, enable the **Google Analytics Data API**, create a
+   **service account**, and download a JSON key for it.
+2. In Google Analytics, open Admin › Property access management and add the service
+   account's address (it ends in `gserviceaccount.com`) as a **Viewer**.
+3. On the Website page, enter the numeric **Property ID** and paste the contents of
+   the key file.
+
+The page walks through each step. Access is read-only. The key is tested, stored
+encrypted, never shown again and only ever sent to Google.
+
+**More than one site:** one key can read several sites. Add the same service-account
+address as a Viewer on each extra property, then add the site by name and Property ID.
+Pick which one is the main site. For a client's site, the client adds the address
+themselves and can remove it at any time. Anyone who can sign in to the dashboard sees
+every site listed.
+
+## Backups
+
+The **Backups** page sets up a full nightly backup: the team, agent memory,
+automations, connections and settings in one file, encrypted with a key only you hold
+and copied to Google Drive, S3-compatible storage or another supported store.
+
+1. **Save the recovery kit** the page shows. Without it (or the operator's second key)
+   a backup cannot be opened by anyone.
+2. **Connect storage.** For Google Drive, run `rclone authorize "drive"` on your own
+   computer and paste the result into the page.
+3. Press **Back up now** once and check the file appears in your storage.
+
+The Overview shows when the last backup ran and whether the off-site copy worked.
+`sudo ./scripts/restore.sh <file>` opens a backup and checks every part. Details and
+the restore steps are in [docs/RUNBOOK.md](docs/RUNBOOK.md) §13.
+
+## Two-step sign-in
+
+The **Security** page adds a six-digit code from an authenticator app (Google
+Authenticator, Microsoft Authenticator, 1Password and similar) on top of the dashboard
+password. Scan the QR code, enter one code to confirm, and save the eight one-time
+recovery codes somewhere that is not the server. A browser is asked again after 12
+hours, or 30 days if you tick "don't ask again on this browser".
+
+Lost the phone and the codes: `sudo ./scripts/mfa-reset.sh` on the server turns it
+off. It covers the dashboard only; n8n and Paperclip have their own sign-ins. See
+[docs/RUNBOOK.md](docs/RUNBOOK.md) §16.
+
 ## Automations (bundled n8n)
 
 Agent OS ships its **own fresh [n8n](https://n8n.io) instance** (the `automation` compose profile, on by default), pinned to a tested version, on a dedicated volume with its own encryption key.
@@ -322,7 +372,7 @@ docs/ARCHITECTURE.md        How the layer works
 
 ## Status
 
-**v0.32.** The last clean one-command install on a fresh VM was run at v0.26 (Hermes v0.23.1, n8n 2.47.5), reached through a Cloudflare Tunnel. Changes since then are tested piece by piece but a fresh end-to-end install of this version has not been rerun yet.
+**v0.32.2.** The last clean one-command install on a fresh VM was run at v0.26 (Hermes v0.23.1, n8n 2.47.5), reached through a Cloudflare Tunnel. Changes since then are tested piece by piece but a fresh end-to-end install of this version has not been rerun yet.
 
 Verified live:
 
@@ -334,11 +384,15 @@ Verified live:
 - Agents on their own Hermes gateways (Linux and Windows) managed from the bundled Paperclip over HTTPS.
 - Honcho memory plugin installed and reporting available.
 - Full encrypted backup uploaded to Google Drive.
+- Creating an agent from the dashboard on a team that requires approval for hires.
+- Website page reading a real Google Analytics property, and its Overview tile.
+- Two-step sign-in: setup with an authenticator app, recovery codes, and the code page.
+- Stuck-agent watch "Check now" against a live team.
 
 Known limitations:
 
 - **Not yet tested: a server reboot, and restoring a backup onto a new server.** Restore opens and checks a backup; putting one back (`--apply`) is unproven, and the team database is not reloaded automatically.
-- **Two-step sign-in is tested against a real nginx and the connectors service here, not yet on a live install. The multi-site Website page, the Appointments tile, stuck-agent watch, Link my team, the installer changes in v0.28, team chart, task replies and the Agents page are tested against stand-ins** (a mock board, and for the model check a local database and mock gateways), not yet confirmed on a live one.
+- **The stuck-agent watch's scheduled run in n8n, the Appointments tile, Link my team, several sites on the Website page, the installer changes in v0.28, team chart, task replies and the Agents page editor are tested against stand-ins** (a mock board, and for the model check a local database and mock gateways), not yet confirmed on a live one.
 - **Bookings and Mailboxes are view-only.** Agents cannot yet book appointments or send/draft email.
 - **Per-agent model choice does not apply to delegated tasks** (all Paperclip runs use the default Hermes profile).
 - **The dashboard has one shared login.** Two-step sign-in (Security page) adds an authenticator-app code to it; per-person sign-in comes from Cloudflare Access in front of it; per-person roles are not built. Two-step sign-in does not cover n8n or Paperclip, which have their own sign-ins.
