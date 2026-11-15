@@ -7,7 +7,7 @@ Suburban Cyber Agent OS is a **layer**, not a fork. The upstream pieces run unmo
 - **n8n** (pinned by digest, `automation` profile) — bundled workflow automation.
 - **Honcho** + **Postgres/pgvector** (prebuilt from a pinned commit, `memory` profile) — long-term memory.
 
-Suburban Cyber adds: a dashboard **theme** and **eleven dashboard plugins** dropped into the Hermes data dir (`/opt/data` ← `./data/hermes`); an nginx **proxy** that fronts the dashboard and injects branding, the links config and the sidebar script; a set of **chat tools** (an MCP endpoint in connectors) plus a routing **skill**; a **connectors** service (FastAPI, Fernet-encrypted SQLite) that bridges email/bookings/n8n/Paperclip; a **gateway-tls** terminator so Paperclip reaches the Hermes runs API over HTTPS (with a per-task run fast-stop via nginx `auth_request`); and an optional **cloudflared** tunnel. Nothing patches Hermes' own code.
+Suburban Cyber adds: a dashboard **theme** and **twelve dashboard plugins** dropped into the Hermes data dir (`/opt/data` ← `./data/hermes`); an nginx **proxy** that fronts the dashboard and injects branding, the links config and the sidebar script; a set of **chat tools** (an MCP endpoint in connectors) plus a routing **skill**; a **connectors** service (FastAPI, Fernet-encrypted SQLite) that bridges email/bookings/n8n/Paperclip; a **gateway-tls** terminator so Paperclip reaches the Hermes runs API over HTTPS (with a per-task run fast-stop via nginx `auth_request`); and an optional **cloudflared** tunnel. Nothing patches Hermes' own code.
 
 ```
                          Internet (LLM, GitHub, Docker Hub, Cloudflare)
@@ -209,4 +209,23 @@ denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
   `POST /website/sites/{id}/main`). `GET /website?site=<id>` returns one site's
   numbers; without `site` it returns the main site, which is what the Overview shows.
 - Each tile is shown only when its connection exists, so the row adapts per business.
+
+## Two-step sign-in
+
+- TOTP (RFC 6238: SHA-1, 30 s, 6 digits) implemented in `connectors/app.py`; the
+  secret is Fernet-encrypted in the `kv` table. Recovery codes are stored hashed.
+- Enforcement is in the proxy, not the app: `templates/nginx.conf` includes
+  `/etc/nginx/aos/mfa-gate-page*.inc` in `location /` and `mfa-gate-api*.inc` in
+  `location /api/connectors/`. When present, those files add
+  `auth_request /_mfa_check`, which calls `GET /mfa/check`; a 401 sends pages to
+  `/sct-brand/mfa.html` and answers API calls with a 401. `/api/connectors/mfa/`
+  and `/sct-brand/` stay reachable so the code page works.
+- The connectors service writes `data/backup/mfa-state` (`on`/`off`, rewritten on
+  every start from the database). `scripts/host-requests.sh` (cron, every minute)
+  creates or removes the two include files in `data/proxy/`, checks the config with
+  `nginx -t`, reloads the proxy, and records the result in `data/backup/mfa-applied`.
+  A config that fails the check is rolled back.
+- `POST /mfa/verify` sets an HMAC-signed, HttpOnly cookie (`aos_2step`), keyed per
+  enrolment. With two-step on, the gate fails closed: if the connectors service is
+  down the dashboard answers 500 until the watchdog restarts it.
 

@@ -2,6 +2,25 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.32.0] — 2026-11-15 — Two-step sign-in with an authenticator app
+
+- **Security** page (under Connections): turn on a six-digit code from an
+  authenticator app on top of the dashboard password. Scan a QR code with Google
+  Authenticator, Microsoft Authenticator, 1Password or any similar app (standard
+  time-based codes), enter one code to confirm, and it is on.
+- **Sign-in:** a browser without a valid code is sent to a code page before anything
+  else is served, including the password page and every dashboard API. A browser is
+  asked again after 12 hours, or 30 days with "don't ask again on this browser".
+- **Recovery codes:** eight one-time codes, shown once at setup, to get in without
+  the phone. They can be replaced at any time.
+- **Lost everything?** `sudo ./scripts/mfa-reset.sh` on the server turns it off.
+- Five wrong codes lock the code page for a minute, then longer. A code works once.
+  The secret is stored encrypted. Turning it off or setting it up again signs every
+  browser out.
+- Enforced at the proxy, which the server switches within a minute of turning it on.
+  Installs that never turn it on are unchanged.
+- It covers the dashboard only: n8n and Paperclip have their own sign-ins.
+
 ## [0.31.1] — 2026-11-15 — Website: accept a key that was damaged when copied
 
 - A real Google key was refused with "That is not a Google service-account key". The

@@ -1,10 +1,42 @@
 #!/usr/bin/env bash
 # Carries out requests made from the dashboard that need the host (cron, every minute).
-# Today: "Link my team", which runs scripts/paperclip-connect.sh. The dashboard leaves
+# Two things today: keeping the proxy's two-step sign-in switch in step with the
+# dashboard, and "Link my team", which runs scripts/paperclip-connect.sh. The dashboard leaves
 # data/backup/link-paperclip (optionally holding the owner's email); the outcome goes
 # to data/backup/link-result.json for the page to show.
 set -u
 cd "$(dirname "$0")/.." || exit 1
+
+# --- Two-step sign-in: make the proxy match what the owner chose ---------------------
+# The dashboard writes data/backup/mfa-state ("on" or "off"). "on" means the proxy must
+# ask for a code before serving anything; that is done by two small include files.
+mfa_sync() {
+  local want have gate=data/proxy
+  want=$(head -n1 data/backup/mfa-state 2>/dev/null | tr -cd 'a-z'); [ "$want" = on ] || want=off
+  if [ -f "$gate/mfa-gate-page.inc" ] && [ -f "$gate/mfa-gate-api.inc" ]; then have=on; else have=off; fi
+  if [ "$want" = "$have" ]; then
+    [ "$(cat data/backup/mfa-applied 2>/dev/null)" = "$have" ] || echo "$have" > data/backup/mfa-applied
+    return 0
+  fi
+  docker ps --format '{{.Names}}' | grep -qx agent-os-proxy || return 0
+  mkdir -p "$gate"
+  if [ "$want" = on ]; then
+    printf 'auth_request /_mfa_check;\nerror_page 401 = @mfa_page;\n' > "$gate/mfa-gate-page.inc"
+    printf 'auth_request /_mfa_check;\nerror_page 401 = @mfa_api;\n' > "$gate/mfa-gate-api.inc"
+  else
+    rm -f "$gate"/mfa-gate-*.inc
+  fi
+  if docker exec agent-os-proxy nginx -t >/dev/null 2>&1; then
+    docker exec agent-os-proxy nginx -s reload >/dev/null 2>&1 && echo "$want" > data/backup/mfa-applied
+  else
+    # Never leave the proxy with a config it cannot load.
+    rm -f "$gate"/mfa-gate-*.inc
+    docker exec agent-os-proxy nginx -s reload >/dev/null 2>&1
+    echo "error" > data/backup/mfa-applied
+  fi
+}
+mfa_sync
+
 REQ=data/backup/link-paperclip
 RES=data/backup/link-result.json
 [ -f "$REQ" ] || exit 0

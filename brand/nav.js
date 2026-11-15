@@ -20,7 +20,7 @@
   var GROUPS = [
     { id: "main", label: "", items: ["/chat"] },                    // Overview is added in front of Chat
     { id: "team", label: "Your team", items: ["/tasks", "/team", "/orchestration", "/automations", "/usage"] },
-    { id: "conn", label: "Connections", items: ["/bookings", "/mailboxes", "/website", "/backups"] },
+    { id: "conn", label: "Connections", items: ["/bookings", "/mailboxes", "/website", "/backups", "/security"] },
     { id: "adv", label: "Advanced", items: ["/profiles", "/models", "/skills", "/mcp", "/plugins", "/cron",
         "/sessions", "/files", "/channels", "/webhooks", "/pairing", "/env", "/config", "/system", "/logs",
         "/kanban", "/achievements", "/docs"] }
@@ -140,4 +140,15 @@
     window.addEventListener("popstate", schedule);
   }
   if (document.body) start(); else document.addEventListener("DOMContentLoaded", start);
+
+  // Two-step sign-in: if this browser's code has expired while the dashboard is open,
+  // go to the code page instead of leaving every button failing quietly.
+  function codeCheck() {
+    try {
+      fetch("/api/connectors/mfa/status", { credentials: "same-origin" }).then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (s) { if (s && s.required && !s.ok) window.location.assign("/sct-brand/mfa.html"); }).catch(function () {});
+    } catch (e) {}
+  }
+  window.addEventListener("focus", codeCheck);
+  setInterval(codeCheck, 5 * 60 * 1000);
 })();

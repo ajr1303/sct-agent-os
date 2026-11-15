@@ -30,6 +30,7 @@ import asyncio
 import base64
 import hmac
 import time
+import hashlib
 import subprocess
 import threading
 
@@ -2659,6 +2660,289 @@ def website_delete(_auth=Depends(require_auth)):
         con.commit()
     _GA_CACHE.clear()
     return {"connected": False, "sites": []}
+
+
+# --- Two-step sign-in (authenticator app) -------------------------------------------
+# A six-digit code from an authenticator app (Google Authenticator, Microsoft
+# Authenticator, 1Password...) on top of the dashboard password. Standard TOTP
+# (RFC 6238: SHA-1, 30 seconds, 6 digits), so any authenticator app works.
+#
+# Enforcement is at the proxy: once switched on, nginx asks /mfa/check before serving
+# anything, and sends a browser without a valid "passed" cookie to the code page. The
+# proxy is told to do that by scripts/host-requests.sh (within a minute of switching
+# on), which reads the state file written here. Nothing changes for installs that
+# never switch it on.
+
+MFA_STEP = 30
+MFA_SESSION_HOURS = 12
+MFA_REMEMBER_DAYS = 30
+MFA_COOKIE = "aos_2step"
+_MFA_STATE_FILE = os.path.join(os.environ.get("AOS_BACKUP_CONFIG", "/backup-config"), "mfa-state")
+_MFA_APPLIED_FILE = os.path.join(os.environ.get("AOS_BACKUP_CONFIG", "/backup-config"), "mfa-applied")
+_mfa_cache = {"at": 0.0, "data": None}
+_mfa_lock = threading.Lock()
+
+
+def _mfa_load(fresh=False):
+    if not fresh and _mfa_cache["data"] is not None and time.time() - _mfa_cache["at"] < 5:
+        return _mfa_cache["data"]
+    try:
+        d = json.loads(_kv_get("mfa") or "{}")
+    except Exception:
+        d = {}
+    _mfa_cache.update(at=time.time(), data=d if isinstance(d, dict) else {})
+    return _mfa_cache["data"]
+
+
+def _mfa_write_state(d):
+    """Tell the host whether the proxy should be asking for a code."""
+    try:
+        os.makedirs(os.path.dirname(_MFA_STATE_FILE), exist_ok=True)
+        with open(_MFA_STATE_FILE, "w", encoding="utf-8") as f:
+            f.write("on\n" if d.get("enabled") else "off\n")
+    except Exception:
+        pass
+
+
+def _mfa_save(d):
+    _kv_set("mfa", json.dumps(d))
+    _mfa_cache.update(at=time.time(), data=d)
+    _mfa_write_state(d)
+
+
+@app.on_event("startup")
+def _mfa_startup():
+    # The database is the truth. Rewrite the state file on every start, so a restored
+    # backup or a wiped data folder cannot leave two-step sign-in silently off.
+    try:
+        _mfa_write_state(_mfa_load(fresh=True))
+    except Exception:
+        pass
+
+
+def _totp(secret_b32, step):
+    key = base64.b32decode(secret_b32, casefold=True)
+    mac = hmac.new(key, int(step).to_bytes(8, "big"), "sha1").digest()
+    off = mac[-1] & 0x0F
+    return "%06d" % ((int.from_bytes(mac[off:off + 4], "big") & 0x7FFFFFFF) % 1000000)
+
+
+def _mfa_secret(d, field="secret"):
+    return fernet.decrypt(d[field].encode()).decode()
+
+
+def _mfa_cookie_key(d):
+    # Tied to this enrolment, so turning two-step off or setting it up again signs every browser out.
+    return hmac.new(_KEY.encode() if isinstance(_KEY, str) else _KEY, ("2step:" + str(d.get("key_id"))).encode(), "sha256").digest()
+
+
+def _mfa_make_cookie(d, days=None):
+    exp = int(time.time() + (days * 86400 if days else MFA_SESSION_HOURS * 3600))
+    body = "%d.%s" % (exp, base64.urlsafe_b64encode(os.urandom(9)).decode())
+    sig = base64.urlsafe_b64encode(hmac.new(_mfa_cookie_key(d), body.encode(), "sha256").digest()).decode().rstrip("=")
+    return body + "." + sig, exp
+
+
+def _mfa_cookie_ok(d, request):
+    raw = request.cookies.get(MFA_COOKIE) or ""
+    try:
+        exp, nonce, sig = raw.split(".")
+        want = base64.urlsafe_b64encode(hmac.new(_mfa_cookie_key(d), (exp + "." + nonce).encode(), "sha256").digest()).decode().rstrip("=")
+        return hmac.compare_digest(sig, want) and int(exp) > time.time()
+    except Exception:
+        return False
+
+
+def _mfa_set_cookie(resp, d, request, remember=False):
+    val, exp = _mfa_make_cookie(d, MFA_REMEMBER_DAYS if remember else None)
+    https = (request.headers.get("x-forwarded-proto") or "").lower() == "https" or "https" in (request.headers.get("cf-visitor") or "")
+    resp.set_cookie(MFA_COOKIE, val, max_age=max(60, exp - int(time.time())), path="/", httponly=True, samesite="lax", secure=https)
+
+
+def _mfa_code_ok(d, code, consume=True):
+    """True if `code` is the current authenticator code (one step either side for clock
+    drift) or an unused recovery code. A code is accepted once."""
+    code = re.sub(r"[\s-]", "", str(code or "")).lower()
+    if re.match(r"^[0-9]{6}$", code):
+        now_step = int(time.time() // MFA_STEP)
+        secret = _mfa_secret(d)
+        for st in (now_step, now_step - 1, now_step + 1):
+            if hmac.compare_digest(_totp(secret, st), code) and st > int(d.get("last_step") or 0):
+                if consume:
+                    d["last_step"] = st
+                return True
+        return False
+    if re.match(r"^[a-z2-7]{10}$", code):
+        h = hashlib.sha256(code.encode()).hexdigest()
+        if h in (d.get("recovery") or []):
+            if consume:
+                d["recovery"] = [x for x in d["recovery"] if x != h]
+            return True
+    return False
+
+
+def _mfa_locked(d):
+    return max(0, int(float(d.get("locked_until") or 0) - time.time()))
+
+
+def _mfa_fail(d):
+    d["fails"] = int(d.get("fails") or 0) + 1
+    if d["fails"] >= 5:   # 1 minute, doubling to 15, until a correct code
+        d["locked_until"] = time.time() + min(900, 60 * (2 ** (d["fails"] - 5)))
+    _mfa_save(d)
+
+
+def _mfa_new_recovery():
+    codes = ["".join("abcdefghijklmnopqrstuvwxyz234567"[b % 32] for b in os.urandom(10)) for _ in range(8)]
+    return [c[:5] + "-" + c[5:] for c in codes], [hashlib.sha256(c.encode()).hexdigest() for c in codes]
+
+
+class MfaCode(BaseModel):
+    code: str = ""
+    remember: bool = False
+
+
+@app.get("/mfa/check")
+def mfa_check(request: Request):
+    """Asked by the proxy before every request once two-step is on. Not a login: it only
+    says whether this browser has already entered a code."""
+    d = _mfa_load()
+    if not d.get("enabled") or _mfa_cookie_ok(d, request):
+        return Response(status_code=204)
+    return Response(status_code=401)
+
+
+@app.get("/mfa/status")
+def mfa_status(request: Request):
+    d = _mfa_load()
+    on = bool(d.get("enabled"))
+    return {"required": on, "ok": (not on) or _mfa_cookie_ok(d, request), "locked_seconds": _mfa_locked(d) if on else 0}
+
+
+@app.post("/mfa/verify")
+def mfa_verify(b: MfaCode, request: Request):
+    """The code page posts here. Reachable before the password step by design, so it is
+    rate limited: five wrong codes lock it for a minute, then longer."""
+    with _mfa_lock:
+        d = dict(_mfa_load(fresh=True))
+        if not d.get("enabled"):
+            return {"ok": True}
+        wait = _mfa_locked(d)
+        if wait:
+            return JSONResponse(status_code=429, content={"error": "Too many wrong codes. Try again in %d minute%s."
+                                                          % ((wait + 59) // 60, "" if wait <= 60 else "s"), "locked_seconds": wait})
+        if not _mfa_code_ok(d, b.code):
+            _mfa_fail(d)
+            return JSONResponse(status_code=400, content={"error": "That code was not right. Codes change every 30 seconds; enter the newest one."})
+        d["fails"] = 0
+        d["locked_until"] = 0
+        _mfa_save(d)
+    resp = JSONResponse(content={"ok": True, "recovery_left": len(d.get("recovery") or [])})
+    _mfa_set_cookie(resp, d, request, remember=bool(b.remember))
+    return resp
+
+
+@app.post("/mfa/signout")
+def mfa_signout():
+    resp = JSONResponse(content={"ok": True})
+    resp.delete_cookie(MFA_COOKIE, path="/")
+    return resp
+
+
+def _mfa_admin_view(d):
+    try:
+        with open(_MFA_APPLIED_FILE, "r", encoding="utf-8") as f:
+            applied = f.read().strip()
+    except Exception:
+        applied = ""
+    on = bool(d.get("enabled"))
+    return {"enabled": on, "active": on and applied == "on", "applied": applied or None, "enabled_at": d.get("enabled_at"),
+            "recovery_left": len(d.get("recovery") or []) if on else 0, "session_hours": MFA_SESSION_HOURS,
+            "remember_days": MFA_REMEMBER_DAYS}
+
+
+@app.get("/security/mfa")
+def security_mfa(_auth=Depends(require_auth)):
+    return _mfa_admin_view(_mfa_load(fresh=True))
+
+
+@app.post("/security/mfa/setup")
+def security_mfa_setup(_auth=Depends(require_auth)):
+    """Start setup: a new secret, shown once as a QR code and as text. Nothing is enforced
+    until a code from the app proves it was scanned (POST /security/mfa/enable)."""
+    import io
+    import segno
+    d = dict(_mfa_load(fresh=True))
+    if d.get("enabled"):
+        raise HTTPException(status_code=400, detail="Two-step sign-in is already on. Turn it off first to set it up again.")
+    secret = base64.b32encode(os.urandom(20)).decode().rstrip("=")
+    d["pending"] = fernet.encrypt(secret.encode()).decode()
+    _mfa_save(d)
+    try:
+        with closing(get_db()) as con:
+            row = con.execute("SELECT name FROM business_profile LIMIT 1").fetchone()
+        biz = (row[0] if row and row[0] else "") or ""
+    except Exception:
+        biz = ""
+    issuer = "Agent OS" + (" (" + re.sub(r"[^A-Za-z0-9 .&'-]", "", biz)[:30].strip() + ")" if biz.strip() else "")
+    uri = "otpauth://totp/%s:%s?secret=%s&issuer=%s&algorithm=SHA1&digits=6&period=30" % (
+        quote(issuer), quote("dashboard"), secret, quote(issuer))
+    buf = io.BytesIO()
+    segno.make(uri, error="m").save(buf, kind="svg", scale=5, border=3, dark="#000000", light="#ffffff", xmldecl=False)
+    return {"secret": " ".join(secret[i:i + 4] for i in range(0, len(secret), 4)), "qr_svg": buf.getvalue().decode(), "issuer": issuer}
+
+
+@app.post("/security/mfa/enable")
+def security_mfa_enable(b: MfaCode, request: Request, _auth=Depends(require_auth)):
+    with _mfa_lock:
+        d = dict(_mfa_load(fresh=True))
+        if d.get("enabled"):
+            raise HTTPException(status_code=400, detail="Two-step sign-in is already on.")
+        if not d.get("pending"):
+            raise HTTPException(status_code=400, detail="Start the setup again to get a new QR code.")
+        trial = {"secret": d["pending"], "last_step": 0}
+        if not re.match(r"^[0-9]{6}$", re.sub(r"\s", "", b.code or "")) or not _mfa_code_ok(trial, b.code):
+            raise HTTPException(status_code=400, detail="That code was not right. Enter the six digits your app shows now for Agent OS.")
+        shown, hashed = _mfa_new_recovery()
+        d = {"enabled": True, "secret": d["pending"], "last_step": trial["last_step"], "recovery": hashed, "fails": 0,
+             "locked_until": 0, "key_id": base64.urlsafe_b64encode(os.urandom(9)).decode(), "enabled_at": _now().isoformat()}
+        _mfa_save(d)
+    resp = JSONResponse(content=dict(_mfa_admin_view(d), recovery_codes=shown))
+    _mfa_set_cookie(resp, d, request)      # keep the browser that set it up signed in
+    return resp
+
+
+@app.post("/security/mfa/disable")
+def security_mfa_disable(b: MfaCode, _auth=Depends(require_auth)):
+    with _mfa_lock:
+        d = dict(_mfa_load(fresh=True))
+        if not d.get("enabled"):
+            return _mfa_admin_view(d)
+        if _mfa_locked(d):
+            raise HTTPException(status_code=429, detail="Too many wrong codes. Try again in a few minutes.")
+        if not _mfa_code_ok(d, b.code):
+            _mfa_fail(d)
+            raise HTTPException(status_code=400, detail="Enter a current code from your app (or a recovery code) to turn this off.")
+        _mfa_save({"enabled": False})
+    return _mfa_admin_view(_mfa_load(fresh=True))
+
+
+@app.post("/security/mfa/recovery")
+def security_mfa_recovery(b: MfaCode, _auth=Depends(require_auth)):
+    """Replace the recovery codes (the old ones stop working)."""
+    with _mfa_lock:
+        d = dict(_mfa_load(fresh=True))
+        if not d.get("enabled"):
+            raise HTTPException(status_code=400, detail="Two-step sign-in is not on.")
+        if _mfa_locked(d):
+            raise HTTPException(status_code=429, detail="Too many wrong codes. Try again in a few minutes.")
+        if not _mfa_code_ok(d, b.code):
+            _mfa_fail(d)
+            raise HTTPException(status_code=400, detail="Enter a current code from your app to get new recovery codes.")
+        shown, d["recovery"] = _mfa_new_recovery()
+        d["fails"] = 0
+        _mfa_save(d)
+    return dict(_mfa_admin_view(d), recovery_codes=shown)
 
 
 # --- Backups -------------------------------------------------------------------

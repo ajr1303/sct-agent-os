@@ -168,7 +168,7 @@ write_env() {
   if [ -f .env ]; then
     cp -p .env ".env.bak.$(date +%Y%m%d%H%M%S)"
     say "Existing install detected — keeping your secrets in .env (backup written)."
-    mkdir -p data/hermes/dashboard-themes backups data/backup data/agent-ssh
+    mkdir -p data/hermes/dashboard-themes backups data/backup data/agent-ssh data/proxy
     if [ "$MEMORY_MODE" = honcho ]; then
       [ -f honcho.env ] || write_honcho_env
       [ -f data/hermes/honcho.json ] || write_honcho_json
@@ -221,7 +221,7 @@ PAPERCLIP_ALLOWED_HOSTNAMES=paperclip,localhost,127.0.0.1,${lan_ip}
 N8N_TIMEZONE=$(detect_tz)
 COMPOSE_PROFILES=${profs}
 ENV
-  mkdir -p data/hermes/dashboard-themes backups data/backup data/agent-ssh
+  mkdir -p data/hermes/dashboard-themes backups data/backup data/agent-ssh data/proxy
   # Marks an install that has not finished. get.sh resumes the installer (not the
   # updater) while this exists; it is removed at the very end.
   touch data/.install-incomplete

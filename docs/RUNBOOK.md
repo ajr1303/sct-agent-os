@@ -480,3 +480,21 @@ being worked on, act on work that has been idle for more than a week, or push th
 agent or task more than twice. If the workflow's first run fails in n8n, turn the
 watch off and report it; the "Check now" button works without n8n.
 
+## 16. Two-step sign-in
+
+Dashboard > Security. Adds a code from an authenticator app to the dashboard password.
+
+1. **Set up two-step sign-in**, scan the QR code with the app, enter the code it shows.
+2. Save the eight recovery codes somewhere that is not this server.
+3. Within a minute the page shows **On**. From then on every browser is asked for a
+   code before the password page.
+
+- The server's clock must be right (codes are time-based). `timedatectl` should show
+  "System clock synchronized: yes".
+- Lost phone: use a recovery code on the code page, then set it up again.
+- Lost phone and codes: `sudo ./scripts/mfa-reset.sh` on the server.
+- Stuck on "Turning on…" for more than five minutes: the every-minute job is not
+  running. `sudo ./scripts/install-cron.sh`, then `sudo ./scripts/host-requests.sh`.
+- It protects the dashboard address only. Turn on n8n's own two-factor setting inside
+  n8n (Settings > Personal), and keep the Paperclip owner password strong.
+

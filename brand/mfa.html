@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Sign-in code</title>
+<link rel="icon" href="/sct-brand/favicon.svg" type="image/svg+xml">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px;
+         background: #071217; color: #e6eef0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+  main { width: 100%; max-width: 380px; }
+  .logo { width: 220px; height: 64px; max-width: 70vw; margin: 0 auto 26px; background: url(/sct-brand/logo.png) no-repeat center/contain; }
+  h1 { font-size: 20px; margin: 0 0 6px; text-align: center; }
+  p { margin: 0 0 18px; opacity: .75; text-align: center; font-size: 14px; }
+  label { display: block; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; opacity: .65; margin-bottom: 6px; }
+  input[type=text] { width: 100%; padding: 13px 14px; font: inherit; font-size: 24px; letter-spacing: .18em; text-align: center;
+         color: inherit; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.22); font-variant-numeric: tabular-nums; }
+  input[type=text]:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid #25c9ee; outline-offset: 2px; }
+  .remember { display: flex; gap: 9px; align-items: center; margin: 14px 0 18px; font-size: 13px; opacity: .85; cursor: pointer; text-transform: none; letter-spacing: 0; }
+  button { width: 100%; padding: 12px 16px; font: inherit; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; font-size: 13px;
+           color: #04202a; background: #25c9ee; border: 1px solid #25c9ee; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  .msg { margin-top: 14px; padding: 10px 12px; font-size: 13px; border: 1px solid rgba(255,189,56,.45); background: rgba(255,189,56,.08); }
+  .help { margin-top: 22px; font-size: 12px; opacity: .6; text-align: center; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <div class="logo" role="img" aria-label="Agent OS"></div>
+  <h1>Enter your sign-in code</h1>
+  <p>Open your authenticator app and enter the six-digit code for Agent OS.</p>
+  <form id="f" autocomplete="off">
+    <label for="code">Code</label>
+    <input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="12" autofocus required>
+    <label class="remember"><input id="remember" type="checkbox"> Don't ask again on this browser for 30 days</label>
+    <button id="go" type="submit">Continue</button>
+    <div id="msg" class="msg" role="alert" hidden></div>
+  </form>
+  <div class="help">Lost your phone? Enter one of your recovery codes instead. No codes left? Whoever looks after this server can reset it.</div>
+</main>
+<script>
+(function () {
+  var f = document.getElementById("f"), code = document.getElementById("code"), go = document.getElementById("go"), msg = document.getElementById("msg");
+  function show(t) { msg.textContent = t; msg.hidden = !t; }
+  function home() { location.replace("/"); }
+  // Already passed (or two-step is off)? Go straight in.
+  fetch("/api/connectors/mfa/status", { credentials: "same-origin" }).then(function (r) { return r.json(); })
+    .then(function (s) { if (s && s.ok) home(); }).catch(function () {});
+  f.addEventListener("submit", function (e) {
+    e.preventDefault(); show(""); go.disabled = true;
+    fetch("/api/connectors/mfa/verify", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: code.value, remember: document.getElementById("remember").checked }) })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (x) {
+        if (x.ok && x.j && x.j.ok) { home(); return; }
+        go.disabled = false; code.value = ""; code.focus();
+        show((x.j && x.j.error) || "That didn't work. Please try again.");
+      })
+      .catch(function () { go.disabled = false; show("Could not reach the server. Check your connection and try again."); });
+  });
+})();
+</script>
+</body>
+</html>

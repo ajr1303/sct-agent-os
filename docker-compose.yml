@@ -41,6 +41,8 @@ services:
     volumes:
       - ./templates/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./data/hermes/brand:/srv/brand:ro
+      # Two-step sign-in switch: empty unless the owner turns it on (see nginx.conf).
+      - ./data/proxy:/etc/nginx/aos:ro
     mem_limit: 128M
 
   # Optional outbound tunnel (Cloudflare). Enabled by the installer's "Cloudflare

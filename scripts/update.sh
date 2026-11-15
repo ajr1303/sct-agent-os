@@ -53,6 +53,7 @@ if ! command -v openssl >/dev/null 2>&1; then
 fi
 ./scripts/gen-tls.sh || echo "  ! gateway TLS generation failed - agents won't run until this is fixed"
 
+mkdir -p data/proxy
 mkdir -p data/agent-ssh && chmod 700 data/agent-ssh   # mounted into connectors (see scripts/agent-ssh.sh)
 # Automations kept the old default timezone until now; pin it so schedules do not move.
 if [ -f .env ] && ! grep -q '^N8N_TIMEZONE=' .env; then
@@ -80,6 +81,7 @@ docker compose restart gateway-tls 2>/dev/null || true
 # install that predates one of them, or never finished, still ends up with all of them.
 mkdir -p backups data/backup && chmod 700 backups data/backup
 ./scripts/install-cron.sh || true
+./scripts/host-requests.sh || true   # keeps the two-step sign-in switch in step after the proxy was recreated
 ./scripts/agent-models.sh || echo "  ! could not read agent models; the Agents page will show them as not checked"
 ./scripts/check-updates.sh 2>/dev/null || true   # refresh update status (clears the banner)
 rm -f data/.install-incomplete
