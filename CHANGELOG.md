@@ -2,6 +2,12 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.29.2] — 2026-11-15 — Active automations on the Overview
+
+- The Overview has an **Active automations** tile: how many workflows are switched on,
+  how many exist in total, and whether the stuck-agent watch is on. It appears once
+  Automations is connected.
+
 ## [0.29.1] — 2026-11-15 — Backup uploads can no longer stall or pile up
 
 - A Google Drive upload that was being rate limited ran for three hours before giving

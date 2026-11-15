@@ -63,6 +63,8 @@
       var su = useState(null), planUse = su[0], setPlanUse = su[1];
       var sk = useState(null), bk = sk[0], setBk = sk[1];
       var sz = useState(""), bizName = sz[0], setBizName = sz[1];
+      var sa = useState(null), autos = sa[0], setAutos = sa[1];      // {count, active} once Automations is connected
+      var sw = useState(null), watch = sw[0], setWatch = sw[1];
       var sg = useState(null), upd = sg[0], setUpd = sg[1];
       var sh = useState(0), updBump = sh[0], setUpdBump = sh[1];
 
@@ -75,6 +77,10 @@
           try {
             fetch("/api/connectors/usage", { credentials: "same-origin" }).then(function (r) { return r.ok ? r.json() : null; })
               .then(function (v) { if (v) setPlanUse(v); }).catch(function () {});
+            fetch("/api/connectors/automations/workflows", { credentials: "same-origin" }).then(function (r) { return r.ok ? r.json() : null; })
+              .then(function (v) { if (v && typeof v.active === "number") setAutos(v); }).catch(function () {});
+            fetch("/api/connectors/automations/stuck-watch", { credentials: "same-origin" }).then(function (r) { return r.ok ? r.json() : null; })
+              .then(function (v) { if (v) setWatch(v); }).catch(function () {});
             fetch("/api/connectors/orchestration/business", { credentials: "same-origin" }).then(function (r) { return r.ok ? r.json() : null; })
               .then(function (v) { if (v && v.name) setBizName(String(v.name)); }).catch(function () {});
             fetch("/api/connectors/backups", { credentials: "same-origin" }).then(function (r) { return r.ok ? r.json() : null; })
@@ -193,6 +199,8 @@
             (work.succeeded || 0) + " succeeded · " + (work.failed || 0) + " failed · " + (work.runs_today || 0) + " today") : null,
           work ? Stat("Tasks in progress", String(work.tasks_in_progress != null ? work.tasks_in_progress : "—"),
             (work.tasks_open != null ? work.tasks_open : "—") + " open in total") : null,
+          autos ? Stat("Active automations", String(autos.active),
+            autos.count + " workflow" + (autos.count === 1 ? "" : "s") + " in total" + (watch && watch.active ? " · stuck-agent watch on" : ""), autos.active > 0) : null,
           planTile(),
           Stat("Chat sessions, 14 days", analytics ? String(tot.total_sessions || 0) : "—", useManaged ? "On this server only" : "Conversations and automations"),
           Stat("Tokens, 14 days", analytics ? fmtNum(tokens) : "—", useManaged ? "This server only · input + output" : "Input + output"),
