@@ -2,6 +2,17 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.31.0] — 2026-11-15 — Several websites on one install
+
+- The **Website** page can hold more than one site (up to 25), all read through the
+  one Google key. Add a site with a name and its Property ID; the page shows the
+  address to add as a Viewer in that site's Google Analytics and checks access before
+  saving. Switch between sites with the buttons at the top.
+- One site is your **main site**; its visitors are the ones on the Overview tile. Any
+  site can be made the main one.
+- **Replace the key** without re-entering sites, for example after rotating it.
+- An install that had already connected a single site keeps it, as the main site.
+
 ## [0.30.0] — 2026-11-15 — Appointments and website visitors on the Overview
 
 - **Appointments today** tile on the Overview, with the count for the next 7 days. It

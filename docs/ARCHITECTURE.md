@@ -204,5 +204,9 @@ denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
   property: totals for the last 7 full days and the 7 before, top pages and channels.
   Cached 30 minutes. Token and API hosts are fixed in code; nothing in the pasted key
   can redirect a request.
+- One key, several sites: `website_sites` lists the Analytics properties read through
+  the stored key (`POST /website/sites`, `DELETE /website/sites/{id}`,
+  `POST /website/sites/{id}/main`). `GET /website?site=<id>` returns one site's
+  numbers; without `site` it returns the main site, which is what the Overview shows.
 - Each tile is shown only when its connection exists, so the row adapts per business.
 

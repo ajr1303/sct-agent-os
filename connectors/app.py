@@ -201,6 +201,24 @@ def get_db():
             account TEXT, updated_at TEXT
         )
     """)
+    # The sites read through that one key. A site is a Google Analytics property; the
+    # key's service account needs Viewer access on each. Exactly one is the main site.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS website_sites (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL, property_id TEXT NOT NULL UNIQUE,
+            is_main INTEGER NOT NULL DEFAULT 0, added_at TEXT
+        )
+    """)
+    # Installs that connected a single site before sites existed: carry it over.
+    try:
+        if not con.execute("SELECT 1 FROM website_sites LIMIT 1").fetchone():
+            row = con.execute("SELECT property_id, updated_at FROM website_analytics WHERE id = 1").fetchone()
+            if row and row[0]:
+                con.execute("INSERT INTO website_sites(label, property_id, is_main, added_at) VALUES(?,?,1,?)",
+                            ("My website", row[0], row[1]))
+                con.commit()
+    except sqlite3.OperationalError:
+        pass
     return con
 
 
@@ -2353,7 +2371,8 @@ def stuck_watch_run_now(b: WatchRun, _auth=Depends(require_auth)):
 
 GA_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GA_API = "https://analyticsdata.googleapis.com/v1beta/properties/"
-_GA_CACHE = {"at": 0.0, "data": None}
+_GA_CACHE = {}          # property id -> (fetched at, stats)
+WEBSITE_MAX_SITES = 25
 
 
 def _ga_access_token(sa):
@@ -2446,21 +2465,71 @@ def _ga_parse_key(text):
 class WebsiteIn(BaseModel):
     property_id: str
     key_json: str
+    label: str = ""
+
+
+class WebsiteKey(BaseModel):
+    key_json: str
+
+
+class WebsiteSite(BaseModel):
+    label: str
+    property_id: str
+
+
+def _ga_prop(v):
+    prop = re.sub(r"^properties/", "", (v or "").strip())
+    if not re.match(r"^[0-9]{4,15}$", prop):
+        raise HTTPException(status_code=400, detail="The Property ID is a number, for example 123456789. Find it in Google "
+                            "Analytics under Admin > Property details. It is not the G- measurement ID.")
+    return prop
+
+
+def _ga_label(v, fallback):
+    label = re.sub(r"[\x00-\x1f<>]", "", (v or "").strip())[:60]
+    return label or fallback
+
+
+def _ga_try(sa, prop):
+    """Fetch a site's numbers, turning the known failures into a 400 with a plain message."""
+    try:
+        return _ga_fetch(sa, prop)
+    except (PermissionError, ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=502, detail="Could not reach Google just now. Try again in a minute.")
+
+
+def _website_state():
+    with closing(get_db()) as con:
+        row = con.execute("SELECT secret, account, updated_at FROM website_analytics WHERE id = 1").fetchone()
+        sites = con.execute("SELECT id, label, property_id, is_main FROM website_sites ORDER BY is_main DESC, label COLLATE NOCASE").fetchall()
+    return row, [{"id": r[0], "label": r[1], "property_id": r[2], "main": bool(r[3])} for r in sites]
+
+
+def _website_sa(row):
+    return json.loads(fernet.decrypt(row[0]).decode())
 
 
 @app.get("/website")
-def website_get(refresh: int = 0, _auth=Depends(require_auth)):
-    with closing(get_db()) as con:
-        row = con.execute("SELECT property_id, secret, account, updated_at FROM website_analytics WHERE id = 1").fetchone()
+def website_get(site: int = 0, refresh: int = 0, _auth=Depends(require_auth)):
+    """The connection, its sites, and the numbers for one site (the main one unless `site` is given)."""
+    row, sites = _website_state()
     if not row:
-        return {"connected": False}
-    out = {"connected": True, "property_id": row[0], "account": row[2], "connected_at": row[3], "stats": None, "error": None}
-    if not refresh and _GA_CACHE["data"] is not None and time.time() - _GA_CACHE["at"] < 1800:
-        out["stats"] = _GA_CACHE["data"]
+        return {"connected": False, "sites": []}
+    out = {"connected": True, "account": row[1], "connected_at": row[2], "sites": sites, "max_sites": WEBSITE_MAX_SITES,
+           "site_id": None, "property_id": None, "stats": None, "error": None}
+    cur = next((x for x in sites if x["id"] == site), None) or next((x for x in sites if x["main"]), None) or (sites[0] if sites else None)
+    if not cur:
+        return out
+    out["site_id"], out["property_id"] = cur["id"], cur["property_id"]
+    hit = _GA_CACHE.get(cur["property_id"])
+    if not refresh and hit and time.time() - hit[0] < 1800:
+        out["stats"] = hit[1]
         return out
     try:
-        stats = _ga_fetch(json.loads(fernet.decrypt(row[1]).decode()), row[0])
-        _GA_CACHE.update(at=time.time(), data=stats)
+        stats = _ga_fetch(_website_sa(row), cur["property_id"])
+        _GA_CACHE[cur["property_id"]] = (time.time(), stats)
         out["stats"] = stats
     except (PermissionError, ValueError, RuntimeError) as e:
         out["error"] = str(e)
@@ -2470,35 +2539,101 @@ def website_get(refresh: int = 0, _auth=Depends(require_auth)):
 
 
 @app.put("/website")
-def website_put(b: WebsiteIn, _auth=Depends(require_auth)):
-    prop = re.sub(r"^properties/", "", (b.property_id or "").strip())
-    if not re.match(r"^[0-9]{4,15}$", prop):
-        raise HTTPException(status_code=400, detail="The Property ID is a number, for example 123456789. Find it in Google "
-                            "Analytics under Admin > Property details. It is not the G- measurement ID.")
+def website_connect(b: WebsiteIn, _auth=Depends(require_auth)):
+    """First-time connection: the key and the first (main) site, proven against Google before saving."""
+    prop = _ga_prop(b.property_id)
     try:
         sa = _ga_parse_key(b.key_json)
-        stats = _ga_fetch(sa, prop)          # prove it works before keeping it
-    except (PermissionError, ValueError, RuntimeError) as e:
+    except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception:
-        raise HTTPException(status_code=502, detail="Could not reach Google just now. Try again in a minute.")
+    stats = _ga_try(sa, prop)
+    now = _now().isoformat()
     with closing(get_db()) as con:
         con.execute("INSERT INTO website_analytics(id, property_id, secret, account, updated_at) VALUES(1,?,?,?,?) "
                     "ON CONFLICT(id) DO UPDATE SET property_id=excluded.property_id, secret=excluded.secret, "
                     "account=excluded.account, updated_at=excluded.updated_at",
-                    (prop, fernet.encrypt(json.dumps(sa).encode()), sa["client_email"], _now().isoformat()))
+                    (prop, fernet.encrypt(json.dumps(sa).encode()), sa["client_email"], now))
+        has_main = con.execute("SELECT 1 FROM website_sites WHERE is_main = 1").fetchone()
+        con.execute("INSERT INTO website_sites(label, property_id, is_main, added_at) VALUES(?,?,?,?) "
+                    "ON CONFLICT(property_id) DO UPDATE SET label = excluded.label",
+                    (_ga_label(b.label, "My website"), prop, 0 if has_main else 1, now))
         con.commit()
-    _GA_CACHE.update(at=time.time(), data=stats)
-    return website_get(0, None)
+    _GA_CACHE[prop] = (time.time(), stats)
+    return website_get(0, 0, None)
+
+
+@app.put("/website/key")
+def website_replace_key(b: WebsiteKey, _auth=Depends(require_auth)):
+    """Swap the key (for example after rotating it). It must be able to read the main site."""
+    row, sites = _website_state()
+    if not row or not sites:
+        raise HTTPException(status_code=400, detail="Connect a site first.")
+    try:
+        sa = _ga_parse_key(b.key_json)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    main = next((x for x in sites if x["main"]), sites[0])
+    stats = _ga_try(sa, main["property_id"])
+    with closing(get_db()) as con:
+        con.execute("UPDATE website_analytics SET secret = ?, account = ?, updated_at = ? WHERE id = 1",
+                    (fernet.encrypt(json.dumps(sa).encode()), sa["client_email"], _now().isoformat()))
+        con.commit()
+    _GA_CACHE.clear()
+    _GA_CACHE[main["property_id"]] = (time.time(), stats)
+    return website_get(0, 0, None)
+
+
+@app.post("/website/sites")
+def website_add_site(b: WebsiteSite, _auth=Depends(require_auth)):
+    row, sites = _website_state()
+    if not row:
+        raise HTTPException(status_code=400, detail="Connect Google Analytics first.")
+    if len(sites) >= WEBSITE_MAX_SITES:
+        raise HTTPException(status_code=400, detail="That is the most sites this page can hold (%d)." % WEBSITE_MAX_SITES)
+    prop = _ga_prop(b.property_id)
+    if any(x["property_id"] == prop for x in sites):
+        raise HTTPException(status_code=400, detail="That property is already on the list.")
+    stats = _ga_try(_website_sa(row), prop)     # proves the key can read it
+    with closing(get_db()) as con:
+        cur = con.execute("INSERT INTO website_sites(label, property_id, is_main, added_at) VALUES(?,?,?,?)",
+                          (_ga_label(b.label, "Site " + prop), prop, 0 if sites else 1, _now().isoformat()))
+        con.commit()
+        new_id = cur.lastrowid
+    _GA_CACHE[prop] = (time.time(), stats)
+    return website_get(new_id, 0, None)
+
+
+@app.post("/website/sites/{sid}/main")
+def website_set_main(sid: int, _auth=Depends(require_auth)):
+    with closing(get_db()) as con:
+        if not con.execute("SELECT 1 FROM website_sites WHERE id = ?", (sid,)).fetchone():
+            raise HTTPException(status_code=404, detail="That site is no longer on the list.")
+        con.execute("UPDATE website_sites SET is_main = CASE WHEN id = ? THEN 1 ELSE 0 END", (sid,))
+        con.commit()
+    return website_get(sid, 0, None)
+
+
+@app.delete("/website/sites/{sid}")
+def website_remove_site(sid: int, _auth=Depends(require_auth)):
+    with closing(get_db()) as con:
+        row = con.execute("SELECT property_id, is_main FROM website_sites WHERE id = ?", (sid,)).fetchone()
+        if row:
+            con.execute("DELETE FROM website_sites WHERE id = ?", (sid,))
+            if row[1]:   # the main one went: promote the next
+                con.execute("UPDATE website_sites SET is_main = 1 WHERE id = (SELECT id FROM website_sites ORDER BY label COLLATE NOCASE LIMIT 1)")
+            con.commit()
+            _GA_CACHE.pop(row[0], None)
+    return website_get(0, 0, None)
 
 
 @app.delete("/website")
 def website_delete(_auth=Depends(require_auth)):
     with closing(get_db()) as con:
         con.execute("DELETE FROM website_analytics WHERE id = 1")
+        con.execute("DELETE FROM website_sites")
         con.commit()
-    _GA_CACHE.update(at=0.0, data=None)
-    return {"connected": False}
+    _GA_CACHE.clear()
+    return {"connected": False, "sites": []}
 
 
 # --- Backups -------------------------------------------------------------------
