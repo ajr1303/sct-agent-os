@@ -1,0 +1,264 @@
+(function () {
+  "use strict";
+  var TAG = "[suburban-chat]";
+
+  function whenReady(cb, tries) {
+    tries = tries || 0;
+    var P = window.__HERMES_PLUGINS__, S = window.__HERMES_PLUGIN_SDK__;
+    if (P && S && S.React) { cb(P, S); return; }
+    if (tries > 200) { try { console.warn(TAG, "SDK not ready"); } catch (e) {} return; }
+    setTimeout(function () { whenReady(cb, tries + 1); }, 50);
+  }
+
+  whenReady(function (PLUGINS, SDK) {
+    var h = SDK.React.createElement;
+    var useState = SDK.hooks.useState, useEffect = SDK.hooks.useEffect, useRef = SDK.hooks.useRef;
+    var api = SDK.api;
+
+    function arr(x) { return Array.isArray(x) ? x : ((x && (x.sessions || x.messages || x.items || x.data || x.profiles)) || []); }
+    function extractText(c) {
+      if (c == null) return "";
+      if (typeof c === "string") return c;
+      if (Array.isArray(c)) return c.map(function (p) { return typeof p === "string" ? p : ((p && (p.text || p.content)) || ""); }).join("");
+      if (typeof c === "object") return c.text || c.content || "";
+      return String(c);
+    }
+    function ts(s) { return new Date(s.last_activity_at || s.started_at || s.created_at || 0).getTime() || 0; }
+    function when(t) { try { if (t == null) return ""; return typeof t === "number" ? SDK.utils.timeAgo(t) : SDK.utils.isoTimeAgo(t); } catch (e) { return ""; } }
+    function wsProto() { return location.protocol === "https:" ? "wss" : "ws"; }
+    function sessTitle(s) { return (s.title && s.title.trim()) || (s.last_activity_description && s.last_activity_description.trim()) || "New conversation"; }
+
+    // Escapes quotes too: without &quot;/&#39; a markdown link could close the
+    // href attribute and inject event handlers (onfocus/onmouseover) that run in
+    // the dashboard origin — reachable via prompt injection.
+    function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
+    function mdToHtml(src) {
+      if (!src) return "";
+      var text = String(src), blocks = [];
+      text = text.replace(/```[a-zA-Z0-9]*\n?([\s\S]*?)```/g, function (_, code) { blocks.push(code.replace(/\n$/, "")); return "\u0000C" + (blocks.length - 1) + "\u0000"; });
+      text = esc(text);
+      text = text.replace(/`([^`\n]+)`/g, function (_, c) { return "<code>" + c + "</code>"; });
+      text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+      text = text.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+      // Validate each link's URL instead of trusting the captured text: parse it,
+      // allow only http/https, and re-escape the normalized href. A URL that is
+      // invalid or uses any other scheme renders as plain label text.
+      text = text.replace(/\[([^\]]+)\]\(([^\s)]+)\)/g, function (_, label, raw) {
+        var url = raw.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+        try {
+          var u = new URL(url);
+          if (u.protocol !== "http:" && u.protocol !== "https:") return label;
+          return '<a href="' + esc(u.href) + '" target="_blank" rel="noopener noreferrer">' + label + "</a>";
+        } catch (e) { return label; }
+      });
+      text = text.replace(/(^|\n)\s*[-*]\s+/g, "$1• ");
+      text = text.replace(/\n/g, "<br>");
+      text = text.replace(/\u0000C(\d+)\u0000/g, function (_, i) { return '<pre class="scc-code">' + esc(blocks[+i]) + "</pre>"; });
+      return text;
+    }
+
+    function ChatPage() {
+      var m0 = useState([]), messages = m0[0], setMessages = m0[1];
+      var se0 = useState([]), sessions = se0[0], setSessions = se0[1];
+      var a0 = useState(null), activeSid = a0[0], setActiveSid = a0[1];
+      var st0 = useState("idle"), status = st0[0], setStatus = st0[1];
+      var i0 = useState(""), input = i0[0], setInput = i0[1];
+      var p0 = useState([]), pending = p0[0], setPending = p0[1];
+      var an0 = useState("Agent"), agentName = an0[0], setAgentName = an0[1];
+      var ed0 = useState(null), editingId = ed0[0], setEditingId = ed0[1];
+      var et0 = useState(""), editTitle = et0[0], setEditTitle = et0[1];
+      var cf0 = useState(null), confirmId = cf0[0], setConfirmId = cf0[1];
+      var cp0 = useState(null), copiedKey = cp0[0], setCopiedKey = cp0[1];
+      var ab0 = useState(true), atBottom = ab0[0], setAtBottom = ab0[1];
+      var wsRef = useRef(null), activeRef = useRef(null), baseRef = useRef(null), scrollRef = useRef(null), atBottomRef = useRef(true);
+
+      useEffect(function () {
+        var hidden = [];
+        function hideTitle() {
+          try {
+            var all = document.querySelectorAll("h1,h2,div,span");
+            for (var i = 0; i < all.length; i++) {
+              var el = all[i];
+              if (el.childElementCount > 0) continue;
+              if ((el.textContent || "").trim().toLowerCase() !== "chat") continue;
+              if (el.closest && (el.closest(".scc-wrap") || el.closest("aside") || el.closest("nav") || el.closest("a"))) continue;
+              var r = el.getBoundingClientRect();
+              if (r.top < 140 && r.left >= 250 && r.left < 640 && el.style.display !== "none") { el.style.display = "none"; hidden.push(el); }
+            }
+          } catch (e) {}
+        }
+        hideTitle(); var t = setInterval(hideTitle, 400);
+        return function () { clearInterval(t); hidden.forEach(function (el) { try { el.style.display = ""; } catch (e) {} }); };
+      }, []);
+
+      useEffect(function () {
+        Promise.resolve(api.getProfiles ? api.getProfiles() : null).then(function (p) {
+          var a = arr(p); var def = a.find(function (x) { return x.is_default; }) || a[0];
+          if (def) setAgentName(def.display_name || def.name || "Agent");
+        }).catch(function () {});
+      }, []);
+
+      function openPty(resumeId) {
+        try { if (wsRef.current) wsRef.current.close(); } catch (e) {}
+        setStatus("connecting");
+        Promise.resolve(SDK.buildWsAuthParam()).then(function (pair) {
+          var url = wsProto() + "://" + location.host + "/api/pty?" + encodeURIComponent(pair[0]) + "=" + encodeURIComponent(pair[1]);
+          if (resumeId) url += "&resume=" + encodeURIComponent(resumeId);
+          var ws = new WebSocket(url); ws.binaryType = "arraybuffer"; wsRef.current = ws;
+          ws.onopen = function () { setStatus("ready"); };
+          ws.onclose = function () { setStatus("closed"); };
+          ws.onerror = function () { setStatus("error"); };
+        }).catch(function () { setStatus("error"); });
+      }
+      function newChat() {
+        setMessages([]); setPending([]); setActiveSid(null); activeRef.current = null; setConfirmId(null); setEditingId(null);
+        Promise.resolve(api.getSessions()).then(function (ss) { baseRef.current = {}; arr(ss).forEach(function (s) { baseRef.current[s.id] = 1; }); })
+          .catch(function () { baseRef.current = {}; }).then(function () { openPty(null); });
+      }
+      function openSession(s) {
+        if (activeRef.current === s.id) return;
+        setMessages([]); setPending([]); baseRef.current = null; setConfirmId(null); setEditingId(null);
+        setActiveSid(s.id); activeRef.current = s.id; atBottomRef.current = true; setAtBottom(true);
+        openPty(s.id);
+      }
+
+      useEffect(function () { newChat(); return function () { try { wsRef.current && wsRef.current.close(); } catch (e) {} }; }, []);
+
+      useEffect(function () {
+        var alive = true;
+        function poll() {
+          Promise.resolve(api.getSessions()).then(function (ss) {
+            if (!alive) return;
+            var list = arr(ss).slice().sort(function (a, b) { return ts(b) - ts(a); });
+            setSessions(list);
+            if (!activeRef.current) {
+              var base = baseRef.current || {};
+              var fresh = list.filter(function (s) { return !base[s.id]; });
+              if (fresh.length) { activeRef.current = fresh[0].id; setActiveSid(fresh[0].id); }
+            }
+            if (activeRef.current) return api.getSessionMessages(activeRef.current).then(function (mm) { if (alive) setMessages(arr(mm)); });
+          }).catch(function () {});
+        }
+        poll(); var t = setInterval(poll, 1500);
+        return function () { alive = false; clearInterval(t); };
+      }, []);
+
+      useEffect(function () { try { var el = scrollRef.current; if (el && atBottomRef.current) el.scrollTop = el.scrollHeight; } catch (e) {} });
+      function onScroll(e) { try { var el = e.target; var b = (el.scrollHeight - el.scrollTop - el.clientHeight) < 60; atBottomRef.current = b; setAtBottom(b); } catch (x) {} }
+      function toBottom() { try { var el = scrollRef.current; if (el) { el.scrollTop = el.scrollHeight; atBottomRef.current = true; setAtBottom(true); } } catch (e) {} }
+
+      function send() {
+        var text = (input || "").trim(); if (!text) return;
+        var ws = wsRef.current;
+        if (ws && ws.readyState === 1) { try { ws.send(text + "\r"); } catch (e) {} }
+        else { openPty(activeRef.current); setTimeout(function () { try { wsRef.current && wsRef.current.readyState === 1 && wsRef.current.send(text + "\r"); } catch (e) {} }, 900); }
+        setPending(function (p) { return p.concat([text]); }); setInput(""); atBottomRef.current = true; setAtBottom(true);
+      }
+      function stop() { try { var ws = wsRef.current; if (ws && ws.readyState === 1) ws.send("\x03"); } catch (e) {} }
+      function onKey(e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }
+
+      function doRename(id) {
+        var title = (editTitle || "").trim(); setEditingId(null);
+        if (!title) return;
+        setSessions(function (list) { return list.map(function (s) { return s.id === id ? Object.assign({}, s, { title: title }) : s; }); });
+        Promise.resolve(api.renameSession(id, title)).catch(function () {});
+      }
+      function doDelete(id) {
+        setConfirmId(null);
+        setSessions(function (list) { return list.filter(function (s) { return s.id !== id; }); });
+        Promise.resolve(api.deleteSession(id)).catch(function () {});
+        if (activeRef.current === id) newChat();
+      }
+      function copyMsg(key, text) {
+        try { navigator.clipboard.writeText(text); setCopiedKey(key); setTimeout(function () { setCopiedKey(null); }, 1200); } catch (e) {}
+      }
+
+      function avatar(role) {
+        if (role === "user") return h("div", { className: "scc-av scc-av-user" }, "You");
+        return h("div", { className: "scc-av scc-av-agent" }, (agentName || "A").slice(0, 1).toUpperCase());
+      }
+      function msgRow(key, role, text, time, pend) {
+        var body = role === "assistant" && !pend
+          ? h("div", { className: "scc-bubble", dangerouslySetInnerHTML: { __html: mdToHtml(text) } })
+          : h("div", { className: "scc-bubble" + (pend ? " scc-pending" : "") }, text);
+        return h("div", { className: "scc-msg scc-" + role, key: key },
+          avatar(role),
+          h("div", { className: "scc-col" },
+            h("div", { className: "scc-meta" },
+              h("span", { className: "scc-who" }, role === "user" ? "You" : agentName),
+              time ? h("span", { className: "scc-time" }, time) : null,
+              pend ? null : h("button", { className: "scc-copy", onClick: function () { copyMsg(key, text); } }, copiedKey === key ? "Copied" : "Copy")),
+            body));
+      }
+
+      var rows = [];
+      (messages || []).forEach(function (msg, i) {
+        var role = msg.role; if (role !== "user" && role !== "assistant") return;
+        var txt = extractText(msg.content || msg.api_content); if (!txt || !txt.trim()) return;
+        rows.push(msgRow("m" + i, role, txt, when(msg.timestamp), false));
+      });
+      var serverUser = (messages || []).filter(function (x) { return x.role === "user"; }).map(function (x) { return extractText(x.content).trim(); });
+      (pending || []).forEach(function (t, i) { if (serverUser.indexOf(t.trim()) !== -1) return; rows.push(msgRow("p" + i, "user", t, "", true)); });
+      var waiting = (pending || []).some(function (t) { return serverUser.indexOf(t.trim()) === -1; }) ||
+        (messages.length && messages[messages.length - 1].role === "user");
+      if (waiting) rows.push(h("div", { className: "scc-msg scc-assistant", key: "typing" }, avatar("assistant"),
+        h("div", { className: "scc-col" }, h("div", { className: "scc-bubble scc-typing" }, "• • •"))));
+
+      var connLabel = status === "ready" ? "Connected" : status === "connecting" ? "Connecting…" : status === "closed" ? "Reconnect" : status === "error" ? "Offline" : "Ready";
+
+      var railItems = (sessions || []).filter(function (s) { return (s.message_count || 0) > 0 || s.id === activeSid; }).slice(0, 80).map(function (s) {
+        if (editingId === s.id) {
+          return h("div", { key: s.id, className: "scc-sess scc-sess-edit" },
+            h("input", { className: "scc-renameinput", autoFocus: true, value: editTitle,
+              onChange: function (e) { setEditTitle(e.target.value); },
+              onKeyDown: function (e) { if (e.key === "Enter") doRename(s.id); if (e.key === "Escape") setEditingId(null); },
+              onBlur: function () { doRename(s.id); } }));
+        }
+        if (confirmId === s.id) {
+          return h("div", { key: s.id, className: "scc-sess scc-sess-confirm" },
+            h("span", { className: "scc-confirm-t" }, "Delete this chat?"),
+            h("div", { className: "scc-confirm-b" },
+              h("button", { className: "scc-mini scc-mini-danger", onClick: function () { doDelete(s.id); } }, "Delete"),
+              h("button", { className: "scc-mini", onClick: function () { setConfirmId(null); } }, "Cancel")));
+        }
+        return h("div", { key: s.id, className: "scc-sess" + (s.id === activeSid ? " scc-sess-active" : "") },
+          h("button", { className: "scc-sess-open", onClick: function () { openSession(s); } },
+            h("div", { className: "scc-sess-t" }, sessTitle(s)),
+            h("div", { className: "scc-sess-m" }, (s.message_count || 0) + " msgs · " + (when(s.last_activity_at) || ""))),
+          h("div", { className: "scc-sess-actions" },
+            h("button", { title: "Rename", className: "scc-ic", onClick: function () { setEditTitle(sessTitle(s)); setEditingId(s.id); } }, "✎"),
+            h("button", { title: "Delete", className: "scc-ic", onClick: function () { setConfirmId(s.id); } }, "✕")));
+      });
+
+      return h("div", { className: "scc-wrap" },
+        h("div", { className: "scc-rail" },
+          h("button", { className: "scc-newbtn", onClick: newChat }, "+  New chat"),
+          h("div", { className: "scc-sesslist" }, railItems.length ? railItems : h("div", { className: "scc-railempty" }, "No conversations yet"))),
+        h("div", { className: "scc-main" },
+          h("div", { className: "scc-head" },
+            h("div", { className: "scc-agentchip" },
+              h("span", { className: "scc-av scc-av-agent scc-av-sm" }, (agentName || "A").slice(0, 1).toUpperCase()),
+              h("span", { className: "scc-agentname" }, agentName)),
+            h("span", { className: "scc-conn scc-" + status }, connLabel)),
+          h("div", { className: "scc-scrollwrap" },
+            h("div", { className: "scc-scroll", ref: scrollRef, onScroll: onScroll },
+              h("div", { className: "scc-inner" },
+                rows.length === 0
+                  ? h("div", { className: "scc-empty" },
+                      h("div", { className: "scc-empty-av" }, (agentName || "A").slice(0, 1).toUpperCase()),
+                      h("div", { className: "scc-empty-t" }, "Chat with " + agentName),
+                      h("div", { className: "scc-empty-s" }, "Ask a question or pick a past conversation on the left."))
+                  : rows)),
+            atBottom ? null : h("button", { className: "scc-jump", onClick: toBottom }, "↓ Latest")),
+          h("div", { className: "scc-inputbar" },
+            h("div", { className: "scc-inputinner" },
+              h("textarea", { className: "scc-input", value: input, placeholder: "Message " + agentName + "…", rows: 1,
+                onChange: function (e) { setInput(e.target.value); }, onKeyDown: onKey }),
+              waiting ? h("button", { className: "scc-stop", onClick: stop, title: "Stop generating" }, "Stop")
+                      : h("button", { className: "scc-send", onClick: send, disabled: !input.trim() }, "Send")))));
+    }
+
+    try { PLUGINS.register("suburban-chat", ChatPage); console.info(TAG, "registered"); }
+    catch (e) { try { console.error(TAG, "register failed", e); } catch (e2) {} }
+  });
+})();

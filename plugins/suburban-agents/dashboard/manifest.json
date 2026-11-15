@@ -1,0 +1,10 @@
+{
+  "name": "suburban-agents",
+  "label": "Agents",
+  "description": "Everyone on your team: what each agent does, who it reports to, and its instructions",
+  "icon": "Users",
+  "version": "0.1.0",
+  "tab": { "path": "/team" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css"
+}

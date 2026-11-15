@@ -1,0 +1,46 @@
+name: check
+on: [push, pull_request]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck -S warning get.sh install.sh scripts/*.sh
+      - name: compose config
+        run: |
+          # All required (${VAR:?}) secrets must be present or `config` fails.
+          for k in API_SERVER_KEY DASHBOARD_PASSWORD CONNECTORS_KEY HONCHO_DB_PASSWORD \
+                   N8N_ENCRYPTION_KEY BETTER_AUTH_SECRET PAPERCLIP_TOOL_ACTION_SIGNING_SECRET; do
+            echo "$k=ci"
+          done > .env
+          echo "CLOUDFLARE_TUNNEL_TOKEN=ci" >> .env
+          docker compose config -q
+          COMPOSE_PROFILES=memory,automation,control-plane,tunnel docker compose config -q
+      - name: yaml themes parse
+        run: python3 -c "import yaml,glob;[yaml.safe_load(open(f)) for f in glob.glob('templates/dashboard-themes/*.yaml')]"
+      - name: image refs match (compose vs images workflow)
+        run: |
+          for ref in $(grep -oE "ref: [0-9a-f]{40}" .github/workflows/images.yml | awk '{print $2}'); do
+            grep -q "#$ref" docker-compose.yml || { echo "images.yml ref $ref is not the commit pinned in docker-compose.yml"; exit 1; }
+            grep -q ":${ref:0:7}}" docker-compose.yml || { echo "docker-compose.yml image tag does not match $ref"; exit 1; }
+          done
+      - name: python syntax (connectors)
+        run: python3 -m py_compile connectors/*.py
+      - name: dashboard scripts parse
+        run: |
+          for f in plugins/*/dashboard/dist/index.js brand/*.js; do
+            node -e "new Function(require('fs').readFileSync('$f','utf8'))" || { echo "syntax error in $f"; exit 1; }
+          done
+      - name: version files agree
+        run: |
+          v=$(cat VERSION)
+          grep -q "^## \[$v\]" CHANGELOG.md || { echo "CHANGELOG.md has no entry for $v"; exit 1; }
+      - name: nothing private in the tree
+        run: |
+          # This repo is for anyone to install: no internal addresses, tailnet names or key material.
+          if grep -rnIE '(^|[^0-9])(10\.[0-9]+\.[0-9]+\.[0-9]+|192\.168\.[0-9]+\.[0-9]+|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+)' \
+               --exclude-dir=.git --exclude=check.yml . ; then echo "private IP address found"; exit 1; fi
+          if grep -rnIE '[a-z0-9-]+\.tail[0-9a-f]+\.ts\.net|AGE-SECRET-KEY-1|BEGIN [A-Z ]*PRIVATE KEY' --exclude-dir=.git --exclude=check.yml . ; then
+            echo "tailnet name or key material found"; exit 1; fi
+

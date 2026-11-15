@@ -1,0 +1,10 @@
+{
+  "name": "suburban-tasks",
+  "label": "Tasks",
+  "description": "See what your agents are working on and everything they've produced",
+  "icon": "ListChecks",
+  "version": "0.1.0",
+  "tab": { "path": "/tasks" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css"
+}

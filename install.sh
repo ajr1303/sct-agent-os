@@ -1,0 +1,399 @@
+#!/usr/bin/env bash
+# Suburban Cyber Agent OS installer (Hermes + optional Honcho memory)
+set -euo pipefail
+cd "$(dirname "$0")"
+
+MEMORY_MODE=auto; ASSUME_YES=0; PROFILES_OVERRIDE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --memory) MEMORY_MODE="$2"; shift 2;;
+    --profiles) PROFILES_OVERRIDE="$2"; shift 2;;
+    --yes|-y) ASSUME_YES=1; shift;;
+    -h|--help) echo "Usage: ./install.sh [--memory auto|honcho|basic] [--profiles \"automation,control-plane\"] [--yes]"; echo "  Profiles: memory (Honcho), automation (n8n), control-plane (Paperclip). Default: all three."; echo "  --yes skips the yes/no confirmations; the questions (name, access, keys) are still asked."; exit 0;;
+    *) echo "Unknown option: $1"; exit 1;;
+  esac
+done
+
+# Agent OS installs the FULL stack (Hermes + Honcho memory + n8n + Paperclip).
+# Sizing: 8 GB RAM / 2 vCPU / 40 GB disk is the least it will run on; 16 GB / 4 vCPU /
+# 80 GB is what we recommend for a business that uses it daily.
+MIN_RAM_KB=7300000; REC_RAM_KB=15000000; MIN_DISK_GB=30; REC_DISK_GB=60
+SUBSET_RAM_KB=3500000   # floor when an advanced operator passes --profiles
+TTY=/dev/tty; [ -r "$TTY" ] || TTY=/dev/stdin
+say()  { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
+warn() { printf '\033[33m!  %s\033[0m\n' "$*"; }
+die()  { printf '\033[31mx  %s\033[0m\n' "$*"; exit 1; }
+gen_secret() { openssl rand -hex 32; }
+ask() { # ask VAR "Prompt" "default"
+  local v; printf '%s [%s]: ' "$2" "$3" >"$TTY"; read -r v <"$TTY" || true; printf -v "$1" '%s' "${v:-$3}"; }
+ask_secret() { local v; printf '%s: ' "$2" >"$TTY"; read -rs v <"$TTY" || true; echo >"$TTY"; printf -v "$1" '%s' "$v"; }
+confirm() { [ "$ASSUME_YES" = 1 ] && return 0; local v; printf '%s [y/N]: ' "$1" >"$TTY"; read -r v <"$TTY" || true; [[ "$v" =~ ^[Yy] ]]; }
+
+preflight() {
+  say "Checking this machine"
+  [ "$(uname -s)" = Linux ] || die "Linux required."
+  command -v docker >/dev/null || die "Docker not found. Use get.sh, or install Docker first."
+  docker compose version >/dev/null 2>&1 || die "Docker Compose v2 plugin missing."
+  docker info >/dev/null 2>&1 || die "Docker daemon not reachable (run as root or add your user to the docker group)."
+  command -v openssl >/dev/null || die "openssl not found."
+  local ram disk; ram=$(awk '/MemTotal/{print $2}' /proc/meminfo); disk=$(df -BG --output=avail . | tail -1 | tr -dc 0-9)
+  if [ -n "$PROFILES_OVERRIDE" ]; then
+    # Advanced: operator chose a specific subset, so only enforce a basic floor.
+    [ "$ram" -ge "$SUBSET_RAM_KB" ] || die "Need at least 4 GB RAM (found $((ram/1024)) MB)."
+  else
+    [ "$ram" -ge "$MIN_RAM_KB" ] || die "Agent OS needs at least 8 GB RAM for the full stack (found ~$((ram/1024/1024)) GB). Use a larger server, or re-run with --profiles for a subset (advanced)."
+    [ "$ram" -ge "$REC_RAM_KB" ] || warn "Under 16 GB RAM: fine for trying it out, tight for daily use by a team. 16 GB is recommended."
+  fi
+  [ "$(nproc 2>/dev/null || echo 2)" -ge 2 ] || warn "Only one CPU core: it will run, slowly. 4 are recommended."
+  [ "$disk" -ge "$MIN_DISK_GB" ] || die "Need at least ${MIN_DISK_GB} GB free disk (found ${disk} GB)."
+  [ "$disk" -ge "$REC_DISK_GB" ] || warn "Under ${REC_DISK_GB} GB free disk: enough to start, tight once backups and history build up."
+  # On a resumed install (.env exists) our own services may already hold these ports.
+  if [ ! -f .env ]; then
+    for p in 8642 9119 5678 3100; do
+      (exec 3<>/dev/tcp/127.0.0.1/$p) 2>/dev/null && die "Port $p already in use." || true
+    done
+  fi
+  curl -fsS -o /dev/null --max-time 8 https://github.com || die "Cannot reach github.com."
+  if [ "$MEMORY_MODE" = auto ]; then
+    MEMORY_MODE=honcho
+    # A hand-picked set of services without "memory" means no memory service.
+    if [ -n "$PROFILES_OVERRIDE" ]; then case ",$PROFILES_OVERRIDE," in *,memory,*) ;; *) MEMORY_MODE=basic;; esac; fi
+  fi
+  echo "Memory mode: $MEMORY_MODE"
+}
+
+collect_answers() {
+  local tries
+  say "A few questions"
+  ask OWNER_NAME "Your name" "owner"
+  ask AGENT_NAME "Name your agent" "assistant"
+  # These names go into config files: keep to letters, numbers, spaces, dash, underscore.
+  OWNER_NAME=$(printf '%s' "$OWNER_NAME" | tr -cd 'A-Za-z0-9 _-'); OWNER_NAME=${OWNER_NAME:-owner}
+  AGENT_NAME=$(printf '%s' "$AGENT_NAME" | tr -cd 'A-Za-z0-9 _-'); AGENT_NAME=${AGENT_NAME:-assistant}
+  ask WORKSPACE  "Workspace name" "$(echo "$AGENT_NAME" | tr 'A-Z ' 'a-z-')-workspace"
+  WORKSPACE=$(printf '%s' "$WORKSPACE" | tr -cd 'A-Za-z0-9_-'); WORKSPACE=${WORKSPACE:-workspace}
+  echo "How will you reach this box?"
+  echo "  1) This machine / SSH tunnel only   — most secure, nothing exposed (default)"
+  echo "  2) Cloudflare Tunnel                 — public HTTPS URL, no open ports (needs a tunnel token)"
+  echo "  3) Direct LAN / public HTTP          — plain HTTP on your network, NOT recommended"
+  ask ACCESS "Choice" "1"
+  # The dashboard proxy's host bind. n8n and Paperclip are NEVER bound here — they
+  # stay on loopback (INTERNAL_BIND) and are reached through the dashboard, the
+  # tunnel, or an SSH tunnel.
+  DASHBOARD_BIND=127.0.0.1
+  ACCESS_MODE=local
+  CLOUDFLARE_TUNNEL_TOKEN=""
+  case "$ACCESS" in
+    2)
+      ACCESS_MODE=cloudflare
+      echo "Cloudflare Tunnel keeps everything on localhost and dials out to Cloudflare —"
+      echo "no inbound ports. Create a tunnel in your Zero Trust dashboard and paste its token."
+      ask_secret CLOUDFLARE_TUNNEL_TOKEN "Tunnel token (input hidden)"
+      tries=0
+      while [ -z "$CLOUDFLARE_TUNNEL_TOKEN" ]; do
+        tries=$((tries+1)); [ "$tries" -le 5 ] || die "No tunnel token entered. Re-run the installer from an interactive terminal."
+        echo "No token entered. Paste the tunnel token, or press Ctrl+C and re-run choosing option 1." >"$TTY"
+        ask_secret CLOUDFLARE_TUNNEL_TOKEN "Tunnel token (input hidden)"
+      done
+      ;;
+    3)
+      ACCESS_MODE=lan
+      DASHBOARD_BIND=0.0.0.0
+      say "  ! Dashboard will be plain HTTP on your network — only on a trusted LAN. Prefer option 1 or 2."
+      ;;
+    *)
+      ACCESS_MODE=local
+      ;;
+  esac
+  if [ "$MEMORY_MODE" = honcho ]; then
+    echo "Long-term memory (Honcho) needs an OpenAI or OpenAI-compatible API key, because it"
+    echo "uses an embedding model. This is separate from the model your agents think with:"
+    echo "an Anthropic key alone cannot run it."
+    echo "  1) OpenAI   2) Other OpenAI-compatible (OpenRouter, vLLM, etc.)   3) Skip for now (basic built-in memory)"
+    ask PROVIDER "Choice" "1"
+    # A pasted key lands here if the prompts are answered out of order; it would be
+    # echoed on screen and silently treated as "1". Insist on a real choice.
+    tries=0
+    while [ "$PROVIDER" != 1 ] && [ "$PROVIDER" != 2 ] && [ "$PROVIDER" != 3 ]; do
+      tries=$((tries+1)); [ "$tries" -le 5 ] || die "No valid choice entered. Re-run the installer from an interactive terminal."
+      echo "Please type 1, 2 or 3. (If you just pasted a key here, it was shown on screen: revoke it and make a new one.)"
+      ask PROVIDER "Choice" "1"
+    done
+  fi
+  if [ "$MEMORY_MODE" = honcho ] && [ "$PROVIDER" = 3 ]; then
+    MEMORY_MODE=basic
+    echo "Using basic built-in memory."
+  fi
+  if [ "$MEMORY_MODE" = honcho ]; then
+    if [ "$PROVIDER" = 2 ]; then
+      ask LLM_BASE_URL "Base URL" "https://openrouter.ai/api/v1"
+      ask LLM_MODEL    "Chat model" "openai/gpt-4o-mini"
+      ask EMBED_MODEL  "Embedding model" "openai/text-embedding-3-small"
+    else
+      LLM_BASE_URL=""; LLM_MODEL="gpt-4o-mini"; EMBED_MODEL="text-embedding-3-small"
+    fi
+    ask_secret LLM_API_KEY "API key (input hidden)"
+    if [ -z "$LLM_API_KEY" ]; then
+      warn "No key entered, so long-term memory is off for now (basic built-in memory instead)."
+      MEMORY_MODE=basic
+    fi
+  fi
+  if [ "$MEMORY_MODE" = honcho ]; then
+    echo "Memory cost preset: 1) economy  2) balanced  3) deep"
+    ask MEMORY_PRESET "Choice" "2"
+    case "$MEMORY_PRESET" in
+      1) DIALECTIC_CADENCE=5; DIALECTIC_LEVEL=low;;
+      3) DIALECTIC_CADENCE=1; DIALECTIC_LEVEL=medium;;
+      *) DIALECTIC_CADENCE=2; DIALECTIC_LEVEL=low;;
+    esac
+  fi
+}
+
+detect_tz() {
+  local tz=""
+  tz=$(timedatectl show -p Timezone --value 2>/dev/null || true)
+  [ -n "$tz" ] || tz=$(cat /etc/timezone 2>/dev/null || true)
+  printf '%s' "${tz:-UTC}"
+}
+
+write_env() {
+  say "Writing configuration"
+  umask 077
+  # Never regenerate secrets over an existing install.
+  # Rewriting .env would change HONCHO_DB_PASSWORD / N8N_ENCRYPTION_KEY /
+  # CONNECTORS_KEY out from under already-initialised volumes: Postgres auth
+  # breaks, n8n can't decrypt its credentials, and every Fernet-encrypted
+  # connector secret becomes unreadable. Keep the existing .env, back it up, and
+  # just refresh branding/dirs. get.sh routes real re-runs to update.sh anyway.
+  if [ -f .env ]; then
+    cp -p .env ".env.bak.$(date +%Y%m%d%H%M%S)"
+    say "Existing install detected — keeping your secrets in .env (backup written)."
+    mkdir -p data/hermes/dashboard-themes backups data/backup data/agent-ssh
+    if [ "$MEMORY_MODE" = honcho ]; then
+      [ -f honcho.env ] || write_honcho_env
+      [ -f data/hermes/honcho.json ] || write_honcho_json
+    fi
+    ./scripts/sync-branding.sh
+    return
+  fi
+  # Detect the address users reach this box at. The full stack is the default;
+  # --profiles is an advanced subset override (preflight relaxes RAM for it).
+  local lan_ip pc_host profs
+  lan_ip=$(hostname -I 2>/dev/null | awk '{print $1}'); [ -n "$lan_ip" ] || lan_ip="127.0.0.1"
+  # Paperclip is only ever published on this machine's loopback (see INTERNAL_BIND),
+  # so its own address is localhost in every access mode until a hostname is set
+  # (scripts/set-hostnames.sh).
+  pc_host="localhost"
+  if [ -n "$PROFILES_OVERRIDE" ]; then
+    profs="$PROFILES_OVERRIDE"
+  elif [ "$MEMORY_MODE" = honcho ]; then
+    profs="memory,automation,control-plane"
+  else
+    # basic memory: no Honcho containers, so don't start the "memory" profile —
+    # honcho.env isn't written and the Honcho services would fail without it.
+    profs="automation,control-plane"
+  fi
+  case ",$profs," in *,control-plane,*) say "Setting up the full stack (the first start downloads several images; allow a few minutes)." ;; esac
+  # Cloudflare access runs cloudflared as a container (the "tunnel" profile).
+  if [ "${ACCESS_MODE:-local}" = cloudflare ]; then profs="${profs},tunnel"; fi
+  cat > .env <<ENV
+API_SERVER_KEY=$(gen_secret)
+DASHBOARD_USER=admin
+DASHBOARD_BIND=$DASHBOARD_BIND
+# n8n and Paperclip always bind here (loopback) regardless of DASHBOARD_BIND, so
+# they're never published on the LAN. Reach them via the dashboard, the tunnel, or
+# an SSH tunnel. Change only if you truly need them on the network.
+INTERNAL_BIND=127.0.0.1
+# Access method: local (loopback/SSH) | cloudflare (tunnel) | lan (plain HTTP).
+ACCESS_MODE=${ACCESS_MODE:-local}
+CLOUDFLARE_TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+DASHBOARD_PASSWORD=$(openssl rand -base64 18 | tr -dc A-Za-z0-9 | cut -c1-20)
+HONCHO_DB_PASSWORD=$(gen_secret)
+CONNECTORS_KEY=$(openssl rand -base64 32 | tr '+/' '-_')
+N8N_ENCRYPTION_KEY=$(openssl rand -hex 32)
+BETTER_AUTH_SECRET=$(openssl rand -hex 32)
+PAPERCLIP_TOOL_ACTION_SIGNING_SECRET=$(openssl rand -hex 32)
+HERMES_HOME_DIR=./data/hermes
+HERMES_MEM_LIMIT=3G
+PAPERCLIP_PUBLIC_URL=http://${pc_host}:3100
+PAPERCLIP_ALLOWED_HOSTNAMES=paperclip,localhost,127.0.0.1,${lan_ip}
+# Timezone for scheduled automations (n8n). Any name from the tz database.
+N8N_TIMEZONE=$(detect_tz)
+COMPOSE_PROFILES=${profs}
+ENV
+  mkdir -p data/hermes/dashboard-themes backups data/backup data/agent-ssh
+  # Marks an install that has not finished. get.sh resumes the installer (not the
+  # updater) while this exists; it is removed at the very end.
+  touch data/.install-incomplete
+  if [ "$MEMORY_MODE" = honcho ]; then write_honcho_env; write_honcho_json; fi
+  ./scripts/sync-branding.sh
+}
+
+emit_model_block() { # emit_model_block PREFIX MODEL
+  local p="$1" m="$2"
+  echo "${p}__TRANSPORT=openai"; echo "${p}__MODEL=${m}"
+  if [ -n "$LLM_BASE_URL" ]; then
+    echo "${p}__OVERRIDES__BASE_URL=${LLM_BASE_URL}"
+    echo "${p}__STRUCTURED_OUTPUT_MODE=json_object"
+  fi
+}
+
+write_honcho_env() {
+  local pw; pw=$(grep ^HONCHO_DB_PASSWORD= .env | cut -d= -f2)
+  {
+    echo "LOG_LEVEL=INFO"
+    echo "AUTH_USE_AUTH=false"
+    echo "DB_CONNECTION_URI=postgresql+psycopg://honcho:${pw}@honcho-db:5432/honcho"
+    echo "LLM_OPENAI_API_KEY=${LLM_API_KEY}"
+    emit_model_block DERIVER_MODEL_CONFIG "$LLM_MODEL"
+    emit_model_block SUMMARY_MODEL_CONFIG "$LLM_MODEL"
+    emit_model_block DREAM_DEDUCTION_MODEL_CONFIG "$LLM_MODEL"
+    emit_model_block DREAM_INDUCTION_MODEL_CONFIG "$LLM_MODEL"
+    for lv in minimal low medium high max; do emit_model_block "DIALECTIC_LEVELS__${lv}__MODEL_CONFIG" "$LLM_MODEL"; done
+    echo "EMBEDDING_MODEL_CONFIG__TRANSPORT=openai"
+    echo "EMBEDDING_MODEL_CONFIG__MODEL=${EMBED_MODEL}"
+    [ -n "$LLM_BASE_URL" ] && echo "EMBEDDING_MODEL_CONFIG__OVERRIDES__BASE_URL=${LLM_BASE_URL}"
+  } > honcho.env
+  chmod 600 honcho.env
+}
+
+write_honcho_json() {
+  sed -e "s/__AI_PEER__/${AGENT_NAME}/g" -e "s/__USER_PEER__/${OWNER_NAME}/g" -e "s/__WORKSPACE__/${WORKSPACE}/g" \
+      -e "s/__DIALECTIC_CADENCE__/${DIALECTIC_CADENCE}/g" -e "s/__DIALECTIC_LEVEL__/${DIALECTIC_LEVEL}/g" \
+      templates/honcho.json.tmpl > data/hermes/honcho.json
+}
+
+hermes_first_run() {
+  say "Hermes first-time setup (pick your model/provider and messaging)"
+  docker compose run --rm -it hermes setup <"$TTY" || warn "hermes setup exited non-zero; re-run: docker compose run --rm -it hermes setup"
+  docker compose run --rm hermes config set dashboard.theme suburban-cyber || warn "could not set default theme; pick it in the dashboard"
+  if [ "$MEMORY_MODE" = honcho ]; then
+    # /opt/data/plugins is bind-mounted from the host plugins dir, which
+    # sync-branding creates as root. The Hermes image always drops to its own
+    # non-root user (even with --user root), so the installer can't create its temp
+    # dir there (Errno 13). Hand the directory itself to the uid Hermes runs as,
+    # which is whoever owns the config.yaml that first-time setup just wrote.
+    local hdir own
+    hdir=$(sed -n 's/^HERMES_HOME_DIR=//p' .env | tail -n1); hdir=${hdir:-./data/hermes}
+    own=$(stat -c '%u:%g' "$hdir/config.yaml" 2>/dev/null || true)
+    if [ -n "$own" ] && [ "$own" != "0:0" ]; then chown "$own" "$hdir/plugins" 2>/dev/null || true; fi
+    docker compose run --rm hermes plugins install honcho \
+      || warn "memory plugin install failed; re-run: ./scripts/install-memory-plugin.sh"
+  fi
+}
+
+start_stack() {
+  say "Fetching prebuilt images"
+  # Prebuilt, tested images come from our registry. Anything that can't be pulled
+  # is built locally from its pinned source by `up` below (slower, same result).
+  docker compose pull -q --ignore-pull-failures 2>/dev/null || warn "some images could not be pulled; they will be built locally"
+  docker compose build connectors
+  say "Starting services (builds anything not prebuilt; can take a few minutes)"
+  docker compose up -d
+}
+
+install_cron() {
+  say "Installing watchdog, nightly backup, and update check"
+  ./scripts/install-cron.sh && say "Scheduled watchdog (5m), backup (3:30am), update check (6h)" || true
+  ./scripts/check-updates.sh 2>/dev/null || true   # seed the status now
+}
+
+# Optional: lock backups and send a copy to cloud storage, right at install. The
+# same steps live on the dashboard's Backups page, so skipping here loses nothing.
+# An operator can pre-set their own key for every client install:
+#   OPERATOR_BACKUP_PUBKEY=age1... ./install.sh
+setup_backups() {
+  local bt="docker exec -i agent-os-connectors python backup_tool.py" opkey choice folder tok ep ak sk
+  if [ -n "${OPERATOR_BACKUP_PUBKEY:-}" ] && ! grep -q '^OPERATOR_BACKUP_PUBKEY=' .env; then
+    echo "OPERATOR_BACKUP_PUBKEY=${OPERATOR_BACKUP_PUBKEY}" >> .env
+    docker compose up -d connectors >/dev/null 2>&1 || true
+  fi
+  [ "$ASSUME_YES" = 1 ] && return 0
+  say "Backups"
+  echo "A full backup runs every night. Right now it stays on this server, unlocked." >"$TTY"
+  echo "Locking it and keeping a copy in cloud storage protects you if this machine is lost." >"$TTY"
+  confirm "Set that up now? (You can also do it later on the dashboard: Connections > Backups)" || return 0
+  $bt init || { warn "could not create the recovery kit; set backups up from the dashboard instead"; return 0; }
+  if [ -z "${OPERATOR_BACKUP_PUBKEY:-}" ]; then
+    echo "If someone manages this system for you, paste their public backup key (starts with age1)." >"$TTY"
+    ask opkey "Second key, or Enter to skip" ""
+    [ -n "$opkey" ] && { $bt operator-key "$opkey" || warn "that key was not accepted; add it later on the Backups page"; }
+  fi
+  echo "Where should the copy go?  1) Google Drive  2) S3-compatible (Backblaze, Wasabi, R2...)  3) Decide later" >"$TTY"
+  ask choice "Choice" "3"
+  case "$choice" in
+    1)
+      echo "On a computer with a web browser, install rclone and run:  rclone authorize \"drive\"" >"$TTY"
+      echo "Sign in with the Google account for the backups, then paste the {...} block it prints." >"$TTY"
+      ask folder "Folder name in Google Drive" "Agent OS backups"
+      ask_secret tok "Token (input hidden)"
+      [ -n "$tok" ] && { printf 'token=%s\n' "$tok" | $bt remote gdrive "$folder" \
+        || warn "Google Drive was not connected; finish on the Backups page"; } ;;
+    2)
+      ask folder "Bucket/folder" "my-bucket/agent-os"
+      ask ep "Endpoint URL" "https://"
+      ask ak "Access key ID" ""
+      ask_secret sk "Secret access key (input hidden)"
+      printf 'access_key_id=%s\nsecret_access_key=%s\nendpoint=%s\n' "$ak" "$sk" "$ep" | $bt remote s3 "$folder" \
+        || warn "that storage was not connected; finish on the Backups page" ;;
+  esac
+  echo "IMPORTANT: download your recovery kit from the dashboard (Connections > Backups) and" >"$TTY"
+  echo "keep it off this server. Without it (or the second key) a backup cannot be opened." >"$TTY"
+}
+
+# Enable the Suburban Cyber dashboard plugins on every profile. Delegated to a
+# shared script so install and update stay in lock-step. It waits for Hermes to
+# be ready first (up -d returns before the gateway is), which also fixes the old
+# race where the enable loop silently no-opped on first boot.
+enable_plugins() { ./scripts/enable-plugins.sh || warn "plugin enable reported problems; check: docker compose logs hermes"; }
+
+main() {
+  preflight
+  collect_answers
+  write_env
+  say "Generating internal gateway TLS (Paperclip -> Hermes hop)"
+  ./scripts/gen-tls.sh || warn "gateway TLS generation failed - agents won't run until this is fixed"
+  hermes_first_run
+  say "Setting up chat tools (delegation + automations)"
+  ./scripts/sync-chat-tools.sh || warn "chat tools setup reported problems; re-run: ./scripts/sync-chat-tools.sh"
+  start_stack
+  enable_plugins
+  install_cron
+  setup_backups
+  say "Smoke test"
+  ./scripts/smoke-test.sh || warn "Some checks failed - see above. Logs: docker compose logs"
+  if [ "$MEMORY_MODE" = honcho ]; then docker compose exec -T hermes hermes memory status || true; fi
+  if [ "$DASHBOARD_BIND" = 0.0.0.0 ]; then
+    ip=$(hostname -I | awk '{print $1}')
+    where="http://${ip}:9119   (LAN; plain HTTP, so keep it on a trusted network)"
+  else
+    where="http://localhost:9119 after: ssh -L 9119:127.0.0.1:9119 <user>@<this-server>"
+  fi
+  if [ "${ACCESS_MODE:-}" = cloudflare ]; then
+    where="your Cloudflare hostname, once you add the routes (docs/RUNBOOK.md section 3).
+           Until then: $where"
+  fi
+  rm -f data/.install-incomplete
+  local pcwhere="http://localhost:3100 after: ssh -L 3100:127.0.0.1:3100 <user>@<this-server>"
+  local n8where="http://localhost:5678 after: ssh -L 5678:127.0.0.1:5678 <user>@<this-server>"
+  cat <<DONE
+
+Agent OS is running.
+Dashboard: $where
+Login:     admin / $(grep ^DASHBOARD_PASSWORD= .env | cut -d= -f2)   (also in $(pwd)/.env)
+
+Three things left to do, once:
+  1. Team (Paperclip): open it and create your owner account.
+       $pcwhere
+     Then in the dashboard go to Orchestration and press "Link my team".
+  2. Automations (n8n): open it and create your owner account.
+       $n8where
+     Then connect it on the dashboard's Automations page.
+  3. Backups: dashboard > Backups. Create your recovery kit and choose where copies go.
+If you use a Cloudflare Tunnel, give each of these its own hostname first:
+  docs/RUNBOOK.md section 3 (scripts/set-hostnames.sh).
+
+The agent API (8642) stays on localhost. To update later: sudo ./scripts/update.sh
+DONE
+}
+main

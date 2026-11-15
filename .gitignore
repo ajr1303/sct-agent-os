@@ -1,0 +1,7 @@
+data/
+backups/
+.env
+honcho.env
+*.zip
+__pycache__/
+*.pyc

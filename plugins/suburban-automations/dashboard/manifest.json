@@ -1,0 +1,10 @@
+{
+  "name": "suburban-automations",
+  "label": "Automations",
+  "description": "See and open your embedded n8n automation engine from Suburban Cyber Agent OS",
+  "icon": "Workflow",
+  "version": "0.1.0",
+  "tab": { "path": "/automations" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css"
+}

@@ -1,0 +1,10 @@
+{
+  "name": "suburban-orchestration",
+  "label": "Orchestration",
+  "description": "Paperclip-managed agents, schedules, and approvals surfaced in Suburban Cyber Agent OS",
+  "icon": "Network",
+  "version": "0.1.0",
+  "tab": { "path": "/orchestration" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css"
+}

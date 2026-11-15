@@ -1,0 +1,10 @@
+{
+  "name": "suburban-backups",
+  "label": "Backups",
+  "description": "Nightly full backups, encrypted and copied to your cloud storage",
+  "icon": "DatabaseBackup",
+  "version": "0.1.0",
+  "tab": { "path": "/backups" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css"
+}

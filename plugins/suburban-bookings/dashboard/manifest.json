@@ -1,0 +1,10 @@
+{
+  "name": "suburban-bookings",
+  "label": "Bookings",
+  "description": "Connect a booking app and see upcoming appointments in Suburban Cyber Agent OS",
+  "icon": "Calendar",
+  "version": "0.1.0",
+  "tab": { "path": "/bookings" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css"
+}

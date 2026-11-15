@@ -1,0 +1,10 @@
+{
+  "name": "suburban-chat",
+  "label": "Chat",
+  "description": "Simplified bubble chat for Suburban Cyber Agent OS",
+  "icon": "MessageSquare",
+  "version": "0.1.0",
+  "tab": { "path": "/sc-chat", "override": "/chat" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css"
+}

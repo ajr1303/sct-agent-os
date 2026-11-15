@@ -1,0 +1,68 @@
+name: images
+# Builds the upstream projects we depend on ONCE, from pinned commits, and stores
+# the finished images in this repo's container registry (ghcr.io). Installs then
+# pull known-good images from here instead of building from someone else's repo,
+# so an upstream repo changing or disappearing can't break a new install.
+#
+# To move to a new upstream version: change the ref here AND in docker-compose.yml
+# (CI checks they match), test on the test box, then release.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/images.yml"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: paperclip
+            repo: paperclipai/paperclip
+            ref: 253bf071f0a496554b61fff897ad3f11afaf8766
+            license: MIT
+          - name: honcho
+            repo: plastic-labs/honcho
+            ref: 323f7e79923ffef968669fe4069d8cebed3ec8c3
+            license: AGPL-3.0-only
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image name
+        id: n
+        run: |
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          ref="${{ matrix.ref }}"
+          echo "image=ghcr.io/${owner}/agent-os-${{ matrix.name }}:${ref:0:7}" >> "$GITHUB_OUTPUT"
+      - name: Already published?
+        id: have
+        run: |
+          if docker manifest inspect "${{ steps.n.outputs.image }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build and push (unmodified upstream source at the pinned commit)
+        if: steps.have.outputs.exists == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: https://github.com/${{ matrix.repo }}.git#${{ matrix.ref }}
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.n.outputs.image }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ matrix.repo }}
+            org.opencontainers.image.revision=${{ matrix.ref }}
+            org.opencontainers.image.licenses=${{ matrix.license }}
+            org.opencontainers.image.description=Unmodified build of ${{ matrix.repo }} at ${{ matrix.ref }} for Suburban Cyber Agent OS

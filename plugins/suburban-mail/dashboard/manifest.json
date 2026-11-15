@@ -1,0 +1,10 @@
+{
+  "name": "suburban-mail",
+  "label": "Mailboxes",
+  "description": "Connect and monitor multiple email accounts in Suburban Cyber Agent OS",
+  "icon": "Mail",
+  "version": "0.1.0",
+  "tab": { "path": "/mailboxes" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css"
+}

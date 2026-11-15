@@ -1,0 +1,28 @@
+name: suburban-cyber-light
+label: Suburban Cyber Light
+description: Light theme for Suburban Cyber Agent OS
+palette:
+  background: "#f3f6f7"
+  midground: "#0e1a1f"
+  foreground: { hex: "#ffffff", alpha: 0 }
+  warmGlow: "rgba(11, 93, 184, 0.06)"
+  noiseOpacity: 0.25
+typography:
+  fontSans: "'IBM Plex Sans', system-ui, sans-serif"
+  fontMono: "'IBM Plex Mono', ui-monospace, monospace"
+  fontDisplay: "'Chakra Petch', 'IBM Plex Sans', sans-serif"
+  fontUrl: "https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=IBM+Plex+Mono&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+  baseSize: "15px"
+  lineHeight: "1.55"
+layout:
+  radius: "2px"
+  density: comfortable
+layoutVariant: standard
+colorOverrides:
+  primary: "#0b5db8"
+  primaryForeground: "#ffffff"
+  accent: "#0b5db8"
+  ring: "#0b5db8"
+  success: "#17794a"
+  warning: "#9a5700"
+  destructive: "#b3261e"
