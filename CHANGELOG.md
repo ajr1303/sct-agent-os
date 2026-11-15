@@ -2,6 +2,17 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.29.1] — 2026-11-15 — Backup uploads can no longer stall or pile up
+
+- A Google Drive upload that was being rate limited ran for three hours before giving
+  up, and held up an update the whole time. **An upload attempt is now stopped after
+  45 minutes** and tried again later.
+- **Only one upload runs at a time.** Retries used to be able to start on top of an
+  attempt that was still running, which made rate limiting worse.
+- Retries are spaced further apart each time (30 minutes, 1 hour, 2 hours, up to 6),
+  eight attempts at most; `scripts/backup.sh --retry-upload` always tries once.
+- The backup taken before an update never uploads inline; it is sent afterwards.
+
 ## [0.29.0] — 2026-11-14 — Stuck-agent watch
 
 - **A built-in automation that notices agents that have stopped moving** and gives

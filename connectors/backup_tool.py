@@ -23,6 +23,7 @@ import shutil
 import hashlib
 import datetime
 import subprocess
+import fcntl
 
 CFG = os.environ.get("AOS_BACKUP_CONFIG", "/backup-config")
 OUT = os.environ.get("AOS_BACKUP_DIR", "/backups")
@@ -317,48 +318,99 @@ def pack(stage):
     return out, bool(rec)
 
 
+UPLOAD_LIMIT_SECONDS = 45 * 60     # one attempt may take this long, then it is stopped
+
+
+class _UploadBusy(Exception):
+    pass
+
+
+def _upload_lock():
+    """Only one upload at a time, across the nightly run, retries and 'Back up now'.
+    Returns an open file holding the lock, or raises _UploadBusy."""
+    f = open(os.path.join(OUT, ".upload.lock"), "w")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        raise _UploadBusy()
+    return f
+
+
 def upload(path):
     s = load_settings()
     target = "%s:%s" % (REMOTE, s.get("remote_path") or "")
-    # Slow and patient: shared sign-in apps (rclone's own Google one) are rate limited,
-    # so pace the requests and let rclone back off and retry rather than give up.
-    r = _rclone(["copyto", path, target + "/" + os.path.basename(path), "--retries", "5", "--retries-sleep", "30s",
-                 "--low-level-retries", "20", "--tpslimit", "3", "--drive-chunk-size", "16M"], timeout=3 * 3600)
-    if r.returncode != 0:
-        raise RuntimeError("Upload failed: " + _clean_err(r.stderr))
-    chk = _rclone(["lsjson", target + "/" + os.path.basename(path)], timeout=120)
+    lock = _upload_lock()
     try:
-        size = json.loads(chk.stdout)[0].get("Size")
-    except Exception:
-        size = None
-    if size != os.path.getsize(path):
-        raise RuntimeError("The uploaded copy is not the same size as the local file.")
-    keep = int(s.get("keep_remote_days") or 30)
-    _rclone(["delete", target, "--min-age", "%dd" % keep, "--include", "agent-os-*.tar.gz.age"], timeout=600)
-    return target
+        # Paced, because shared sign-in apps (rclone's own Google one) are rate limited,
+        # and bounded: an attempt that is getting nowhere is stopped and tried again
+        # later instead of holding everything up for hours.
+        try:
+            r = _rclone(["copyto", path, target + "/" + os.path.basename(path), "--retries", "3", "--retries-sleep", "20s",
+                         "--low-level-retries", "10", "--tpslimit", "3", "--drive-chunk-size", "16M",
+                         "--timeout", "2m", "--contimeout", "30s", "--max-duration", "40m"], timeout=UPLOAD_LIMIT_SECONDS)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("Upload stopped after %d minutes without finishing. It will be tried again later. If this keeps "
+                               "happening with Google Drive, connect it with your own Google client ID (see the Backups page)."
+                               % (UPLOAD_LIMIT_SECONDS // 60))
+        if r.returncode != 0:
+            raise RuntimeError("Upload failed: " + _clean_err(r.stderr))
+        chk = _rclone(["lsjson", target + "/" + os.path.basename(path)], timeout=120)
+        try:
+            size = json.loads(chk.stdout)[0].get("Size")
+        except Exception:
+            size = None
+        if size != os.path.getsize(path):
+            raise RuntimeError("The uploaded copy is not the same size as the local file. It will be tried again later.")
+        keep = int(s.get("keep_remote_days") or 30)
+        try:
+            _rclone(["delete", target, "--min-age", "%dd" % keep, "--include", "agent-os-*.tar.gz.age"], timeout=300)
+        except subprocess.TimeoutExpired:
+            pass
+        return target
+    finally:
+        lock.close()
+
+
+def _write_status(st):
+    tmp = os.path.join(OUT, "status.json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(st, f, indent=1)
+    os.replace(tmp, os.path.join(OUT, "status.json"))
 
 
 def retry_upload(min_gap_seconds=1800):
     """Send the newest backup again if its upload failed. Called every few minutes by
-    scripts/backup.sh, so it spaces its own attempts. Returns None when there is nothing to do."""
+    scripts/backup.sh, so it spaces its own attempts (30 minutes, then longer each
+    time). Returns None when there is nothing to do."""
     st = read_status()
     if not st or not st.get("ok") or st.get("uploaded") or not st.get("encrypted") or not remote_configured():
         return None
     path = os.path.join(OUT, st.get("file") or "")
-    if not os.path.isfile(path) or int(st.get("upload_tries") or 1) >= 12:
+    tries = int(st.get("upload_tries") or 0)
+    if not os.path.isfile(path) or (tries >= 8 and min_gap_seconds):   # asked for by hand: always try
         return None
-    if time.time() - float(st.get("upload_tried_at") or 0) < min_gap_seconds:
+    gap = min(min_gap_seconds * (2 ** max(0, tries - 1)), 6 * 3600) if tries else 0
+    if time.time() - float(st.get("upload_tried_at") or 0) < gap:
         return None
-    st["upload_tries"] = int(st.get("upload_tries") or 1) + 1
+    try:
+        probe = _upload_lock()   # another upload is in progress: leave it to finish
+        probe.close()
+    except _UploadBusy:
+        return None
+    # Record the attempt BEFORE starting, so a slow one is never started twice.
+    st["upload_tries"] = tries + 1
     st["upload_tried_at"] = time.time()
+    _write_status(st)
     try:
         st["remote"] = upload(path)
         st["uploaded"] = True
         st["upload_error"] = None
+    except _UploadBusy:
+        return None
     except Exception as e:
         st["upload_error"] = str(e)[:400]
-    with open(os.path.join(OUT, "status.json"), "w", encoding="utf-8") as f:
-        json.dump(st, f, indent=1)
+    _write_status(st)
     return st
 
 
@@ -408,13 +460,16 @@ def finish(stage, version="", failed=None):
                 try:
                     st["remote"] = upload(path)
                     st["uploaded"] = True
+                except _UploadBusy:
+                    st["upload_tries"] = 0
+                    st["upload_tried_at"] = 0
+                    st["upload_error"] = "Waiting for an earlier upload to finish; this one is sent afterwards."
                 except Exception as e:
                     st["upload_error"] = str(e)[:400]
         prune_local()
     except Exception as e:
         st["error"] = str(e)[:300]
-    with open(os.path.join(OUT, "status.json"), "w", encoding="utf-8") as f:
-        json.dump(st, f, indent=1)
+    _write_status(st)
     return st
 
 
@@ -459,6 +514,8 @@ def main(argv):
         st = retry_upload(0 if "--now" in argv else 1800)
         if st:
             print("backup: " + ("uploaded " + st["file"] + " to " + st["remote"] if st["uploaded"] else st["upload_error"]))
+        elif "--now" in argv:
+            print("backup: nothing to send right now (already uploaded, no storage connected, or an upload is in progress)")
         return 0
     if argv[:1] == ["init"]:
         init_kit()
