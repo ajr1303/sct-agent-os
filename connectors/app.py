@@ -2453,13 +2453,38 @@ def _ga_fetch(sa, prop):
 
 
 def _ga_parse_key(text):
-    try:
-        sa = json.loads(text or "")
-        assert isinstance(sa, dict) and sa.get("type") == "service_account"
-        assert "@" in str(sa.get("client_email")) and "PRIVATE KEY" in str(sa.get("private_key"))
-    except Exception:
-        raise ValueError("That is not a Google service-account key. Paste the whole contents of the .json file Google gave you.")
-    return {"client_email": str(sa["client_email"])[:200], "private_key": str(sa["private_key"])}
+    """Read a pasted service-account key. Copying a key out of a terminal or an editor
+    often damages the JSON (hard line breaks inside the long key line, non-breaking
+    spaces, a missing brace), so fall back to pulling out the two fields we need."""
+    t = (text or "").replace("\ufeff", "").replace("\u00a0", " ").replace("\u201c", '"').replace("\u201d", '"').strip()
+    email, pem = "", ""
+    for strict in (True, False):
+        try:
+            sa = json.loads(t, strict=strict)
+            if isinstance(sa, dict):
+                email, pem = str(sa.get("client_email") or ""), str(sa.get("private_key") or "")
+                break
+        except Exception:
+            continue
+    if not email:
+        m = re.search(r'"client_email"\s*:\s*"([^"]+)"', t)
+        email = m.group(1) if m else ""
+    if "PRIVATE KEY" not in pem:
+        pem = t
+    m = re.search(r"-----BEGIN (RSA )?PRIVATE KEY-----(.*?)-----END (RSA )?PRIVATE KEY-----", pem, re.S)
+    email = re.sub(r"\s+", "", email)
+    if not m or not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        if t and "private_key" not in t and "PRIVATE KEY" not in t:
+            raise ValueError("That text has no private key in it. Paste the whole contents of the .json key file "
+                             "Google downloaded when you created the key, from the first { to the last }.")
+        raise ValueError("That key could not be read. It may have been cut off when it was copied. Open the .json file in a "
+                         "plain text editor, select all, copy, and paste it again.")
+    body = re.sub(r"\\n|\\r|\s+", "", m.group(2))      # literal \n sequences and any real whitespace
+    if not re.match(r"^[A-Za-z0-9+/=]{200,}$", body):
+        raise ValueError("The private key in that file looks damaged. Download a fresh key file from Google and paste it again.")
+    kind = (m.group(1) or "") + "PRIVATE KEY"
+    pem = "-----BEGIN %s-----\n%s\n-----END %s-----\n" % (kind, "\n".join(body[i:i + 64] for i in range(0, len(body), 64)), kind)
+    return {"client_email": email[:200], "private_key": pem}
 
 
 class WebsiteIn(BaseModel):

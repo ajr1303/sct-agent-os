@@ -2,6 +2,14 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.31.1] — 2026-11-15 — Website: accept a key that was damaged when copied
+
+- A real Google key was refused with "That is not a Google service-account key". The
+  page insisted on perfectly formed JSON, and a key copied from a terminal or editor
+  often is not (hard line breaks inside the long key line, non-breaking spaces, a
+  missing brace). The key is now read tolerantly, and the messages say what is
+  actually wrong (cut off, no private key in the text, or damaged).
+
 ## [0.31.0] — 2026-11-15 — Several websites on one install
 
 - The **Website** page can hold more than one site (up to 25), all read through the
