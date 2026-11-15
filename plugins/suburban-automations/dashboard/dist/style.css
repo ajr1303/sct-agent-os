@@ -77,3 +77,19 @@
 .sa-wf-btn{padding:4px 10px;font-size:12px;white-space:nowrap}
 .sa-wf-arch{font-size:11px;opacity:.5}
 .sa-wf-err{margin:0 16px 10px}
+.sa-watch-state{float:right;font-weight:400;letter-spacing:.03em;opacity:.7}
+.sa-watch-state.sa-on{color:var(--color-success,#4ade80);opacity:1}
+.sa-watch-body{padding:14px 16px;display:flex;flex-direction:column;gap:12px}
+.sa-watch-p{font-size:13px;line-height:1.55;max-width:78ch}
+.sa-watch-acts{display:flex;gap:9px;flex-wrap:wrap}
+.sa-watch-result,.sa-watch-last{font-size:13px;line-height:1.5;padding:9px 12px;border:1px solid var(--color-border,rgba(255,255,255,.12));overflow-wrap:anywhere}
+.sa-watch-row{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-end}
+.sa-watch-field{display:flex;flex-direction:column;gap:5px;font-size:11px;letter-spacing:.05em;text-transform:uppercase}
+.sa-watch-field span{opacity:.6}
+.sa-watch-sel{flex:none;min-width:190px;text-transform:none;letter-spacing:0}
+.sa-watch-check{display:flex;gap:9px;align-items:flex-start;font-size:13px;max-width:60ch;cursor:pointer}
+.sa-watch-check input{margin-top:3px}
+.sa-watch-log{display:flex;flex-direction:column;gap:4px;font-size:12px}
+.sa-watch-logrow{display:grid;grid-template-columns:120px minmax(120px,1fr) 2fr;gap:10px}
+.sa-watch-hint{font-size:12px;opacity:.6;line-height:1.5}
+@media (max-width:640px){.sa-watch-logrow{grid-template-columns:1fr}}

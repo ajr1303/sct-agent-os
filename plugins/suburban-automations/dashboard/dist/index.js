@@ -22,7 +22,7 @@
       return fetch("/api/connectors" + path, opts).then(function (r) {
         return r.text().then(function (txt) {
           var j = {}; try { j = txt ? JSON.parse(txt) : {}; } catch (e) {}
-          if (!r.ok) throw new Error((j && j.error) || ("HTTP " + r.status));
+          if (!r.ok) throw new Error((j && (j.error || j.detail)) || ("HTTP " + r.status));
           return j;
         });
       });
@@ -66,6 +66,10 @@
           .then(function () { setWfBusy(null); loadData(); })
           .catch(function (e) { setWfBusy(null); setWfErr({ id: w.id, msg: String(e.message || e) }); });
       }
+      s = useState(null);  var sw = s[0], setSw = s[1];            // stuck-agent watch status
+      s = useState("");    var swBusy = s[0], setSwBusy = s[1];
+      s = useState(null);  var swErr = s[0], setSwErr = s[1];
+      s = useState(null);  var swPreview = s[0], setSwPreview = s[1];
       s = useState(null);  var reqBusy = s[0], setReqBusy = s[1];
       s = useState(null);  var reqErr = s[0], setReqErr = s[1];
 
@@ -100,7 +104,52 @@
           reqErr ? h("div", { className: "sa-msg sa-err" }, reqErr) : null);
       }
 
+      function loadWatch() { api("/automations/stuck-watch").then(setSw).catch(function () {}); }
+      function swCall(name, path, opts, after) {
+        setSwBusy(name); setSwErr(null);
+        api(path, opts).then(function (d) { setSwBusy(""); if (after) after(d); else setSw(d); loadData(); })
+          .catch(function (e) { setSwBusy(""); setSwErr(String(e.message || e)); });
+      }
+      function swWhen(iso) { try { return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); } catch (e) { return ""; } }
+      // Built-in: a workflow that checks every ten minutes for agents that stopped moving.
+      function watchPanel() {
+        if (!sw) return null;
+        var st = sw.settings || {}, last = sw.last, on = sw.active;
+        var blocked = !sw.team_linked ? "Link your team on the Orchestration page first."
+          : sw.read_only ? "This install only observes its Paperclip, so the watch cannot act." : null;
+        return h("div", { className: "sa-panel sa-watch" },
+          h("div", { className: "sa-panel-h" }, "STUCK-AGENT WATCH",
+            h("span", { className: "sa-watch-state" + (on ? " sa-on" : "") }, on ? "On · every 10 minutes" : "Off")),
+          h("div", { className: "sa-watch-body" },
+            h("div", { className: "sa-watch-p" }, "Checks for agents that have stopped moving and gives them a careful push: it retries a failed connection and reminds an agent about a task that has gone quiet. Each agent or task gets two tries. After that it stops, marks the task as needing you, and tells you."),
+            blocked ? h("div", { className: "sa-msg sa-err" }, blocked) : null,
+            h("div", { className: "sa-watch-acts" },
+              on ? h("button", { type: "button", className: "sa-btn", disabled: swBusy === "off", onClick: function () { swCall("off", "/automations/stuck-watch/off", { method: "POST" }); } }, "Turn off")
+                 : h("button", { type: "button", className: "sa-btn sa-primary", disabled: !!blocked || swBusy === "on", onClick: function () { swCall("on", "/automations/stuck-watch/on", { method: "POST" }); } }, swBusy === "on" ? "Turning on…" : "Turn on"),
+              h("button", { type: "button", className: "sa-btn", disabled: !!blocked || swBusy === "preview",
+                onClick: function () { setSwPreview(null); swCall("preview", "/automations/stuck-watch/run", { method: "POST", body: JSON.stringify({ dry_run: true }) }, function (d) { setSwPreview(d.result); setSw(d.status); }); } },
+                swBusy === "preview" ? "Checking…" : "Check now (changes nothing)")),
+            swErr ? h("div", { className: "sa-msg sa-err" }, swErr) : null,
+            swPreview ? h("div", { className: "sa-watch-result" }, h("b", null, "If it ran now: "), swPreview.summary) : null,
+            h("div", { className: "sa-watch-row" },
+              h("label", { className: "sa-watch-field" }, h("span", null, "Call a task stuck after"),
+                h("select", { className: "sa-input sa-watch-sel", value: String(st.idle_minutes), disabled: swBusy === "set",
+                  onChange: function (e) { swCall("set", "/automations/stuck-watch", { method: "PUT", body: JSON.stringify({ idle_minutes: Number(e.target.value) }) }); } },
+                  [30, 45, 60, 90, 120, 240].concat([st.idle_minutes]).filter(function (v, i, a) { return v && a.indexOf(v) === i; }).sort(function (a, b) { return a - b; })
+                    .map(function (m) { return h("option", { key: m, value: String(m) }, m < 120 ? m + " minutes quiet" : (m / 60) + " hours quiet"); }))),
+              sw.restart_capable ? h("label", { className: "sa-watch-check" },
+                h("input", { type: "checkbox", checked: !!st.restart_gateways, disabled: swBusy === "set",
+                  onChange: function (e) { swCall("set", "/automations/stuck-watch", { method: "PUT", body: JSON.stringify({ restart_gateways: e.target.checked }) }); } }),
+                h("span", null, "Before the second reminder, restart the agent's own machine service (" + sw.restart_capable + " machine" + (sw.restart_capable === 1 ? "" : "s") + " allow it). Never while that agent is working.")) : null),
+            last ? h("div", { className: "sa-watch-last" }, h("span", { className: "sa-muted" }, "Last check " + swWhen(last.at) + ": "), last.summary) : null,
+            (sw.log || []).length ? h("div", { className: "sa-watch-log" },
+              sw.log.slice(0, 6).map(function (l, i) { return h("div", { key: i, className: "sa-watch-logrow" },
+                h("span", { className: "sa-muted" }, swWhen(l.at)), h("span", null, l.action + " " + l.target), h("span", { className: "sa-muted" }, l.detail)); })) : null,
+            h("div", { className: "sa-watch-hint" }, "It runs as a workflow named “Agent OS: stuck-agent watch”. To be alerted by email, Telegram or Slack, open it in the builder and add your alert after the last step.")));
+      }
+
       function loadData() {
+        loadWatch();
         api("/automations/workflows").then(setWf).catch(function () { setWf(null); });
         api("/automations/executions").then(setEx).catch(function () { setEx(null); });
         loadReqs();
@@ -228,6 +277,7 @@
         up === false ? h("div", { className: "sa-note" }, "The automation engine is still starting — this can take a minute after a deploy. The status dot turns green when it's ready.") : null,
         (up && !connected) ? connectPanel() : null,
         connected ? approvals() : null,
+        connected ? watchPanel() : null,
         connected ? dashboard() : null,
         h("div", { className: "sa-foot" }, "Local automations run on your server, not through the model — use them for scheduled jobs, data moves, and glue work to save tokens.")
       );

@@ -56,7 +56,7 @@ Re-running the command updates an existing install in place, or resumes one that
 | **Agents** | Every agent on the team in one list. Open one to edit its name, title, role, manager, description and instructions, or pause it. Hermes' own Profiles page moves to Advanced as *Hermes profiles*. |
 | **Usage** | How much of your AI provider plan is used, what is left, when it resets, and whether it is on pace to run out first. MiniMax M Plan supported today. |
 | **Tasks** | Tasks delegated to agents, their status, replies and files. **Reply, reopen, mark done or cancel** from the dashboard; a reply wakes the assigned agent. Agents close their own tasks; runaway tasks are halted automatically and can be released. |
-| **Automations** | Bundled **n8n**. Workflow and run status, **turn workflows on and off** from the dashboard, one-click open, and **Waiting for your approval**: agents can build workflows but only the owner can switch one on. |
+| **Automations** | Bundled **n8n**. Workflow and run status, **turn workflows on and off** from the dashboard, one-click open, and **Waiting for your approval**: agents can build workflows but only the owner can switch one on. A built-in **stuck-agent watch** retries failed connections and reminds agents about tasks that have gone quiet, then hands them to you after two tries. |
 | **Mailboxes** | Connect email accounts (Gmail, Microsoft 365, any IMAP) and see a combined unread/preview. View-only today. Credentials encrypted at rest. |
 | **Bookings** | Connect a scheduling app (Cal.com, Calendly, Acuity, Setmore, or an iCal link) and see upcoming appointments. View-only today. |
 | **Memory** | Self-hosted Honcho long-term memory (Postgres + pgvector + deriver), wired into Hermes. |
@@ -319,7 +319,7 @@ docs/ARCHITECTURE.md        How the layer works
 
 ## Status
 
-**v0.28.** The last clean one-command install on a fresh VM was run at v0.26 (Hermes v0.23.1, n8n 2.47.5), reached through a Cloudflare Tunnel. Changes since then are tested piece by piece but a fresh end-to-end install of this version has not been rerun yet.
+**v0.29.** The last clean one-command install on a fresh VM was run at v0.26 (Hermes v0.23.1, n8n 2.47.5), reached through a Cloudflare Tunnel. Changes since then are tested piece by piece but a fresh end-to-end install of this version has not been rerun yet.
 
 Verified live:
 
@@ -335,7 +335,7 @@ Verified live:
 Known limitations:
 
 - **Not yet tested: a server reboot, and restoring a backup onto a new server.** Restore opens and checks a backup; putting one back (`--apply`) is unproven, and the team database is not reloaded automatically.
-- **Link my team, the installer changes in v0.28, team chart, task replies and the Agents page are tested against stand-ins** (a mock board, and for the model check a local database and mock gateways), not yet confirmed on a live one.
+- **Stuck-agent watch, Link my team, the installer changes in v0.28, team chart, task replies and the Agents page are tested against stand-ins** (a mock board, and for the model check a local database and mock gateways), not yet confirmed on a live one.
 - **Bookings and Mailboxes are view-only.** Agents cannot yet book appointments or send/draft email.
 - **Per-agent model choice does not apply to delegated tasks** (all Paperclip runs use the default Hermes profile).
 - **The dashboard has one shared login.** Per-person sign-in comes from Cloudflare Access in front of it; per-person roles are not built.

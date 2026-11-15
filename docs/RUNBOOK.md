@@ -461,3 +461,22 @@ If a service keeps restarting, look at it before anything else:
 Agents that run on their own machines (section 12) need the same check on each
 machine: the gateway service starts at boot, its HTTPS address still answers, and a
 test task completes.
+
+## 15. Stuck-agent watch
+
+Dashboard > Automations > **Stuck-agent watch**. Needs Automations connected and the
+team linked.
+
+1. Press **Check now (changes nothing)** to see what it would do.
+2. Press **Turn on**. It installs a workflow in n8n and runs every ten minutes.
+3. Optional alert: open the workflow *Agent OS: stuck-agent watch* in the builder and
+   add an email, Telegram or Slack step after "Add your alert here". Use
+   `{{ $json.summary }}` as the message. That step only runs when something needs you.
+4. Optional restarts: the checkbox appears once at least one agent machine was added
+   with `sudo ./scripts/agent-ssh.sh add <user>@<host>` and allows restarts.
+
+What it will not do: touch paused agents or a paused company, interrupt a task that is
+being worked on, act on work that has been idle for more than a week, or push the same
+agent or task more than twice. If the workflow's first run fails in n8n, turn the
+watch off and report it; the "Check now" button works without n8n.
+

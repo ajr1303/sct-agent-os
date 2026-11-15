@@ -2,6 +2,26 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.29.0] — 2026-11-14 — Stuck-agent watch
+
+- **A built-in automation that notices agents that have stopped moving** and gives
+  them a careful push. Turn it on from the Automations page (*Stuck-agent watch*).
+  Every ten minutes it:
+  - retries the connection of an agent whose connection check failed;
+  - reminds an agent about a task in progress that has gone quiet (45 minutes by
+    default, adjustable), or about assigned work an idle agent never started.
+- **Two tries, then it stops.** After two reminders it marks the task as needing you
+  and reports it, so nothing loops. It leaves paused agents, a paused company, tasks
+  being worked on right now and old abandoned work alone, and does at most six things
+  per pass.
+- **Optional gateway restart.** If you allow it, and only on machines you already
+  granted with `scripts/agent-ssh.sh`, it restarts the agent's gateway before the
+  second reminder. Never while that agent is working, and at most once in six hours.
+- **Check now (changes nothing)** shows what it would do before you turn it on.
+- It runs as a normal n8n workflow, *Agent OS: stuck-agent watch*, so you can add
+  your own email, Telegram or Slack alert after its last step. The checking itself
+  stays in the connectors service; the workflow holds no Paperclip key.
+
 ## [0.28.0] — 2026-11-14 — Ready for first testers
 
 **First run**

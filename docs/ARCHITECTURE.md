@@ -176,3 +176,20 @@ denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
   changes nothing; `--apply` restores onto an installed box.
 - `smoke-test.sh` checks the dashboard (`:9119`), the gateway health (`:8642/health`), Honcho, connectors, n8n and Paperclip health, and that the theme is installed.
 - Operator scripts: `set-hostnames.sh`, `paperclip-connect.sh`, `paperclip-reset-password.sh`, `install-memory-plugin.sh`, `show-versions.sh` (see the runbook).
+
+## Stuck-agent watch
+
+- Logic: `stuck_watch_run()` in `connectors/app.py`. It reads agents, live runs and
+  in-progress/queued tasks from Paperclip, and keeps what it has already tried in the
+  `stuck_watch` table (two pushes per agent or task, then escalate).
+- Schedule: an n8n workflow (*Agent OS: stuck-agent watch*) created by
+  `POST /automations/stuck-watch/on`. Every ten minutes it posts to
+  `http://connectors:8000/internal/stuck-watch/run` with a token stored in the
+  workflow. `/api/connectors/internal/` is blocked at the public proxy.
+- Actions: `POST /api/agents/{id}/lifecycle/retry`; a board comment on the task (which
+  wakes its agent); after two tries a comment plus status `blocked`, which the
+  dashboard shows under "Needs you". Optional: restart the agent's gateway over the
+  SSH access set up by `scripts/agent-ssh.sh`.
+- The response carries `needs_attention` and `summary`, which the workflow's last
+  step exposes for an alert node the owner adds.
+

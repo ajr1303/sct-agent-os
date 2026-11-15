@@ -26,6 +26,9 @@ from email.header import decode_header, make_header
 from contextlib import closing
 from urllib.parse import urlparse, quote
 import shlex
+import asyncio
+import base64
+import hmac
 import subprocess
 import threading
 
@@ -176,6 +179,20 @@ def get_db():
         con.execute("ALTER TABLE agent_models ADD COLUMN options_json TEXT")
     except sqlite3.OperationalError:
         pass   # already there
+    # Stuck-agent watch: what it has already tried on each agent or task, a short log
+    # of what it did, and its settings.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS stuck_watch (
+            kind TEXT NOT NULL, ref TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+            last_action_at TEXT, escalated INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (kind, ref)
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS stuck_watch_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT, action TEXT, target TEXT, detail TEXT
+        )
+    """)
+    con.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
     return con
 
 
@@ -1847,6 +1864,451 @@ def orchestration_link_status(_auth=Depends(require_auth)):
         pass
     return {"pending": os.path.exists(_LINK_REQ), "result": res if isinstance(res, dict) else None,
             "connected": bool(_pc_key())}
+
+
+# --- Stuck-agent watch ------------------------------------------------------------
+# Finds agents that have stopped moving and gives them a careful push:
+#   * an agent whose connection failed its check       -> ask Paperclip to retry it
+#   * a task in progress with no activity for a while  -> one nudge (a comment wakes it)
+#   * an idle agent with assigned work it never started -> one nudge on the oldest task
+# Each agent or task gets at most two pushes. After that the watch stops, marks the
+# task as needing the owner, and reports it. With the owner's opt-in it may restart the
+# gateway on an agent's own machine (only where scripts/agent-ssh.sh granted that)
+# before the second nudge.
+#
+# The schedule lives in n8n: a small workflow calls /internal/stuck-watch/run every
+# ten minutes with a token only that workflow holds. The path is blocked at the public
+# proxy. The logic and the Paperclip key stay here, so nothing secret is copied into n8n.
+
+WATCH_MAX_PUSHES = 2
+WATCH_MAX_ACTIONS_PER_RUN = 6
+WATCH_WORKFLOW_NAME = "Agent OS: stuck-agent watch"
+_watch_lock = threading.Lock()
+
+_REMOTE_RESTART = r"""
+set -u
+SVC="$1"; SCOPE="$2"
+if [ "$SCOPE" = user ]; then systemctl --user restart "$SVC"; else sudo -n systemctl restart "$SVC"; fi || { echo "ERR restart refused"; exit 14; }
+for _ in $(seq 1 24); do sleep 5
+  if [ "$SCOPE" = user ]; then systemctl --user is-active --quiet "$SVC" && { echo "OK"; exit 0; }
+  else systemctl is-active --quiet "$SVC" && { echo "OK"; exit 0; }; fi
+done
+echo "ERR the gateway did not come back"; exit 20
+"""
+
+
+def _kv_get(k, default=None):
+    with closing(get_db()) as con:
+        row = con.execute("SELECT v FROM kv WHERE k = ?", (k,)).fetchone()
+    return row[0] if row else default
+
+
+def _kv_set(k, v):
+    with closing(get_db()) as con:
+        con.execute("INSERT INTO kv(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", (k, v))
+        con.commit()
+
+
+def _watch_settings():
+    try:
+        d = json.loads(_kv_get("stuck_watch_settings") or "{}")
+    except Exception:
+        d = {}
+    idle = d.get("idle_minutes")
+    return {"idle_minutes": idle if isinstance(idle, int) and 15 <= idle <= 720 else 45,
+            "restart_gateways": bool(d.get("restart_gateways"))}
+
+
+def _watch_token():
+    tok = _kv_get("stuck_watch_token")
+    if not tok:
+        tok = base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip("=")
+        _kv_set("stuck_watch_token", tok)
+    return tok
+
+
+def _watch_log(con, action, target, detail=""):
+    con.execute("INSERT INTO stuck_watch_log(at, action, target, detail) VALUES(?,?,?,?)",
+                (_now().isoformat(), action, str(target)[:160], str(detail)[:400]))
+    con.execute("DELETE FROM stuck_watch_log WHERE id NOT IN (SELECT id FROM stuck_watch_log ORDER BY id DESC LIMIT 200)")
+
+
+def _ts(v):
+    """Paperclip timestamp -> aware datetime, or None."""
+    try:
+        d = datetime.datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=datetime.timezone.utc)
+    except Exception:
+        return None
+
+
+def _list(d, *names):
+    if isinstance(d, list):
+        return d
+    if isinstance(d, dict):
+        for n in names + ("items", "rows", "data"):
+            if isinstance(d.get(n), list):
+                return d[n]
+    return []
+
+
+def _issue_last_activity(issue):
+    """Newest sign of life on a task: its own timestamp, its latest comment, its latest run."""
+    best = _ts(issue.get("updatedAt")) or _ts(issue.get("createdAt"))
+    iid = str(issue.get("id"))
+    try:
+        for c in _list(_pc_get("/api/issues/" + iid + "/recent-comments"), "comments")[:5]:
+            t = _ts(c.get("createdAt")) if isinstance(c, dict) else None
+            if t and (best is None or t > best):
+                best = t
+    except Exception:
+        pass
+    try:
+        for r in _list(_pc_get("/api/issues/" + iid + "/runs?view=recent"), "runs")[:3]:
+            if isinstance(r, dict):
+                for f in ("finishedAt", "updatedAt", "startedAt", "createdAt"):
+                    t = _ts(r.get(f))
+                    if t and (best is None or t > best):
+                        best = t
+    except Exception:
+        pass
+    return best
+
+
+def _restart_gateway(entry):
+    cmd = ["ssh", "-i", os.path.join(AGENT_SSH_DIR, "id_ed25519"), "-o", "BatchMode=yes",
+           "-o", "StrictHostKeyChecking=yes", "-o", "UserKnownHostsFile=" + os.path.join(AGENT_SSH_DIR, "known_hosts"),
+           "-o", "ConnectTimeout=15", "-o", "IdentitiesOnly=yes", str(entry.get("target")),
+           "bash -s -- " + " ".join(shlex.quote(x) for x in (entry.get("service") or "hermes-gateway.service",
+                                                             entry.get("scope") or "system"))]
+    try:
+        r = subprocess.run(cmd, input=_REMOTE_RESTART, capture_output=True, text=True, timeout=200)
+        return r.returncode == 0 and (r.stdout or "").strip().endswith("OK")
+    except Exception:
+        return False
+
+
+def stuck_watch_run(dry_run=False):
+    """One pass. Returns what it found and did, in plain words, for the dashboard and n8n."""
+    out = {"at": _now().isoformat(), "dry_run": bool(dry_run), "checked_agents": 0, "checked_tasks": 0,
+           "retried": [], "nudged": [], "restarted": [], "escalated": [], "skipped": None,
+           "needs_attention": False, "summary": ""}
+
+    def done(skipped=None):
+        out["skipped"] = skipped
+        parts = []
+        if out["retried"]:
+            parts.append("Retried the connection for: " + ", ".join(out["retried"]) + ".")
+        if out["restarted"]:
+            parts.append("Restarted the gateway for: " + ", ".join(out["restarted"]) + ".")
+        if out["nudged"]:
+            parts.append("Nudged %d stuck task%s: %s." % (len(out["nudged"]), "" if len(out["nudged"]) == 1 else "s",
+                         "; ".join("%s (%s)" % (n["key"], n["agent"]) for n in out["nudged"])))
+        if out["escalated"]:
+            parts.append("NEEDS YOU: " + "; ".join(e["message"] for e in out["escalated"]))
+        out["needs_attention"] = bool(out["escalated"])
+        out["summary"] = " ".join(parts) or (skipped or "Everything is moving. Nothing needed.")
+        if not dry_run:
+            try:
+                _kv_set("stuck_watch_last", json.dumps(out))
+            except Exception:
+                pass
+        return out
+
+    if not _pc_up():
+        return done("Team management is not running, so there was nothing to check.")
+    if not _pc_key():
+        return done("The team is not linked yet, so there was nothing to check.")
+    if _pc_mode() == "external":
+        return done("This install only observes its Paperclip, so the watch makes no changes.")
+    try:
+        cid = _pc_company_id()
+        if not cid:
+            return done("No company found in Paperclip yet.")
+        try:
+            co = _pc_get("/api/companies/" + str(cid))
+            if isinstance(co, dict) and str(co.get("status")).lower() == "paused":
+                return done("The company is paused, so agents are not expected to work.")
+        except Exception:
+            pass
+        agents = [a for a in _list(_pc_get("/api/companies/" + str(cid) + "/agents"), "agents") if isinstance(a, dict)]
+        live = [r for r in _list(_pc_get("/api/companies/" + str(cid) + "/live-runs"), "runs", "liveRuns") if isinstance(r, dict)]
+    except Exception as e:
+        return done("Could not reach Paperclip: " + str(getattr(e, "detail", e))[:120])
+
+    s = _watch_settings()
+    idle = datetime.timedelta(minutes=s["idle_minutes"])
+    now = _now()
+    live_issue = {str(r.get("issueId")) for r in live if r.get("issueId")}
+    live_agent = {str(r.get("agentId")) for r in live if r.get("agentId")}
+    by_id = {str(a.get("id")): a for a in agents}
+    usable = {aid for aid, a in by_id.items() if str(a.get("status")).lower() not in ("paused", "terminated", "pending_approval")}
+    out["checked_agents"] = len(usable)
+    budget = WATCH_MAX_ACTIONS_PER_RUN
+
+    with closing(get_db()) as con:
+        con.execute("DELETE FROM stuck_watch WHERE last_action_at < ?", ((now - datetime.timedelta(days=7)).isoformat(),))
+
+        def state(kind, ref):
+            row = con.execute("SELECT attempts, last_action_at, escalated FROM stuck_watch WHERE kind=? AND ref=?", (kind, ref)).fetchone()
+            return {"attempts": row[0], "last": _ts(row[1]), "escalated": bool(row[2])} if row else {"attempts": 0, "last": None, "escalated": False}
+
+        def bump(kind, ref, escalated=False):
+            con.execute("INSERT INTO stuck_watch(kind, ref, attempts, last_action_at, escalated) VALUES(?,?,1,?,?) "
+                        "ON CONFLICT(kind, ref) DO UPDATE SET attempts = attempts + 1, last_action_at = excluded.last_action_at, "
+                        "escalated = MAX(escalated, excluded.escalated)", (kind, ref, now.isoformat(), 1 if escalated else 0))
+
+        # 1. Agents whose connection check failed.
+        for aid in sorted(usable):
+            a = by_id[aid]
+            name = a.get("name") or "agent"
+            if not a.get("lifecycleError") or str(a.get("lifecycleState") or "").lower() == "ready":
+                con.execute("DELETE FROM stuck_watch WHERE kind='agent' AND ref=?", (aid,))
+                continue
+            st = state("agent", aid)
+            if st["escalated"]:
+                continue
+            if st["attempts"] >= WATCH_MAX_PUSHES:
+                out["escalated"].append({"agent": name, "message": "%s cannot connect (retried %d times). Open the agent on the Agents page." % (name, st["attempts"])})
+                if not dry_run:
+                    bump("agent", aid, escalated=True); _watch_log(con, "escalated", name, "connection still failing")
+                continue
+            if budget <= 0:
+                continue
+            budget -= 1
+            out["retried"].append(name)
+            if not dry_run:
+                try:
+                    _pc_send("POST", "/api/agents/" + _safe_id(aid) + "/lifecycle/retry", {}, what="retry the agent")
+                except Exception:
+                    pass
+                bump("agent", aid); _watch_log(con, "retried", name, "connection check")
+
+        # 2. Tasks that stopped moving. Oldest activity first; one per agent per pass.
+        def rows(q):
+            try:
+                return [i for i in _list(_pc_get("/api/companies/" + str(cid) + "/issues" + q), "issues") if isinstance(i, dict)]
+            except Exception:
+                return []
+        working = rows("?status=in_progress&sortField=updated&sortDir=asc&limit=60")
+        queued = rows("?status=todo&sortField=updated&sortDir=asc&limit=60")
+        busy_agents = {str(i.get("assigneeAgentId")) for i in working if i.get("assigneeAgentId")} | live_agent
+        candidates, taken = [], set()
+        for i in working:
+            aid = str(i.get("assigneeAgentId") or "")
+            if aid in usable and aid not in taken and str(i.get("id")) not in live_issue:
+                taken.add(aid); candidates.append((i, "has had no activity"))
+        for i in queued:   # assigned, never started, and the agent is doing nothing else
+            aid = str(i.get("assigneeAgentId") or "")
+            if aid in usable and aid not in taken and aid not in busy_agents:
+                taken.add(aid); candidates.append((i, "was assigned but never started"))
+        out["checked_tasks"] = len(working) + len(queued)
+        for iid in live_issue:   # an agent working on it again starts the count over
+            con.execute("DELETE FROM stuck_watch WHERE kind='task' AND ref=?", (iid,))
+
+        for issue, why in candidates:
+            iid = str(issue.get("id"))
+            last = _ts(issue.get("updatedAt")) or _ts(issue.get("createdAt"))
+            if last is None or now - last < idle:
+                continue
+            last = _issue_last_activity(issue) or last   # look closer only at likely ones
+            if now - last < idle:
+                continue
+            # Old, abandoned work is a backlog to tidy, not an agent that just got stuck.
+            if now - last > datetime.timedelta(days=3 if issue.get("status") == "todo" else 7):
+                continue
+            a = by_id.get(str(issue.get("assigneeAgentId")), {})
+            name = a.get("name") or "agent"
+            key = issue.get("identifier") or iid[:8]
+            mins = int((now - last).total_seconds() // 60)
+            st = state("task", iid)
+            if st["last"] and now - st["last"] < idle:
+                continue   # pushed recently; give it time
+            if st["attempts"] >= WATCH_MAX_PUSHES:
+                msg = "%s (%s, %s) %s after %d nudges." % (key, str(issue.get("title") or "")[:70], name, why, st["attempts"])
+                out["escalated"].append({"key": key, "agent": name, "message": msg})
+                if not dry_run:
+                    try:
+                        _pc_send("POST", "/api/issues/" + _safe_id(iid) + "/comments",
+                                 {"body": "Automatic check: this task %s, and two reminders did not get it moving. "
+                                          "It is now waiting on the owner." % why}, what="comment")
+                        _pc_send("PATCH", "/api/issues/" + _safe_id(iid), {"status": "blocked"}, what="mark the task")
+                    except Exception:
+                        pass
+                    bump("task", iid, escalated=True); _watch_log(con, "escalated", key, msg)
+                continue
+            if budget <= 0:
+                continue
+            budget -= 1
+            # Second push: if allowed, restart that agent's gateway first.
+            if st["attempts"] == 1 and s["restart_gateways"] and str(a.get("id")) not in live_agent:
+                host, entry = _agent_ssh(a.get("adapterConfig") or {})
+                recent = state("restart", str(a.get("id")))
+                if entry and entry.get("can_restart") and not (recent["last"] and now - recent["last"] < datetime.timedelta(hours=6)):
+                    out["restarted"].append(name)
+                    if not dry_run:
+                        ok = _restart_gateway(entry)
+                        bump("restart", str(a.get("id"))); _watch_log(con, "restarted" if ok else "restart failed", name, host)
+            out["nudged"].append({"key": key, "agent": name, "idle_minutes": mins, "why": why})
+            if not dry_run:
+                try:
+                    _pc_send("POST", "/api/issues/" + _safe_id(iid) + "/comments",
+                             {"body": "Automatic check: this task %s for %d minutes. Please pick it up and continue. "
+                                      "If something is blocking you, say what it is and who can unblock it." % (why, mins)},
+                             what="nudge the task")
+                except Exception:
+                    pass
+                bump("task", iid); _watch_log(con, "nudged", key, "%s, %s, idle %d min" % (name, why, mins))
+        if not dry_run:
+            con.commit()
+    return done()
+
+
+@app.post("/internal/stuck-watch/run")
+async def stuck_watch_internal(request: Request):
+    """Called by the n8n workflow. Token-checked, and never reachable through the public proxy."""
+    got = request.headers.get("x-watch-token") or ""
+    if not hmac.compare_digest(got.encode(), _watch_token().encode()):
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    if not _watch_lock.acquire(blocking=False):
+        return {"skipped": "A check is already running.", "needs_attention": False, "summary": "A check is already running."}
+    try:
+        return await asyncio.to_thread(stuck_watch_run, False)
+    finally:
+        _watch_lock.release()
+
+
+def _watch_workflow_body():
+    return {
+        "name": WATCH_WORKFLOW_NAME,
+        "settings": {"executionOrder": "v1"},
+        "nodes": [
+            {"id": "a1f0c3d2-0001-4a00-9000-000000000001", "name": "Every 10 minutes", "type": "n8n-nodes-base.scheduleTrigger",
+             "typeVersion": 1.2, "position": [0, 0],
+             "parameters": {"rule": {"interval": [{"field": "minutes", "minutesInterval": 10}]}}},
+            {"id": "a1f0c3d2-0002-4a00-9000-000000000002", "name": "Check for stuck agents", "type": "n8n-nodes-base.httpRequest",
+             "typeVersion": 4.2, "position": [240, 0],
+             "parameters": {"method": "POST", "url": "http://connectors:8000/internal/stuck-watch/run",
+                            "sendHeaders": True,
+                            "headerParameters": {"parameters": [{"name": "X-Watch-Token", "value": _watch_token()}]},
+                            "options": {"timeout": 240000}}},
+            {"id": "a1f0c3d2-0003-4a00-9000-000000000003", "name": "Anything need the owner?", "type": "n8n-nodes-base.if",
+             "typeVersion": 2.2, "position": [480, 0],
+             "parameters": {"conditions": {"options": {"caseSensitive": True, "leftValue": "", "typeValidation": "loose", "version": 2},
+                                           "conditions": [{"id": "a1f0c3d2-0005-4a00-9000-000000000005",
+                                                           "leftValue": "={{ $json.needs_attention }}", "rightValue": "",
+                                                           "operator": {"type": "boolean", "operation": "true", "singleValue": True}}],
+                                           "combinator": "and"},
+                            "options": {"looseTypeValidation": True}}},
+            {"id": "a1f0c3d2-0004-4a00-9000-000000000004", "name": "Add your alert here (email, Telegram, Slack)",
+             "type": "n8n-nodes-base.noOp", "typeVersion": 1, "position": [720, -80], "parameters": {},
+             "notes": "Runs only when something needs you. Add an email, Telegram or Slack step after this one and use {{ $json.summary }} as the message.",
+             "notesInFlow": True},
+        ],
+        "connections": {
+            "Every 10 minutes": {"main": [[{"node": "Check for stuck agents", "type": "main", "index": 0}]]},
+            "Check for stuck agents": {"main": [[{"node": "Anything need the owner?", "type": "main", "index": 0}]]},
+            "Anything need the owner?": {"main": [[{"node": "Add your alert here (email, Telegram, Slack)", "type": "main", "index": 0}], []]},
+        },
+    }
+
+
+def _watch_workflow():
+    """The installed workflow as n8n reports it, or None (never installed, or deleted in n8n)."""
+    wid = _kv_get("stuck_watch_workflow_id")
+    if not wid or not _n8n_conn():
+        return None
+    try:
+        w = _n8n_api("/api/v1/workflows/" + wid)
+        return w if isinstance(w, dict) and w.get("id") and not w.get("isArchived") else None
+    except Exception:
+        return None
+
+
+def _watch_status():
+    w = _watch_workflow()
+    try:
+        last = json.loads(_kv_get("stuck_watch_last") or "null")
+    except Exception:
+        last = None
+    with closing(get_db()) as con:
+        log = [{"at": r[0], "action": r[1], "target": r[2], "detail": r[3]} for r in
+               con.execute("SELECT at, action, target, detail FROM stuck_watch_log ORDER BY id DESC LIMIT 12").fetchall()]
+    hosts = _ssh_hosts()
+    return {"n8n_connected": bool(_n8n_conn()), "team_linked": bool(_pc_key()), "read_only": _pc_mode() == "external",
+            "installed": bool(w), "active": bool(w and w.get("active")), "workflow_id": w.get("id") if w else None,
+            "settings": _watch_settings(), "restart_capable": sum(1 for h in hosts.values() if isinstance(h, dict) and h.get("can_restart")),
+            "last": last, "log": log}
+
+
+class WatchSettings(BaseModel):
+    idle_minutes: int | None = None
+    restart_gateways: bool | None = None
+
+
+class WatchRun(BaseModel):
+    dry_run: bool = True
+
+
+@app.get("/automations/stuck-watch")
+def stuck_watch_get(_auth=Depends(require_auth)):
+    return _watch_status()
+
+
+@app.put("/automations/stuck-watch")
+def stuck_watch_settings(b: WatchSettings, _auth=Depends(require_auth)):
+    s = _watch_settings()
+    if b.idle_minutes is not None:
+        if not 15 <= int(b.idle_minutes) <= 720:
+            raise HTTPException(status_code=400, detail="Choose between 15 minutes and 12 hours.")
+        s["idle_minutes"] = int(b.idle_minutes)
+    if b.restart_gateways is not None:
+        s["restart_gateways"] = bool(b.restart_gateways)
+    _kv_set("stuck_watch_settings", json.dumps(s))
+    return _watch_status()
+
+
+@app.post("/automations/stuck-watch/on")
+def stuck_watch_on(_auth=Depends(require_auth)):
+    """Owner action: install the workflow in n8n if it is not there, and switch it on."""
+    if not _n8n_conn():
+        raise HTTPException(status_code=400, detail="Connect Automations first (the n8n key at the top of this page).")
+    if not _pc_key():
+        raise HTTPException(status_code=400, detail="Link your team first, on the Orchestration page.")
+    _task_writable()
+    w = _watch_workflow()
+    try:
+        if not w:
+            w = _n8n_send("POST", "/api/v1/workflows", _watch_workflow_body())
+            if not w.get("id"):
+                raise ToolError("n8n did not return the new workflow.")
+            _kv_set("stuck_watch_workflow_id", str(w["id"]))
+    except ToolError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    _set_workflow_active(str(w["id"]), True)
+    return _watch_status()
+
+
+@app.post("/automations/stuck-watch/off")
+def stuck_watch_off(_auth=Depends(require_auth)):
+    w = _watch_workflow()
+    if w and w.get("active"):
+        _set_workflow_active(str(w["id"]), False)
+    return _watch_status()
+
+
+@app.post("/automations/stuck-watch/run")
+def stuck_watch_run_now(b: WatchRun, _auth=Depends(require_auth)):
+    """'Check now' from the dashboard. dry_run reports what it would do and changes nothing."""
+    if not b.dry_run:
+        _task_writable()
+    if not _watch_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="A check is already running. Try again in a moment.")
+    try:
+        res = stuck_watch_run(dry_run=bool(b.dry_run))
+    finally:
+        _watch_lock.release()
+    return {"result": res, "status": _watch_status()}
 
 
 # --- Backups -------------------------------------------------------------------
