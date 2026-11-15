@@ -2,6 +2,13 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.32.1] — 2026-11-15 — Recovery codes and keys were invisible
+
+- On the Security page the recovery codes and the manual setup key were drawn in dark
+  text on a dark box, so they looked empty. The dashboard theme colours that kind of
+  text itself. Code-style text on every Agent OS page (Security, Backups, Website, the
+  update banner) now takes the colour of the text around it, whatever the theme.
+
 ## [0.32.0] — 2026-11-15 — Two-step sign-in with an authenticator app
 
 - **Security** page (under Connections): turn on a six-digit code from an

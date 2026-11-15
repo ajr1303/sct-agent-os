@@ -40,3 +40,6 @@
 .ss-facts b{font-size:16px;text-transform:none;letter-spacing:0}
 .ss-warnc{color:var(--color-warning,#ffbd38)}
 .ss-ask{display:flex;flex-direction:column;gap:11px;border-top:1px solid var(--color-border,rgba(255,255,255,.1));padding-top:13px}
+.ss-codes code,.ss-secret{color:inherit!important;-webkit-text-fill-color:currentColor!important}
+.ss-in,.ss-in::placeholder{-webkit-text-fill-color:currentColor}
+.ss-in::placeholder{opacity:.4}

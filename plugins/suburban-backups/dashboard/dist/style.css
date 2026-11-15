@@ -48,3 +48,4 @@
 .sbk-steps code,.sbk-p code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;background:rgba(0,0,0,.3);padding:1px 5px}
 .sbk-more{font-size:13px}
 .sbk-more summary{cursor:pointer;color:var(--color-primary,#25c9ee);margin-bottom:10px}
+.sbk-steps code,.sbk-p code,.sbk-code{color:inherit!important;-webkit-text-fill-color:currentColor!important}

@@ -23,6 +23,19 @@ select option:disabled {
   color: #6b7c83;
 }
 
+/* Code-style text (keys, commands, recovery codes) on our own pages. The dashboard
+   theme gives <code> its own dark text colour, which is unreadable on our dark
+   cards. Take the colour of the surrounding text instead, whatever the theme is.
+   Scoped to our pages' class prefixes so the dashboard's own code blocks are left alone. */
+[class^="ss-"] code, [class^="sbk-"] code, [class^="sw-"] code, [class^="sc-"] code, [class^="so-"] code,
+[class^="sg-"] code, [class^="st-"] code, [class^="sa-"] code, [class^="su-"] code, [class^="sm-"] code,
+[class^="sb-"] code, [class^="ss-"] pre, [class^="sbk-"] pre, [class^="sw-"] pre, [class^="so-"] pre,
+code[class^="ss-"], code[class^="sbk-"], code[class^="sw-"], code[class^="sc-"], code[class^="so-"],
+pre[class^="ss-"], pre[class^="sbk-"], pre[class^="sw-"], pre[class^="so-"] {
+  color: inherit !important;
+  -webkit-text-fill-color: currentColor !important;
+}
+
 /* ---- Sidebar: fixed grouped order (arranged by nav.js) ---- */
 /* Hide the stock list until nav.js has arranged it, so it never flashes in the
    wrong order. If the script fails, the animation reveals it anyway. */
