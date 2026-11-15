@@ -2,6 +2,18 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.30.0] — 2026-11-15 — Appointments and website visitors on the Overview
+
+- **Appointments today** tile on the Overview, with the count for the next 7 days. It
+  reads the calendars already connected under Bookings and appears once one is.
+- **Website** connection (under Connections): visitor numbers from Google Analytics.
+  Paste a read-only Google service-account key and the property number; the page
+  checks it with Google before saving. Shows visitors and visits for the last 7 full
+  days against the week before, the most viewed pages, and where visits came from.
+- **Website visitors, 7 days** tile on the Overview once the Website connection is set.
+- The key is stored encrypted, never returned, and only ever sent to Google. Numbers
+  are cached for 30 minutes.
+
 ## [0.29.2] — 2026-11-15 — Active automations on the Overview
 
 - The Overview has an **Active automations** tile: how many workflows are switched on,

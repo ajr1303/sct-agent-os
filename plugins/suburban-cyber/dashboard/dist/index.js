@@ -65,6 +65,8 @@
       var sz = useState(""), bizName = sz[0], setBizName = sz[1];
       var sa = useState(null), autos = sa[0], setAutos = sa[1];      // {count, active} once Automations is connected
       var sw = useState(null), watch = sw[0], setWatch = sw[1];
+      var sk2 = useState(null), bookWeek = sk2[0], setBookWeek = sk2[1];   // appointment start times, next 7 days
+      var sg = useState(null), site = sg[0], setSite = sg[1];              // website visitors (Google Analytics)
       var sg = useState(null), upd = sg[0], setUpd = sg[1];
       var sh = useState(0), updBump = sh[0], setUpdBump = sh[1];
 
@@ -77,6 +79,10 @@
           try {
             fetch("/api/connectors/usage", { credentials: "same-origin" }).then(function (r) { return r.ok ? r.json() : null; })
               .then(function (v) { if (v) setPlanUse(v); }).catch(function () {});
+            fetch("/api/connectors/bookings/week", { credentials: "same-origin" }).then(function (r) { return r.ok ? r.json() : null; })
+              .then(function (v) { if (v && v.account_count > 0) setBookWeek(v); }).catch(function () {});
+            fetch("/api/connectors/website", { credentials: "same-origin" }).then(function (r) { return r.ok ? r.json() : null; })
+              .then(function (v) { if (v && v.connected && v.stats) setSite(v.stats); }).catch(function () {});
             fetch("/api/connectors/automations/workflows", { credentials: "same-origin" }).then(function (r) { return r.ok ? r.json() : null; })
               .then(function (v) { if (v && typeof v.active === "number") setAutos(v); }).catch(function () {});
             fetch("/api/connectors/automations/stuck-watch", { credentials: "same-origin" }).then(function (r) { return r.ok ? r.json() : null; })
@@ -156,6 +162,23 @@
         return null;
       }
       var work = useManaged && pcOv.work ? pcOv.work : null;
+      // Appointments: "today" is the viewer's own calendar day.
+      function bookTile() {
+        if (!bookWeek) return null;
+        var now = new Date(), today = 0, starts = bookWeek.starts || [];
+        for (var i = 0; i < starts.length; i++) {
+          var d = new Date(starts[i]);
+          if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) today++;
+        }
+        var note = starts.length + " in the next 7 days" + (bookWeek.failed ? " · one calendar could not be read" : "");
+        return Stat("Appointments today", String(today), note, today > 0);
+      }
+      function siteTile() {
+        if (!site) return null;
+        var c = site.visitors_change;
+        var note = c == null ? "No earlier week to compare with" : c === 0 ? "Same as the week before" : (c > 0 ? "Up " : "Down ") + Math.abs(c) + "% on the week before";
+        return Stat("Website visitors, 7 days", fmtNum(site.visitors || 0), note);
+      }
       function planTile() {
         var ps = (planUse && planUse.providers) || [];
         for (var i = 0; i < ps.length; i++) {
@@ -201,6 +224,8 @@
             (work.tasks_open != null ? work.tasks_open : "—") + " open in total") : null,
           autos ? Stat("Active automations", String(autos.active),
             autos.count + " workflow" + (autos.count === 1 ? "" : "s") + " in total" + (watch && watch.active ? " · stuck-agent watch on" : ""), autos.active > 0) : null,
+          bookTile(),
+          siteTile(),
           planTile(),
           Stat("Chat sessions, 14 days", analytics ? String(tot.total_sessions || 0) : "—", useManaged ? "On this server only" : "Conversations and automations"),
           Stat("Tokens, 14 days", analytics ? fmtNum(tokens) : "—", useManaged ? "This server only · input + output" : "Input + output"),

@@ -7,7 +7,7 @@ Suburban Cyber Agent OS is a **layer**, not a fork. The upstream pieces run unmo
 - **n8n** (pinned by digest, `automation` profile) — bundled workflow automation.
 - **Honcho** + **Postgres/pgvector** (prebuilt from a pinned commit, `memory` profile) — long-term memory.
 
-Suburban Cyber adds: a dashboard **theme** and **seven dashboard plugins** dropped into the Hermes data dir (`/opt/data` ← `./data/hermes`); an nginx **proxy** that fronts the dashboard and injects branding, the links config and the sidebar script; a set of **chat tools** (an MCP endpoint in connectors) plus a routing **skill**; a **connectors** service (FastAPI, Fernet-encrypted SQLite) that bridges email/bookings/n8n/Paperclip; a **gateway-tls** terminator so Paperclip reaches the Hermes runs API over HTTPS (with a per-task run fast-stop via nginx `auth_request`); and an optional **cloudflared** tunnel. Nothing patches Hermes' own code.
+Suburban Cyber adds: a dashboard **theme** and **eleven dashboard plugins** dropped into the Hermes data dir (`/opt/data` ← `./data/hermes`); an nginx **proxy** that fronts the dashboard and injects branding, the links config and the sidebar script; a set of **chat tools** (an MCP endpoint in connectors) plus a routing **skill**; a **connectors** service (FastAPI, Fernet-encrypted SQLite) that bridges email/bookings/n8n/Paperclip; a **gateway-tls** terminator so Paperclip reaches the Hermes runs API over HTTPS (with a per-task run fast-stop via nginx `auth_request`); and an optional **cloudflared** tunnel. Nothing patches Hermes' own code.
 
 ```
                          Internet (LLM, GitHub, Docker Hub, Cloudflare)
@@ -192,4 +192,17 @@ denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
   SSH access set up by `scripts/agent-ssh.sh`.
 - The response carries `needs_attention` and `summary`, which the workflow's last
   step exposes for an alert node the owner adds.
+
+## Overview tiles from connections
+
+- **Appointments today:** `GET /bookings/week` returns the start time of every
+  appointment in the next 7 days across connected calendars (cached 5 minutes); the
+  browser counts the ones on the viewer's own calendar day.
+- **Website visitors:** `GET /website` (plugin `suburban-website`, tab `/website`).
+  The connectors service signs a short-lived token request with the stored Google
+  service-account key and calls the Google Analytics Data API `runReport` for the
+  property: totals for the last 7 full days and the 7 before, top pages and channels.
+  Cached 30 minutes. Token and API hosts are fixed in code; nothing in the pasted key
+  can redirect a request.
+- Each tile is shown only when its connection exists, so the row adapts per business.
 

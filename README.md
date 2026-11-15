@@ -2,7 +2,7 @@
 
 A branded, self-hosted **agent operating system** from Suburban Cyber Technologies: a thin, maintainable layer on top of the open-source [Hermes Agent](https://github.com/NousResearch/hermes-agent) (MIT). It turns a bare Linux box into a running AI-agent platform with a single command: an isolated agent runtime, a branded dashboard, a chat assistant that delegates work to a team of agents, bundled automations, and long-term memory.
 
-> **What this is:** an installer, a dashboard theme, ten dashboard plugins, a small connectors service, and the scripts to run it. It does **not** fork anything. [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Paperclip](https://github.com/paperclipai/paperclip), [n8n](https://n8n.io) and [Honcho](https://github.com/plastic-labs/honcho) run unmodified at pinned versions; everything Suburban Cyber adds lives in `plugins/`, `connectors/`, `brand/`, `skills/`, `scripts/` and `templates/`. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+> **What this is:** an installer, a dashboard theme, eleven dashboard plugins, a small connectors service, and the scripts to run it. It does **not** fork anything. [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Paperclip](https://github.com/paperclipai/paperclip), [n8n](https://n8n.io) and [Honcho](https://github.com/plastic-labs/honcho) run unmodified at pinned versions; everything Suburban Cyber adds lives in `plugins/`, `connectors/`, `brand/`, `skills/`, `scripts/` and `templates/`. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ---
 
@@ -50,7 +50,7 @@ Re-running the command updates an existing install in place, or resumes one that
 | Area | Detail |
 |---|---|
 | **Agent runtime** | One isolated Hermes instance in Docker (pinned to a tested version). Dashboard on `9119`, agent API on `127.0.0.1:8642`. |
-| **Dashboard** | Suburban Cyber branding, favicon and theme. A fixed, grouped sidebar: Overview, Chat · *Your team*: Tasks, Agents, Orchestration, Automations, Usage · *Connections*: Bookings, Mailboxes, Backups · *Advanced* (operator tabs, collapsed). |
+| **Dashboard** | Suburban Cyber branding, favicon and theme. A fixed, grouped sidebar: Overview, Chat · *Your team*: Tasks, Agents, Orchestration, Automations, Usage · *Connections*: Bookings, Mailboxes, Website, Backups · *Advanced* (operator tabs, collapsed). |
 | **Chat** | A clean bubble chat in place of the raw terminal. The chat agent acts as chief of staff: it answers quick questions, builds an automation for repeatable work, hands judgment work to the right agent, or asks the CEO agent for a hiring review. |
 | **Orchestration** | Bundled **Paperclip** control plane. Create an agent from nine starter **templates** (or blank), pause/resume, edit, delete, or **invite** an external agent with a paste-ready prompt. A live **team chart** shows who reports to whom and each agent's status. An **About your business** profile is shared with every agent. |
 | **Agents** | Every agent on the team in one list. Open one to edit its name, title, role, manager, description and instructions, or pause it. Hermes' own Profiles page moves to Advanced as *Hermes profiles*. |
@@ -289,6 +289,7 @@ plugins/
   suburban-agents/          Every agent on the team: edit, pause, model
   suburban-usage/           AI plan usage and what is left
   suburban-backups/         Backups: recovery kit, storage, status
+  suburban-website/         Website visitors from Google Analytics
   suburban-tasks/           Delegated tasks, halted-task release
   suburban-automations/     n8n status, workflow approvals
   suburban-mail/            Mailboxes
@@ -319,7 +320,7 @@ docs/ARCHITECTURE.md        How the layer works
 
 ## Status
 
-**v0.29.** The last clean one-command install on a fresh VM was run at v0.26 (Hermes v0.23.1, n8n 2.47.5), reached through a Cloudflare Tunnel. Changes since then are tested piece by piece but a fresh end-to-end install of this version has not been rerun yet.
+**v0.30.** The last clean one-command install on a fresh VM was run at v0.26 (Hermes v0.23.1, n8n 2.47.5), reached through a Cloudflare Tunnel. Changes since then are tested piece by piece but a fresh end-to-end install of this version has not been rerun yet.
 
 Verified live:
 
@@ -335,7 +336,7 @@ Verified live:
 Known limitations:
 
 - **Not yet tested: a server reboot, and restoring a backup onto a new server.** Restore opens and checks a backup; putting one back (`--apply`) is unproven, and the team database is not reloaded automatically.
-- **Stuck-agent watch, Link my team, the installer changes in v0.28, team chart, task replies and the Agents page are tested against stand-ins** (a mock board, and for the model check a local database and mock gateways), not yet confirmed on a live one.
+- **The Website (Google Analytics) connection, the Appointments tile, stuck-agent watch, Link my team, the installer changes in v0.28, team chart, task replies and the Agents page are tested against stand-ins** (a mock board, and for the model check a local database and mock gateways), not yet confirmed on a live one.
 - **Bookings and Mailboxes are view-only.** Agents cannot yet book appointments or send/draft email.
 - **Per-agent model choice does not apply to delegated tasks** (all Paperclip runs use the default Hermes profile).
 - **The dashboard has one shared login.** Per-person sign-in comes from Cloudflare Access in front of it; per-person roles are not built.
@@ -366,6 +367,7 @@ Agent OS has no telemetry of its own and sends nothing to its authors. Traffic t
 - **Cloudflare**, if you use a tunnel: your dashboard traffic passes through your Cloudflare account.
 - **Your backup storage**, if you connect one: encrypted backup files.
 - **Mail and booking providers** you connect, to read mailboxes and appointments.
+- **Google Analytics**, if you connect it: read-only requests for your own site's visitor numbers.
 - **Google Fonts:** the dashboard theme loads fonts from Google in each viewer's browser.
 - The bundled upstream projects (Hermes, n8n, Paperclip) may make their own calls, such as n8n's version check. n8n diagnostics are switched off here; we have not audited everything upstream sends.
 

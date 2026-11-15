@@ -29,6 +29,7 @@ import shlex
 import asyncio
 import base64
 import hmac
+import time
 import subprocess
 import threading
 
@@ -193,6 +194,13 @@ def get_db():
         )
     """)
     con.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
+    # Website analytics connection (Google Analytics): one per install, key encrypted.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS website_analytics (
+            id INTEGER PRIMARY KEY CHECK (id = 1), property_id TEXT NOT NULL, secret BLOB NOT NULL,
+            account TEXT, updated_at TEXT
+        )
+    """)
     return con
 
 
@@ -733,6 +741,33 @@ def bookings_summary(_auth=Depends(require_auth)):
         accounts.append(acc)
     combined.sort(key=lambda x: x["start"])
     return {"account_count": len(accounts), "accounts": accounts, "next": combined[:8]}
+
+
+_BOOKING_WEEK = {"at": 0.0, "data": None}
+
+
+@app.get("/bookings/week")
+def bookings_week(_auth=Depends(require_auth)):
+    """Start times of every appointment in the next 7 days, for the Overview card. The
+    browser decides which ones are "today" in the viewer's own timezone. Cached briefly."""
+    if _BOOKING_WEEK["data"] is not None and time.time() - _BOOKING_WEEK["at"] < 300:
+        return _BOOKING_WEEK["data"]
+    now = _now()
+    horizon = now + datetime.timedelta(days=7)
+    with closing(get_db()) as con:
+        rows = con.execute("SELECT provider, secret FROM bookings_accounts ORDER BY id").fetchall()
+    starts, failed = [], 0
+    for provider, secret in rows:
+        try:
+            for e in BOOKING_FETCH[provider](json.loads(fernet.decrypt(secret).decode()), now, 200):
+                d = _ts(e.get("start"))
+                if d and now - datetime.timedelta(hours=12) <= d <= horizon:
+                    starts.append(d.isoformat())
+        except Exception:
+            failed += 1
+    data = {"account_count": len(rows), "failed": failed, "starts": sorted(starts)[:500]}
+    _BOOKING_WEEK.update(at=time.time(), data=data)
+    return data
 
 
 # ===========================================================================
@@ -2311,6 +2346,161 @@ def stuck_watch_run_now(b: WatchRun, _auth=Depends(require_auth)):
     return {"result": res, "status": _watch_status()}
 
 
+# --- Website (Google Analytics) ---------------------------------------------------
+# Read-only visitor numbers for the Overview card and the Website page. The owner
+# pastes a Google service-account key that has Viewer access to the Analytics property.
+# The key is encrypted at rest, never returned, and only ever sent to Google.
+
+GA_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GA_API = "https://analyticsdata.googleapis.com/v1beta/properties/"
+_GA_CACHE = {"at": 0.0, "data": None}
+
+
+def _ga_access_token(sa):
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+
+    def b64(b):
+        return base64.urlsafe_b64encode(b).rstrip(b"=")
+    iat = int(time.time())
+    head = b64(json.dumps({"alg": "RS256", "typ": "JWT"}).encode())
+    claims = b64(json.dumps({"iss": sa["client_email"], "scope": "https://www.googleapis.com/auth/analytics.readonly",
+                             "aud": GA_TOKEN_URL, "iat": iat, "exp": iat + 600}).encode())
+    try:
+        key = serialization.load_pem_private_key(sa["private_key"].encode(), password=None)
+        sig = key.sign(head + b"." + claims, padding.PKCS1v15(), hashes.SHA256())
+    except Exception:
+        raise ValueError("The private key inside that file could not be read.")
+    with httpx.Client(timeout=20.0) as c:
+        r = c.post(GA_TOKEN_URL, data={"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                                       "assertion": (head + b"." + claims + b"." + b64(sig)).decode()})
+    if r.status_code != 200:
+        raise PermissionError("Google did not accept that key. Check it is the whole file and the service account still exists.")
+    return r.json().get("access_token")
+
+
+def _ga_report(token, prop, body):
+    with httpx.Client(timeout=25.0) as c:
+        r = c.post(GA_API + prop + ":runReport", headers={"Authorization": "Bearer " + token}, json=body)
+    if r.status_code == 403:
+        raise PermissionError("Google says this service account cannot see that property. In Google Analytics, open "
+                              "Admin > Property access management and add its email address as a Viewer.")
+    if r.status_code == 404 or r.status_code == 400:
+        raise ValueError("Google did not recognise that property number. Use the numeric Property ID from "
+                         "Admin > Property details (not the G- measurement ID).")
+    if r.status_code == 429:
+        raise RuntimeError("Google Analytics is limiting requests right now. Try again later.")
+    if r.status_code >= 400:
+        raise RuntimeError("Google Analytics returned an error (%d)." % r.status_code)
+    return r.json()
+
+
+def _ga_fetch(sa, prop):
+    token = _ga_access_token(sa)
+
+    def totals(start, end):
+        d = _ga_report(token, prop, {"dateRanges": [{"startDate": start, "endDate": end}],
+                                     "metrics": [{"name": "activeUsers"}, {"name": "sessions"}]})
+        row = (d.get("rows") or [{}])[0].get("metricValues") or []
+        return (int(row[0].get("value") or 0) if len(row) > 0 else 0, int(row[1].get("value") or 0) if len(row) > 1 else 0)
+    users, sessions = totals("7daysAgo", "yesterday")
+    p_users, p_sessions = totals("14daysAgo", "8daysAgo")
+    pages = []
+    try:
+        d = _ga_report(token, prop, {"dateRanges": [{"startDate": "7daysAgo", "endDate": "yesterday"}],
+                                     "dimensions": [{"name": "pagePath"}], "metrics": [{"name": "screenPageViews"}],
+                                     "orderBys": [{"metric": {"metricName": "screenPageViews"}, "desc": True}], "limit": 6})
+        for r in d.get("rows") or []:
+            pages.append({"path": str(((r.get("dimensionValues") or [{}])[0]).get("value") or "")[:120],
+                          "views": int(((r.get("metricValues") or [{}])[0]).get("value") or 0)})
+    except Exception:
+        pass
+    sources = []
+    try:
+        d = _ga_report(token, prop, {"dateRanges": [{"startDate": "7daysAgo", "endDate": "yesterday"}],
+                                     "dimensions": [{"name": "sessionDefaultChannelGroup"}], "metrics": [{"name": "sessions"}],
+                                     "orderBys": [{"metric": {"metricName": "sessions"}, "desc": True}], "limit": 5})
+        for r in d.get("rows") or []:
+            sources.append({"name": str(((r.get("dimensionValues") or [{}])[0]).get("value") or "")[:60],
+                            "sessions": int(((r.get("metricValues") or [{}])[0]).get("value") or 0)})
+    except Exception:
+        pass
+
+    def change(a, b):
+        return None if not b else round((a - b) * 100.0 / b)
+    return {"visitors": users, "sessions": sessions, "visitors_previous": p_users, "sessions_previous": p_sessions,
+            "visitors_change": change(users, p_users), "sessions_change": change(sessions, p_sessions),
+            "pages": pages, "sources": sources, "period": "the last 7 full days", "fetched_at": _now().isoformat()}
+
+
+def _ga_parse_key(text):
+    try:
+        sa = json.loads(text or "")
+        assert isinstance(sa, dict) and sa.get("type") == "service_account"
+        assert "@" in str(sa.get("client_email")) and "PRIVATE KEY" in str(sa.get("private_key"))
+    except Exception:
+        raise ValueError("That is not a Google service-account key. Paste the whole contents of the .json file Google gave you.")
+    return {"client_email": str(sa["client_email"])[:200], "private_key": str(sa["private_key"])}
+
+
+class WebsiteIn(BaseModel):
+    property_id: str
+    key_json: str
+
+
+@app.get("/website")
+def website_get(refresh: int = 0, _auth=Depends(require_auth)):
+    with closing(get_db()) as con:
+        row = con.execute("SELECT property_id, secret, account, updated_at FROM website_analytics WHERE id = 1").fetchone()
+    if not row:
+        return {"connected": False}
+    out = {"connected": True, "property_id": row[0], "account": row[2], "connected_at": row[3], "stats": None, "error": None}
+    if not refresh and _GA_CACHE["data"] is not None and time.time() - _GA_CACHE["at"] < 1800:
+        out["stats"] = _GA_CACHE["data"]
+        return out
+    try:
+        stats = _ga_fetch(json.loads(fernet.decrypt(row[1]).decode()), row[0])
+        _GA_CACHE.update(at=time.time(), data=stats)
+        out["stats"] = stats
+    except (PermissionError, ValueError, RuntimeError) as e:
+        out["error"] = str(e)
+    except Exception:
+        out["error"] = "Could not reach Google Analytics just now."
+    return out
+
+
+@app.put("/website")
+def website_put(b: WebsiteIn, _auth=Depends(require_auth)):
+    prop = re.sub(r"^properties/", "", (b.property_id or "").strip())
+    if not re.match(r"^[0-9]{4,15}$", prop):
+        raise HTTPException(status_code=400, detail="The Property ID is a number, for example 123456789. Find it in Google "
+                            "Analytics under Admin > Property details. It is not the G- measurement ID.")
+    try:
+        sa = _ga_parse_key(b.key_json)
+        stats = _ga_fetch(sa, prop)          # prove it works before keeping it
+    except (PermissionError, ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=502, detail="Could not reach Google just now. Try again in a minute.")
+    with closing(get_db()) as con:
+        con.execute("INSERT INTO website_analytics(id, property_id, secret, account, updated_at) VALUES(1,?,?,?,?) "
+                    "ON CONFLICT(id) DO UPDATE SET property_id=excluded.property_id, secret=excluded.secret, "
+                    "account=excluded.account, updated_at=excluded.updated_at",
+                    (prop, fernet.encrypt(json.dumps(sa).encode()), sa["client_email"], _now().isoformat()))
+        con.commit()
+    _GA_CACHE.update(at=time.time(), data=stats)
+    return website_get(0, None)
+
+
+@app.delete("/website")
+def website_delete(_auth=Depends(require_auth)):
+    with closing(get_db()) as con:
+        con.execute("DELETE FROM website_analytics WHERE id = 1")
+        con.commit()
+    _GA_CACHE.update(at=0.0, data=None)
+    return {"connected": False}
+
+
 # --- Backups -------------------------------------------------------------------
 # scripts/backup.sh (cron, nightly) builds the archive; backup_tool encrypts it and
 # copies it off this server. These endpoints only read the result and hold settings.
@@ -3065,6 +3255,7 @@ def gateway_unblock(b: GwUnblock, _auth=Depends(require_auth)):
 # Internal only: bearer token + blocked on the public proxy.
 # ===========================================================================
 import hmac
+import time
 import time
 import threading
 
