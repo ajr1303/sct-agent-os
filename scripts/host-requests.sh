@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Carries out requests made from the dashboard that need the host (cron, every minute).
-# Two things today: keeping the proxy's two-step sign-in switch in step with the
-# dashboard, and "Link my team", which runs scripts/paperclip-connect.sh. The dashboard leaves
+# Three things today: keeping the proxy's two-step sign-in switch in step with the
+# dashboard, "Update now" (see scripts/update-requested.sh), and "Link my team", which
+# runs scripts/paperclip-connect.sh. The dashboard leaves
 # data/backup/link-paperclip (optionally holding the owner's email); the outcome goes
 # to data/backup/link-result.json for the page to show.
 set -u
@@ -36,6 +37,26 @@ mfa_sync() {
   fi
 }
 mfa_sync
+
+# --- "Update now" ---------------------------------------------------------------------
+# The dashboard leaves data/backup/update-request. The update runs on its own in the
+# background (it takes minutes and restarts the services), so this job stays quick.
+update_requested() {
+  local req=data/backup/update-request state=data/backup/update-state.json lock=data/backup/.update.lock
+  # An update that died without finishing (a reboot, say) must not read "running" forever.
+  if grep -q '"state": "running"' "$state" 2>/dev/null && flock -n "$lock" true 2>/dev/null; then
+    sed -i 's/"state": "running"/"state": "failed"/' "$state"
+  fi
+  [ -f "$req" ] || return 0
+  rm -f "$req"
+  [ -x scripts/update-requested.sh ] || return 0
+  if command -v setsid >/dev/null 2>&1; then
+    setsid nohup ./scripts/update-requested.sh >/dev/null 2>&1 < /dev/null &
+  else
+    nohup ./scripts/update-requested.sh >/dev/null 2>&1 < /dev/null &
+  fi
+}
+update_requested
 
 REQ=data/backup/link-paperclip
 RES=data/backup/link-result.json

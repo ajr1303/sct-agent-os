@@ -69,6 +69,9 @@
       var sg = useState(null), site = sg[0], setSite = sg[1];              // website visitors (Google Analytics)
       var sg = useState(null), upd = sg[0], setUpd = sg[1];
       var sh = useState(0), updBump = sh[0], setUpdBump = sh[1];
+      var sj = useState(null), updRun = sj[0], setUpdRun = sj[1];      // {pending, waiting_seconds, state} from the server
+      var sj2 = useState(""), updMsg = sj2[0], setUpdMsg = sj2[1];
+      var sj3 = useState(false), updBusy = sj3[0], setUpdBusy = sj3[1];
 
       useEffect(function () {
         function load() {
@@ -195,16 +198,75 @@
 
       function updDismissed(ver) { try { return localStorage.getItem("sc-upd-dismissed") === ver; } catch (e) { return false; } }
       function dismissUpd(ver) { try { localStorage.setItem("sc-upd-dismissed", ver); } catch (e) {} setUpdBump(updBump + 1); }
+      function updWatching(v) {
+        try {
+          if (v === undefined) return sessionStorage.getItem("sc-upd-watching") === "1";
+          if (v) sessionStorage.setItem("sc-upd-watching", "1"); else sessionStorage.removeItem("sc-upd-watching");
+        } catch (e) {}
+        return !!v;
+      }
+      function updPoll() {
+        return fetch("/api/connectors/system/update", { credentials: "same-origin", cache: "no-store" })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (v) {
+            if (!v) return;                       // the dashboard restarts during an update: keep waiting
+            setUpdRun(v);
+            var st = v.state && v.state.state;
+            if (updWatching() && !v.pending && st === "done") {
+              updWatching(false);
+              setUpdMsg("Updated" + (v.state.to ? " to v" + v.state.to : "") + ". Reloading…");
+              setTimeout(function () { window.location.reload(); }, 2500);
+            } else if (updWatching() && !v.pending && st === "failed") {
+              updWatching(false);
+            }
+          }).catch(function () {});
+      }
+      useEffect(function () {
+        updPoll();
+        var t = setInterval(function () {
+          if (updWatching() || (updRun && (updRun.pending || (updRun.state && updRun.state.state === "running")))) updPoll();
+        }, 8000);
+        return function () { clearInterval(t); };
+      }, [updRun && updRun.pending, updRun && updRun.state && updRun.state.state]);
+      function startUpd() {
+        if (!window.confirm("Update now?\n\nA backup is taken first. The dashboard then restarts and can be unavailable for a few minutes. Agents that are working are interrupted and pick their tasks up again afterwards.")) return;
+        setUpdBusy(true); setUpdMsg("");
+        fetch("/api/connectors/system/update", { method: "POST", credentials: "same-origin" })
+          .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, j: j }; }); })
+          .then(function (x) {
+            setUpdBusy(false);
+            if (!x.ok) { setUpdMsg((x.j && x.j.detail) || "The update could not be started. Try again in a minute."); return; }
+            updWatching(true); updPoll();
+          }).catch(function () { setUpdBusy(false); setUpdMsg("The update could not be started. Try again in a minute."); });
+      }
       function updBanner() {
+        var st = updRun && updRun.state ? updRun.state : null;
+        var pending = !!(updRun && updRun.pending), running = !!(st && st.state === "running");
+        if (updMsg && updMsg.indexOf("Updated") === 0)
+          return h("div", { className: "sc-updbar" }, h("div", { className: "sc-updbar-l" }, h("span", { className: "sc-updbar-dot" }), h("span", null, h("b", null, updMsg))));
+        if (pending || running) {
+          var slow = pending && (updRun.waiting_seconds || 0) > 180;
+          return h("div", { className: "sc-updbar" },
+            h("div", { className: "sc-updbar-l" },
+              h("span", { className: "sc-updbar-dot sc-updbar-pulse" }),
+              h("span", null, h("b", null, running ? "Updating" + (upd && upd.latest ? " to v" + upd.latest : "") + "…" : "Starting the update…"), " ",
+                slow ? "The server has not picked this up yet. If this does not change in a few minutes, its scheduled jobs are not running: ask whoever looks after the server to run the update by hand."
+                  : running ? "A backup is taken first, then the dashboard restarts. It can be unavailable for a few minutes. This page reloads by itself when the update is done."
+                  : "This begins within a minute. You can keep working until the dashboard restarts.")));
+        }
         if (!upd || !upd.update_available || updDismissed(upd.latest)) return null;
+        var failed = !!(st && st.state === "failed");
         return h("div", { className: "sc-updbar" },
           h("div", { className: "sc-updbar-l" },
             h("span", { className: "sc-updbar-dot" }),
-            h("span", null, h("b", null, "Update available"), " — v" + (upd.current || "?") + " → v" + (upd.latest || "?") + ". Run ",
-              h("code", { className: "sc-updcode" }, "sudo ./scripts/update.sh"), " on the server when you're ready.")),
+            h("span", null, h("b", null, "Update available"), " — v" + (upd.current || "?") + " → v" + (upd.latest || "?") + ". ",
+              updMsg ? updMsg
+                : failed ? "The last update did not finish. Everything that was running is still running. Try again, or ask whoever looks after the server to check it."
+                : "Takes a few minutes. A backup is taken first.")),
           h("div", { className: "sc-updbar-r" },
             upd.notes_url ? h("a", { className: "sc-link", href: upd.notes_url, target: "_blank", rel: "noopener" }, "What's changed") : null,
-            h("button", { className: "sc-updbar-x", onClick: function () { dismissUpd(upd.latest); } }, "Dismiss")));
+            h("button", { className: "sc-updbar-x", onClick: function () { dismissUpd(upd.latest); } }, "Later"),
+            h("button", { className: "sc-updbar-go", disabled: updBusy, onClick: startUpd }, updBusy ? "Starting…" : "Update now")));
       }
 
       return h("div", { className: "sc-wrap" },

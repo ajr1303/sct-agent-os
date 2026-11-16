@@ -309,9 +309,11 @@ Pulls the latest repo, re-syncs the theme and plugins with correct permissions, 
 
 The updater takes a backup first, and if a step fails it stops and leaves the running services as they were.
 
-### Update notifications (notify-only)
+### Update notifications and "Update now"
 
-Each install checks for updates on a schedule (`scripts/check-updates.sh`, every 6 hours) and, when a newer release is published, shows an **"Update available" banner on the dashboard Overview** — current → latest, a "what's changed" link, and the one command to run. **Nothing updates automatically**; the customer runs `update.sh` when they're ready.
+Each install checks for updates on a schedule (`scripts/check-updates.sh`, every 6 hours) and, when a newer release is published, shows an **"Update available" banner on the dashboard Overview** with the current and latest version and a "what's changed" link.
+
+**Update now** on that banner runs the update from the dashboard, with no terminal: a backup is taken first, then the same `update.sh` runs on the server. The dashboard restarts and can be unavailable for a few minutes; the page reloads by itself when it is done. **Later** hides the banner for that release. **Nothing updates on its own**: it only happens when someone signed in to the dashboard presses the button, or when `update.sh` is run on the server. If an update does not finish, the banner says so and the services that were running keep running; the output is in `data/backup/update.log`.
 
 The release marker is the repo's **`VERSION`** file: bump it (and tag/release) when you cut a release, and every instance's next check surfaces the banner. The check only calls out to GitHub to read that file; it never changes the box. Override the source/notes URLs with `UPDATE_VERSION_URL` / `UPDATE_NOTES_URL` in `.env` if you host your own release channel.
 
@@ -357,7 +359,8 @@ scripts/
   sync-chat-tools.sh        Install the chat-tools config and routing skill
   backup.sh, restore.sh     Nightly full backup; open, check and restore one
   install-cron.sh           Install or refresh every scheduled job
-  host-requests.sh          Carries out dashboard requests that need the host (Link my team, two-step sign-in switch)
+  host-requests.sh          Carries out dashboard requests that need the host (Update now, Link my team, two-step sign-in switch)
+  update-requested.sh       Runs the updater for the dashboard's "Update now" button and records the result
   mfa-reset.sh              Turn two-step sign-in off from the server (lost phone)
   agent-models.sh, agent-ssh.sh  Read each agent's model; allow model changes over SSH
   enable-plugins.sh, gen-tls.sh, watchdog.sh, smoke-test.sh, check-updates.sh
@@ -372,7 +375,7 @@ docs/ARCHITECTURE.md        How the layer works
 
 ## Status
 
-**v0.32.2.** The last clean one-command install on a fresh VM was run at v0.26 (Hermes v0.23.1, n8n 2.47.5), reached through a Cloudflare Tunnel. Changes since then are tested piece by piece but a fresh end-to-end install of this version has not been rerun yet.
+**v0.33.** The last clean one-command install on a fresh VM was run at v0.26 (Hermes v0.23.1, n8n 2.47.5), reached through a Cloudflare Tunnel. Changes since then are tested piece by piece but a fresh end-to-end install of this version has not been rerun yet.
 
 Verified live:
 
@@ -392,6 +395,7 @@ Verified live:
 Known limitations:
 
 - **Not yet tested: a server reboot, and restoring a backup onto a new server.** Restore opens and checks a backup; putting one back (`--apply`) is unproven, and the team database is not reloaded automatically.
+- **"Update now" on the banner is tested against a stand-in updater, not yet on a live install.**
 - **The stuck-agent watch's scheduled run in n8n, the Appointments tile, Link my team, several sites on the Website page, the installer changes in v0.28, team chart, task replies and the Agents page editor are tested against stand-ins** (a mock board, and for the model check a local database and mock gateways), not yet confirmed on a live one.
 - **Bookings and Mailboxes are view-only.** Agents cannot yet book appointments or send/draft email.
 - **Per-agent model choice does not apply to delegated tasks** (all Paperclip runs use the default Hermes profile).

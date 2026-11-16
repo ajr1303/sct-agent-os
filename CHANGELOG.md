@@ -2,6 +2,19 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.33.0] — 2026-11-16 — Update from the dashboard
+
+- The "Update available" banner on the Overview now has an **Update now** button, so
+  an owner without access to the server can update. It takes a backup, runs the
+  updater on the server and reloads the page when it is done. The dashboard can be
+  unavailable for a few minutes while it restarts. "Dismiss" is now **Later**.
+- The banner shows progress, says plainly if an update did not finish (running
+  services are left as they were) and says so if the server never picks the request up.
+- One update at a time, limited to 90 minutes. An update interrupted by a restart is
+  reported as not finished instead of "updating" forever.
+- Nothing updates on its own. Running `sudo ./scripts/update.sh` on the server works
+  as before, and is needed once to reach this version.
+
 ## [0.32.2] — 2026-11-15 — Documentation caught up
 
 - README: new sections for the Website page (Google Analytics, several sites),

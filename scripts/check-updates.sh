@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Notify-only update check. Compares the installed VERSION to the repo's latest
-# published VERSION and writes a small status file the dashboard reads. Never
-# changes anything on the box — the customer decides when to run update.sh.
+# Update check. Compares the installed VERSION to the repo's latest published VERSION
+# and writes a small status file the dashboard reads. Never changes anything on the
+# box: the owner decides when to update ("Update now" on the banner, or update.sh).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

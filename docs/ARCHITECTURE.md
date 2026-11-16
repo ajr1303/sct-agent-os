@@ -229,3 +229,17 @@ denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
   enrolment. With two-step on, the gate fails closed: if the connectors service is
   down the dashboard answers 500 until the watchdog restarts it.
 
+## Update now
+
+- The Overview banner posts `POST /system/update` (connectors), which only writes
+  `data/backup/update-request`. `scripts/host-requests.sh` (cron, every minute) removes
+  the request and starts `scripts/update-requested.sh` detached.
+- That script holds a lock, writes `data/backup/update-state.json`
+  (`running`, then `done` or `failed`, with from/to versions), and runs
+  `scripts/update.sh` with a 90-minute limit; output goes to `data/backup/update.log`,
+  which is never served.
+- `GET /system/update` returns the request and state for the banner to poll. A
+  `running` state with no live lock, or older than 100 minutes, is reported as failed.
+- The request carries no parameters: the updater pulls only the repository and branch
+  the install already tracks.
+

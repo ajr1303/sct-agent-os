@@ -161,9 +161,26 @@ over with n8n's own `import:workflow` command; credentials are then re-entered.
 
 ## 6. Updating
 
-```bash
-cd /opt/sct-agent-os && sudo ./scripts/update.sh
-```
+Two ways, same updater:
+
+- **From the dashboard:** when a release is out, the Overview shows "Update available".
+  Press **Update now**. Needs the every-minute job (`sudo ./scripts/install-cron.sh`).
+- **On the server:**
+  ```bash
+  cd /opt/sct-agent-os && sudo ./scripts/update.sh
+  ```
+
+Either way a backup is taken first.
+
+| Dashboard shows | Meaning |
+|---|---|
+| Starting the update… for more than a few minutes | The every-minute job is not running. `sudo ./scripts/install-cron.sh`, or run the updater on the server. |
+| The last update did not finish | Read `sudo tail -40 /opt/sct-agent-os/data/backup/update.log`, fix the cause, press the button again or run the updater. Running services were left alone. |
+| Updating… for more than 90 minutes | It is treated as failed. Check the log as above. |
+
+A dashboard update is limited to 90 minutes and only one runs at a time. An install
+older than v0.33 has no button yet: update it once from the server.
+
 Pulls `main`, pulls the pinned images, regenerates branding/links, rebuilds
 `connectors`, refreshes the chat tools, restarts Hermes, the proxy and gateway-tls,
 and re-enables plugins. `.env` is preserved. Updating can move a box to newer pinned

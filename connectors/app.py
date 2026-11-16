@@ -1920,6 +1920,58 @@ def orchestration_link_status(_auth=Depends(require_auth)):
             "connected": bool(_pc_key())}
 
 
+# --- "Update now" -------------------------------------------------------------------
+# The dashboard cannot update the server itself: the updater rebuilds and restarts this
+# very service. It leaves a request file; the host's every-minute job starts
+# scripts/update-requested.sh, which runs the normal updater (backup first) and writes
+# how it went to update-state.json. Nothing here chooses what is installed: the updater
+# only ever pulls the repository this install came from.
+_UPD_REQ = os.path.join(os.environ.get("AOS_BACKUP_CONFIG", "/backup-config"), "update-request")
+_UPD_STATE = os.path.join(os.environ.get("AOS_BACKUP_CONFIG", "/backup-config"), "update-state.json")
+_UPD_STALE_SECONDS = 100 * 60
+
+
+def _update_state():
+    try:
+        with open(_UPD_STATE, "r", encoding="utf-8") as f:
+            st = json.load(f)
+    except Exception:
+        return None
+    if not isinstance(st, dict) or st.get("state") not in ("running", "done", "failed"):
+        return None
+    out = {k: str(st.get(k) or "")[:40] for k in ("state", "from", "to", "started_at", "finished_at")}
+    if out["state"] == "running":
+        try:
+            started = dtparse.parse(out["started_at"]).timestamp()
+        except Exception:
+            started = 0
+        if time.time() - started > _UPD_STALE_SECONDS:
+            out["state"] = "failed"
+    return out
+
+
+@app.get("/system/update")
+def system_update_status(_auth=Depends(require_auth)):
+    waiting = None
+    try:
+        waiting = int(time.time() - os.path.getmtime(_UPD_REQ))
+    except OSError:
+        pass
+    return {"pending": waiting is not None, "waiting_seconds": waiting, "state": _update_state()}
+
+
+@app.post("/system/update")
+def system_update_request(_auth=Depends(require_auth)):
+    st = _update_state()
+    if st and st["state"] == "running":
+        raise HTTPException(status_code=409, detail="An update is already running.")
+    if not os.path.exists(_UPD_REQ):
+        os.makedirs(os.path.dirname(_UPD_REQ), exist_ok=True)
+        with open(_UPD_REQ, "w", encoding="utf-8") as f:
+            f.write(datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ") + "\n")
+    return {"requested": True}
+
+
 # --- Stuck-agent watch ------------------------------------------------------------
 # Finds agents that have stopped moving and gives them a careful push:
 #   * an agent whose connection failed its check       -> ask Paperclip to retry it
