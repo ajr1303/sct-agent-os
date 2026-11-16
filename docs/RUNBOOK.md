@@ -315,6 +315,15 @@ Cloudflare Access so each person signs in as themselves.
 - **Forgot it:** the sign-in page has **Forgot password?**. Enter the reset code and a
   new password. Five wrong codes lock the page for 15 minutes, then longer. With
   two-step sign-in on, the code from the phone is asked for first.
+- **Reset by email (optional):** Security > Password > **Set up reset by email**. Enter
+  the address that should receive the link and an outgoing mail account for the server
+  to send from (Gmail: `smtp.gmail.com`, 587, the address, an app password; Microsoft
+  365: `smtp.office365.com`, 587), plus the current dashboard password. A test message
+  must go through before it turns on. "Forgot password?" then offers **Email me a
+  reset link**: good for 30 minutes, works once, at most three an hour. Whoever can
+  read that mailbox can reset the dashboard password, so it should have its own
+  two-step sign-in. If the dashboard's web address changes, save the settings again so
+  the link points at the new address.
 - **No reset code either:** on the server, `sudo ./scripts/dashboard-password.sh`
   prints a new random password (`--ask` to type one). Give it to the owner directly
   and have them change it and save a new reset code.

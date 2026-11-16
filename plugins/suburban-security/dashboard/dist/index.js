@@ -27,8 +27,9 @@
     function PasswordCard() {
       var s;
       s = useState(null);  var info = s[0], setInfo = s[1];
-      s = useState("");    var mode = s[0], setMode = s[1];          // "" | "change" | "code"
-      s = useState({ current: "", next: "", again: "" }); var f = s[0], setF = s[1];
+      s = useState("");    var mode = s[0], setMode = s[1];          // "" | "change" | "code" | "email"
+      var BLANK = { current: "", next: "", again: "", to: "", host: "", port: "587", user: "", mailpw: "" };
+      s = useState(BLANK); var f = s[0], setF = s[1];
       s = useState("");    var err = s[0], setErr = s[1];
       s = useState("");    var waitId = s[0], setWaitId = s[1];
       s = useState(null);  var done = s[0], setDone = s[1];          // {mode, reset_code}
@@ -47,7 +48,7 @@
             .then(function (x) {
               if (stop) return;
               if (x.ok && x.j.done) {
-                stored(""); setWaitId(""); setF({ current: "", next: "", again: "" });
+                stored(""); setWaitId(""); setF(BLANK);
                 if (x.j.ok) { setMode(""); setDone({ mode: x.j.mode, reset_code: x.j.reset_code }); load(); }
                 else setErr(x.j.message || "That did not work. Please try again.");
                 return;
@@ -64,8 +65,10 @@
       function submit(e) {
         e.preventDefault(); setErr("");
         if (mode === "change" && f.next !== f.again) { setErr("The two new passwords do not match."); return; }
-        api("/security/password", { method: "POST", body: JSON.stringify({ current: f.current, "new": mode === "change" ? f.next : "" }) })
-          .then(function (x) { stored(x.id); setWaitId(x.id); })
+        var call = mode === "email"
+          ? api("/security/password-email", { method: "POST", body: JSON.stringify({ current: f.current, to: f.to, host: f.host, port: parseInt(f.port, 10) || 587, user: f.user, password: f.mailpw }) })
+          : api("/security/password", { method: "POST", body: JSON.stringify({ current: f.current, "new": mode === "change" ? f.next : "" }) });
+        call.then(function (x) { stored(x.id); setWaitId(x.id); })
           .catch(function (e2) { setErr(String(e2.message || e2)); });
       }
       function download() {
@@ -73,11 +76,23 @@
         var a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" })); a.download = "agent-os-reset-code.txt";
         document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
       }
+      function txt(label, k, ph, type) {
+        return h("label", { className: "ss-field" }, h("span", null, label),
+          h("input", { className: "ss-in", type: type || "text", autoComplete: "off", spellCheck: false, placeholder: ph || "", value: f[k], maxLength: 300, onChange: set(k) }));
+      }
+      function emailOff() {
+        if (!window.confirm("Turn off reset by email? Forgot password will then need your reset code.")) return;
+        api("/security/password-email", { method: "DELETE" }).then(load).catch(function (e2) { setErr(String(e2.message || e2)); });
+      }
       function pw(label, k, auto) {
         return h("label", { className: "ss-field" }, h("span", null, label),
           h("input", { className: "ss-in", type: "password", autoComplete: auto, value: f[k], maxLength: 256, onChange: set(k) }));
       }
 
+      if (done && done.mode === "email") return h("div", { className: "ss-card" },
+        h("div", { className: "ss-name" }, "Reset by email is on"),
+        h("div", { className: "ss-p" }, "A test message was sent to the address you gave. Check that it arrived. From now on, “Forgot password?” on the sign-in page can email a reset link there. Anyone who can read that mailbox can reset this password, so keep that mailbox well protected."),
+        h("div", { className: "ss-acts ss-left" }, h("button", { type: "button", className: "ss-btn ss-primary", onClick: function () { setDone(null); } }, "Done")));
       if (done) return h("div", { className: "ss-card" },
         h("div", { className: "ss-name" }, done.mode === "change" ? "Password changed. Save your new reset code" : "Save your reset code"),
         h("div", { className: "ss-p" }, "If you ever forget the password, this code lets you set a new one from the sign-in page (Forgot password?). It works once, and any earlier reset code has stopped working. Keep it somewhere safe that is not this server: a password manager, or printed. It is not shown again."),
@@ -92,7 +107,7 @@
 
       if (waitId) return h("div", { className: "ss-card" },
         h("div", { className: "ss-head" }, h("div", { className: "ss-name" }, "Password"), h("span", { className: "ss-state ss-wait" }, "Working…")),
-        h("div", { className: "ss-p" }, "The server is checking your password" + (mode === "change" ? " and applying the new one. The dashboard restarts, so this can take a minute or two and you may be asked to sign in again." : ". This takes up to a minute.") + " Keep this page open."));
+        h("div", { className: "ss-p" }, "The server is checking your password" + (mode === "change" ? " and applying the new one. The dashboard restarts, so this can take a minute or two and you may be asked to sign in again." : mode === "email" ? ", then sending a test message. This takes up to a minute." : ". This takes up to a minute.") + " Keep this page open."));
 
       return h("div", { className: "ss-card" },
         h("div", { className: "ss-head" }, h("div", { className: "ss-name" }, "Password"),
@@ -100,20 +115,30 @@
         h("div", { className: "ss-p" }, "The password for signing in to this dashboard as admin. A reset code lets you set a new password yourself if you forget it."
           + (info && info.reset_code_set && info.reset_code_at ? " Your reset code was made on " + when(info.reset_code_at) + "." : "")),
         info && !info.reset_code_set && !mode ? h("div", { className: "ss-msg" }, "You have no reset code. If the password is forgotten, only someone with access to the server can reset it. Get a code now.") : null,
+        info && !mode ? h("div", { className: "ss-facts" },
+          h("div", null, h("span", { className: "ss-dim" }, "Reset by email"), h("b", null, info.email ? "On, sends to " + info.email.to : "Off"))) : null,
         mode ? h("form", { className: "ss-ask", onSubmit: submit },
-            pw("Current password", "current", "current-password"),
+            mode === "email" ? h("div", { className: "ss-p ss-dim" }, "“Forgot password?” will email a one-time link to this address. The server needs a mail account to send from. Gmail: smtp.gmail.com, port 587, your address, and an app password. Microsoft 365: smtp.office365.com, port 587. Anyone who can read the receiving mailbox can reset this password.") : null,
+            mode === "email" ? txt("Send the reset link to", "to", "you@example.com", "email") : null,
+            mode === "email" ? txt("Outgoing mail server", "host", "smtp.gmail.com") : null,
+            mode === "email" ? txt("Port", "port", "587") : null,
+            mode === "email" ? txt("Mail account username", "user", "you@example.com") : null,
+            mode === "email" ? txt("Mail account password (app password)", "mailpw", "", "password") : null,
+            pw(mode === "email" ? "Current dashboard password" : "Current password", "current", "current-password"),
             mode === "change" ? pw("New password", "next", "new-password") : null,
             mode === "change" ? pw("New password again", "again", "new-password") : null,
             mode === "change" && info ? h("div", { className: "ss-dim ss-small" }, info.rule) : null,
             mode === "change" ? h("div", { className: "ss-dim ss-small" }, "The dashboard restarts for about a minute. Agents and automations keep running.") : null,
             err ? h("div", { className: "ss-msg" }, err) : null,
             h("div", { className: "ss-acts ss-left" },
-              h("button", { type: "submit", className: "ss-btn ss-primary", disabled: !f.current || (mode === "change" && (f.next.length < 12 || !f.again)) }, mode === "change" ? "Change password" : "Get the code"),
-              h("button", { type: "button", className: "ss-btn", onClick: function () { setMode(""); setErr(""); setF({ current: "", next: "", again: "" }); } }, "Cancel")))
+              h("button", { type: "submit", className: "ss-btn ss-primary", disabled: !f.current || (mode === "change" && (f.next.length < 12 || !f.again)) || (mode === "email" && (!f.to || !f.host || !f.user || !f.mailpw)) }, mode === "change" ? "Change password" : mode === "email" ? "Send a test and turn on" : "Get the code"),
+              h("button", { type: "button", className: "ss-btn", onClick: function () { setMode(""); setErr(""); setF(BLANK); } }, "Cancel")))
           : h("div", { className: "ss-acts ss-left" },
               err ? h("div", { className: "ss-msg" }, err) : null,
               h("button", { type: "button", className: "ss-btn", onClick: function () { setMode("change"); setErr(""); } }, "Change password"),
-              h("button", { type: "button", className: "ss-btn", onClick: function () { setMode("code"); setErr(""); } }, info && info.reset_code_set ? "Get a new reset code" : "Get a reset code")));
+              h("button", { type: "button", className: "ss-btn", onClick: function () { setMode("code"); setErr(""); } }, info && info.reset_code_set ? "Get a new reset code" : "Get a reset code"),
+              h("button", { type: "button", className: "ss-btn", onClick: function () { setMode("email"); setErr(""); if (info && info.email) setF(Object.assign({}, BLANK, { to: info.email.to || "", host: info.email.host || "", port: String(info.email.port || 587), user: info.email.user || "" })); } }, info && info.email ? "Change email settings" : "Set up reset by email"),
+              info && info.email ? h("button", { type: "button", className: "ss-btn", onClick: emailOff }, "Turn off reset by email") : null));
     }
 
     function Security() {

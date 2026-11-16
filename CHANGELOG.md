@@ -2,6 +2,17 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.35.0] — 2026-11-16 — Reset the password by email
+
+- **Security page: Set up reset by email.** Give the address that should receive the
+  link and a mail account for the server to send from. It turns on only after the
+  current password is confirmed and a test message has been sent.
+- **Forgot password?** now offers "Email me a reset link" when this is set up. The
+  link lasts 30 minutes and works once; at most three are sent in an hour. The reset
+  code still works alongside it.
+- Anyone who can read the receiving mailbox can reset the dashboard password. The page
+  says so, and it stays off unless the owner sets it up.
+
 ## [0.34.0] — 2026-11-16 — Change and reset the password from the dashboard
 
 - **Security page: Change password.** Enter the current password and a new one. The

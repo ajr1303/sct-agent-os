@@ -262,4 +262,12 @@ denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
   calls `POST /account/reset {code, new}` with no session. Five wrong codes lock it for
   15 minutes, doubling to a day. When two-step sign-in is on, the proxy gate applies
   to this call as to every other.
+- Reset by email: `POST /security/password-email` (current password checked by the
+  host as above) stores recipient, SMTP host, port, user and the encrypted SMTP
+  password, plus the dashboard origin taken from that signed-in request. It is only
+  kept if a test message sends. TLS is required (STARTTLS, or implicit on 465).
+  `POST /account/reset-link` takes no input, mails a 256-bit token valid 30 minutes
+  (hash stored), at most three an hour and one per two minutes. `POST /account/reset`
+  accepts `token` in place of `code`. The link carries the token in the URL fragment,
+  which the reset page removes from the address bar on load.
 

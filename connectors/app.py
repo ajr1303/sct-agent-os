@@ -2020,7 +2020,7 @@ def _pw_pending(d):
     return p if p and time.time() - float(p.get("at") or 0) < _PW_PENDING_SECONDS else None
 
 
-def _pw_submit(d, mode, current, new):
+def _pw_submit(d, mode, current, new, extra=None):
     """Leave a request for the host. Returns the id the browser polls with."""
     rid = os.urandom(24).hex()
     os.makedirs(os.path.dirname(_PW_REQ), exist_ok=True)
@@ -2033,6 +2033,7 @@ def _pw_submit(d, mode, current, new):
         f.write("%s\n%s\n%s\n%s\n" % (mode, rid, base64.b64encode(current.encode()).decode(),
                                       base64.b64encode(new.encode()).decode()))
     d["pending"] = {"id_hash": _pw_hash(rid), "mode": mode, "at": time.time()}
+    d["pending"].update(extra or {})
     d.pop("outcome", None)
     _pw_save(d)
     return rid
@@ -2045,14 +2046,167 @@ class PasswordChange(BaseModel):
 
 class PasswordReset(BaseModel):
     code: str = ""
+    token: str = ""
     new: str = ""
+
+
+class PasswordEmail(BaseModel):
+    current: str = ""
+    to: str = ""
+    host: str = ""
+    port: int = 587
+    user: str = ""
+    password: str = ""
+
+
+# Reset by email. The owner gives an address and an outgoing mail account on the Security
+# page (current password required, and a test message must go through). "Forgot
+# password?" can then mail that address a link that is good for 30 minutes and works
+# once. Whoever can read that mailbox can reset the password, which the page says.
+_PW_LINK_SECONDS = 30 * 60
+_PW_SMTP_PORTS = (25, 465, 587, 2525)
+
+
+def _pw_send_mail(cfg, subject, body):
+    """Send one plain-text message with the saved account. Returns an error message or None."""
+    import smtplib
+    from email.message import EmailMessage
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = cfg["user"]
+    msg["To"] = cfg["to"]
+    msg.set_content(body)
+    try:
+        secret = fernet.decrypt(cfg["pass_enc"].encode()).decode()
+        ctx = ssl.create_default_context()
+        if int(cfg["port"]) == 465:
+            srv = smtplib.SMTP_SSL(cfg["host"], 465, timeout=20, context=ctx)
+        else:
+            srv = smtplib.SMTP(cfg["host"], int(cfg["port"]), timeout=20)
+            srv.ehlo()
+            srv.starttls(context=ctx)      # never send the mail password in the clear
+            srv.ehlo()
+        try:
+            srv.login(cfg["user"], secret)
+            srv.send_message(msg)
+        finally:
+            try:
+                srv.quit()
+            except Exception:
+                pass
+    except smtplib.SMTPAuthenticationError:
+        return ("The mail server refused that username and password. Gmail and Microsoft accounts need an "
+                "app password here, not the normal password.")
+    except smtplib.SMTPNotSupportedError:
+        return "That mail server does not offer an encrypted connection on this port. Try port 587 or 465."
+    except (smtplib.SMTPException, OSError, ssl.SSLError) as e:
+        return "The email could not be sent (%s). Check the server name and port." % (type(e).__name__)
+    except Exception:
+        return "The email could not be sent. Check the mail settings."
+    return None
+
+
+def _pw_email_apply(d, p):
+    try:
+        cfg = json.loads(fernet.decrypt(p["settings_enc"].encode()).decode())
+    except Exception:
+        return "Those settings could not be read. Please enter them again."
+    problem = _pw_send_mail(cfg, "Agent OS: password reset by email is set up",
+                            "This address will receive the link when someone uses \"Forgot password?\" on the Agent OS "
+                            "sign-in page at %s.\n\nIf you did not set this up, sign in and turn it off on the Security page, "
+                            "then change the password.\n" % cfg.get("base_url", ""))
+    if problem:
+        return "Your password was right, but the test message did not go. " + problem
+    cfg["at"] = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    d["email"] = cfg
+    return None
+
+
+def _pw_base_url(request):
+    """The address the owner is using right now, taken from a signed-in request, so the
+    emailed link never depends on anything an anonymous visitor can send."""
+    origin = (request.headers.get("origin") or "").strip().rstrip("/")
+    if re.match(r"^https?://[A-Za-z0-9.-]+(:\d{1,5})?$", origin):
+        return origin
+    host = (request.headers.get("host") or "").strip()
+    if re.match(r"^[A-Za-z0-9.-]+(:\d{1,5})?$", host):
+        return ("https" if request.headers.get("x-forwarded-proto", "https") == "https" else "http") + "://" + host
+    return ""
+
+
+@app.post("/security/password-email")
+def password_email_set(b: PasswordEmail, request: Request, _auth=Depends(require_auth)):
+    to, host, user = b.to.strip(), b.host.strip().lower(), b.user.strip()
+    if not b.current or len(b.current) > 256:
+        raise HTTPException(status_code=400, detail="Enter your current dashboard password.")
+    if not re.match(r"^[^@\s]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,}$", to):
+        raise HTTPException(status_code=400, detail="Enter the email address that should receive the reset link.")
+    if not re.match(r"^[A-Za-z0-9.-]{1,253}$", host) or b.port not in _PW_SMTP_PORTS:
+        raise HTTPException(status_code=400, detail="Enter the outgoing mail server and a port of 587 or 465.")
+    if not user or len(user) > 200 or not b.password or len(b.password) > 500 or re.search(r"[\r\n]", user):
+        raise HTTPException(status_code=400, detail="Enter the mail account's username and password.")
+    base = _pw_base_url(request)
+    if not base:
+        raise HTTPException(status_code=400, detail="Could not work out this dashboard's address. Reload the page and try again.")
+    cfg = {"to": to, "host": host, "port": int(b.port), "user": user, "base_url": base,
+           "pass_enc": fernet.encrypt(b.password.encode()).decode()}
+    with _pw_lock:
+        d = _pw_state()
+        if _pw_pending(d):
+            raise HTTPException(status_code=409, detail="A password request is already being handled. Try again in a few minutes.")
+        return {"id": _pw_submit(d, "verify", b.current, "",
+                                 {"kind": "email", "settings_enc": fernet.encrypt(json.dumps(cfg).encode()).decode()})}
+
+
+@app.delete("/security/password-email")
+def password_email_off(_auth=Depends(require_auth)):
+    with _pw_lock:
+        d = _pw_state()
+        d.pop("email", None)
+        d.pop("link", None)
+        _pw_save(d)
+    return {"ok": True}
+
+
+@app.post("/account/reset-link")
+def account_reset_link():
+    """Forgotten password, no sign-in: mail the saved address a one-time link. Takes no
+    input at all, so a visitor can only cause mail to the owner's own address, and at
+    most three an hour."""
+    with _pw_lock:
+        d = _pw_state()
+        cfg = d.get("email")
+        if not cfg:
+            return JSONResponse(status_code=400, content={"error": "Reset by email is not set up on this system."})
+        now = time.time()
+        sent = [t for t in (d.get("link_sent") or []) if now - float(t) < 3600]
+        if sent and now - max(sent) < 120:
+            return JSONResponse(status_code=429, content={"error": "A link was sent a moment ago. Check the inbox, then try again in a couple of minutes."})
+        if len(sent) >= 3:
+            return JSONResponse(status_code=429, content={"error": "Three links have been sent in the last hour. Try again later, or use your reset code."})
+        token = base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip("=")
+        problem = _pw_send_mail(cfg, "Agent OS: reset your password",
+                                "Someone asked to reset the Agent OS dashboard password.\n\nOpen this link within 30 minutes "
+                                "to choose a new one. It works once.\n\n%s/sct-brand/reset.html#t=%s\n\nIf this was not you, "
+                                "ignore this message: the password has not changed.\n" % (cfg.get("base_url", ""), token))
+        sent.append(now)
+        d["link_sent"] = sent
+        if problem:
+            _pw_save(d)
+            return JSONResponse(status_code=502, content={"error": "The email could not be sent. Use your reset code, or ask whoever looks after this server."})
+        d["link"] = {"hash": _pw_hash(token), "exp": now + _PW_LINK_SECONDS}
+        _pw_save(d)
+        return {"sent": True}
 
 
 @app.get("/security/password")
 def password_info(_auth=Depends(require_auth)):
     d = _pw_state()
+    em = d.get("email") or {}
     return {"reset_code_set": bool(d.get("code_hash")), "reset_code_at": d.get("code_at"),
-            "changed_at": d.get("changed_at"), "busy": bool(_pw_pending(d)), "rule": _PW_RULE}
+            "changed_at": d.get("changed_at"), "busy": bool(_pw_pending(d)), "rule": _PW_RULE,
+            "email": {"to": em.get("to"), "host": em.get("host"), "port": em.get("port"), "user": em.get("user"),
+                      "at": em.get("at")} if em else None}
 
 
 @app.post("/security/password")
@@ -2079,7 +2233,7 @@ def account_reset_info():
     """For the reset page (no sign-in): only whether a reset is possible right now."""
     d = _pw_state()
     wait = max(0, int(float(d.get("locked_until") or 0) - time.time()))
-    return {"available": bool(d.get("code_hash")), "locked_seconds": wait, "rule": _PW_RULE}
+    return {"available": bool(d.get("code_hash")), "email": bool(d.get("email")), "locked_seconds": wait, "rule": _PW_RULE}
 
 
 @app.post("/account/reset")
@@ -2092,18 +2246,27 @@ def account_reset(b: PasswordReset):
         if wait:
             return JSONResponse(status_code=429, content={"error": "Too many wrong codes. Try again in %d minutes." % ((wait + 59) // 60)})
         code = _pw_norm_code(b.code)
-        if not d.get("code_hash") or len(code) != 24 or not hmac.compare_digest(_pw_hash(code), str(d.get("code_hash"))):
+        link = d.get("link") or {}
+        if b.token:
+            proven = bool(link) and re.match(r"^[A-Za-z0-9_-]{30,80}$", b.token) is not None \
+                and time.time() < float(link.get("exp") or 0) and hmac.compare_digest(_pw_hash(b.token), str(link.get("hash")))
+            wrong = "That link has expired or has already been used. Ask for a new one."
+        else:
+            proven = bool(d.get("code_hash")) and len(code) == 24 and hmac.compare_digest(_pw_hash(code), str(d.get("code_hash")))
+            wrong = "That reset code is not right."
+        if not proven:
             d["fails"] = int(d.get("fails") or 0) + 1
             if d["fails"] >= 5:
                 d["locked_until"] = time.time() + min(86400, 900 * (2 ** (d["fails"] - 5)))
             _pw_save(d)
-            return JSONResponse(status_code=400, content={"error": "That reset code is not right."})
+            return JSONResponse(status_code=400, content={"error": wrong})
         if not _PW_ALLOWED.match(b.new or ""):
             return JSONResponse(status_code=400, content={"error": "That password cannot be used. " + _PW_RULE})
         if _pw_pending(d):
             return JSONResponse(status_code=409, content={"error": "A password request is already being handled. Try again in a few minutes."})
         d["fails"] = 0
         d["locked_until"] = 0
+        d.pop("link", None)            # an emailed link works once
         return {"id": _pw_submit(d, "reset", "", b.new)}
 
 
@@ -2148,7 +2311,14 @@ def password_result(id: str = ""):
         outcome = {"id_hash": idh, "ok": ok, "mode": p.get("mode"), "at": time.time(),
                    "message": str(res.get("message") or "")[:300]}
         code = None
-        if ok:
+        if ok and p.get("kind") == "email":
+            # The current password was right: now prove the mail settings by sending a
+            # test message, and only keep them if it goes.
+            outcome["mode"] = "email"
+            problem = _pw_email_apply(d, p)
+            outcome["ok"] = ok = not problem
+            outcome["message"] = problem or "Reset by email is on. A test message was sent."
+        elif ok:
             code = _pw_new_code()
             d["code_hash"] = _pw_hash(_pw_norm_code(code))
             d["code_at"] = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")

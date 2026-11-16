@@ -37,10 +37,15 @@
 
   <section id="s-form">
     <h1>Reset your password</h1>
-    <p>Enter the reset code you saved when the password was set, and choose a new password.</p>
+    <p id="lead">Enter the reset code you saved when the password was set, and choose a new password.</p>
+    <div id="mailbox" hidden>
+      <button id="mail" type="button" class="second" style="margin:0 0 8px">Email me a reset link</button>
+      <div id="mailmsg" class="msg" role="status" style="margin:0 0 8px" hidden></div>
+      <p style="margin:14px 0">or use your reset code</p>
+    </div>
     <form id="f" autocomplete="off">
-      <label for="code">Reset code</label>
-      <input id="code" type="text" autocapitalize="characters" autocomplete="off" spellcheck="false" maxlength="40" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" required>
+      <label for="code" id="codelabel">Reset code</label>
+      <input id="code" type="text" autocapitalize="characters" autocomplete="off" spellcheck="false" maxlength="40" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX">
       <label for="pw">New password</label>
       <input id="pw" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
       <label for="pw2">New password again</label>
@@ -60,7 +65,7 @@
 
   <section id="s-done" hidden>
     <h1>Password changed</h1>
-    <p>The code you used no longer works. This is your new reset code. Save it somewhere that is not this server; it is not shown again.</p>
+    <p>Any earlier reset code or link no longer works. This is your new reset code. Save it somewhere that is not this server; it is not shown again.</p>
     <code id="newcode" class="code"></code>
     <button id="dl" type="button" class="second">Download as a file</button>
     <label class="remember"><input id="saved" type="checkbox"> I have saved this code</label>
@@ -71,6 +76,13 @@
 (function () {
   function $(i) { return document.getElementById(i); }
   var KEY = "aos-reset-id";
+  // Arrived from an emailed link? The link itself is the proof, so no code is asked for.
+  var TOKEN = (location.hash.match(/^#t=([A-Za-z0-9_-]{30,80})$/) || [])[1] || "";
+  if (TOKEN) {
+    try { history.replaceState(null, "", location.pathname); } catch (e) {}
+    $("lead").textContent = "Choose a new password.";
+    $("code").hidden = true; $("codelabel").hidden = true;
+  }
   function show(t) { $("msg").textContent = t; $("msg").hidden = !t; }
   function stage(n) { ["s-form", "s-wait", "s-done"].forEach(function (s) { $(s).hidden = s !== n; }); }
   function stored(v) { try { if (v === undefined) return sessionStorage.getItem(KEY); if (v) sessionStorage.setItem(KEY, v); else sessionStorage.removeItem(KEY); } catch (e) {} return v; }
@@ -98,7 +110,8 @@
   fetch("/api/connectors/account/reset", { credentials: "same-origin", cache: "no-store" }).then(json).then(function (x) {
     if (x.status === 401) { location.replace("/sct-brand/mfa.html"); return; }
     if (x.ok && x.j.rule) $("rule").textContent = x.j.rule;
-    if (x.ok && !x.j.available && !stored()) { $("go").disabled = true; show("No reset code has been set up on this system. Whoever looks after this server can set a new password for you."); }
+    if (x.ok && x.j.email && !TOKEN) $("mailbox").hidden = false;
+    if (x.ok && !x.j.available && !x.j.email && !TOKEN && !stored()) { $("go").disabled = true; show("No reset code has been set up on this system. Whoever looks after this server can set a new password for you."); }
   }).catch(function () {});
 
   var pending = stored();
@@ -107,13 +120,23 @@
   $("f").addEventListener("submit", function (e) {
     e.preventDefault(); show("");
     if ($("pw").value !== $("pw2").value) { show("The two passwords do not match."); return; }
+    if (!TOKEN && !$("code").value.trim()) { show("Enter your reset code."); return; }
     $("go").disabled = true;
     fetch("/api/connectors/account/reset", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: $("code").value, "new": $("pw").value }) }).then(json)
+      body: JSON.stringify({ code: TOKEN ? "" : $("code").value, token: TOKEN, "new": $("pw").value }) }).then(json)
       .then(function (x) {
         if (x.ok && x.j.id) { stored(x.j.id); $("pw").value = ""; $("pw2").value = ""; $("code").value = ""; stage("s-wait"); poll(x.j.id); return; }
         $("go").disabled = false; show((x.j && (x.j.error || x.j.detail)) || "That did not work. Please try again.");
       }).catch(function () { $("go").disabled = false; show("Could not reach the server. Check your connection and try again."); });
+  });
+  $("mail").addEventListener("click", function () {
+    var m = $("mailmsg"); $("mail").disabled = true; m.hidden = true;
+    fetch("/api/connectors/account/reset-link", { method: "POST", credentials: "same-origin" }).then(json)
+      .then(function (x) {
+        m.textContent = x.ok ? "A link has been sent to the owner's email address. It works for 30 minutes."
+          : ((x.j && (x.j.error || x.j.detail)) || "The email could not be sent.");
+        m.hidden = false; if (!x.ok) $("mail").disabled = false;
+      }).catch(function () { m.textContent = "Could not reach the server. Try again."; m.hidden = false; $("mail").disabled = false; });
   });
   $("saved").addEventListener("change", function () { $("signin").disabled = !$("saved").checked; });
   $("signin").addEventListener("click", function () { location.replace("/"); });

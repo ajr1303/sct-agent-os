@@ -214,6 +214,11 @@ on the sign-in page takes that code and a new password. The code works once and 
 one is issued each time. Someone with no reset code needs whoever looks after the
 server to run `sudo ./scripts/dashboard-password.sh`.
 
+**Reset by email** is optional and set up on the same page: give the address that
+should get the link and a mail account for the server to send from, and "Forgot
+password?" can then email a one-time link that lasts 30 minutes. Anyone who can read
+that mailbox can reset the dashboard password.
+
 ## Two-step sign-in
 
 The **Security** page adds a six-digit code from an authenticator app (Google
@@ -385,7 +390,7 @@ docs/ARCHITECTURE.md        How the layer works
 
 ## Status
 
-**v0.34.** The last clean one-command install on a fresh VM was run at v0.26 (Hermes v0.23.1, n8n 2.47.5), reached through a Cloudflare Tunnel. Changes since then are tested piece by piece but a fresh end-to-end install of this version has not been rerun yet.
+**v0.35.** The last clean one-command install on a fresh VM was run at v0.26 (Hermes v0.23.1, n8n 2.47.5), reached through a Cloudflare Tunnel. Changes since then are tested piece by piece but a fresh end-to-end install of this version has not been rerun yet.
 
 Verified live:
 
@@ -405,7 +410,7 @@ Verified live:
 Known limitations:
 
 - **Not yet tested: a server reboot, and restoring a backup onto a new server.** Restore opens and checks a backup; putting one back (`--apply`) is unproven, and the team database is not reloaded automatically.
-- **"Update now", and changing or resetting the password from the dashboard, are tested against stand-ins, not yet on a live install.**
+- **"Update now", and changing or resetting the password from the dashboard, are tested against stand-ins, not yet on a live install. Reset by email has not yet sent through a real mail server.**
 - **The stuck-agent watch's scheduled run in n8n, the Appointments tile, Link my team, several sites on the Website page, the installer changes in v0.28, team chart, task replies and the Agents page editor are tested against stand-ins** (a mock board, and for the model check a local database and mock gateways), not yet confirmed on a live one.
 - **Bookings and Mailboxes are view-only.** Agents cannot yet book appointments or send/draft email.
 - **Per-agent model choice does not apply to delegated tasks** (all Paperclip runs use the default Hermes profile).
