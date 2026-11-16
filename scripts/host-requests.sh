@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Carries out requests made from the dashboard that need the host (cron, every minute).
-# Three things today: keeping the proxy's two-step sign-in switch in step with the
-# dashboard, "Update now" (see scripts/update-requested.sh), and "Link my team", which
-# runs scripts/paperclip-connect.sh. The dashboard leaves
+# Four things today: keeping the proxy's two-step sign-in switch in step with the
+# dashboard, "Update now" (see scripts/update-requested.sh), a dashboard password
+# change or reset (see scripts/dashboard-password.sh), and "Link my team", which runs
+# scripts/paperclip-connect.sh. The dashboard leaves
 # data/backup/link-paperclip (optionally holding the owner's email); the outcome goes
 # to data/backup/link-result.json for the page to show.
 set -u
@@ -57,6 +58,11 @@ update_requested() {
   fi
 }
 update_requested
+
+# --- Dashboard password change or reset ------------------------------------------------
+if [ -f data/backup/password-request ] && [ -x scripts/dashboard-password.sh ]; then
+  ./scripts/dashboard-password.sh --from-request
+fi
 
 REQ=data/backup/link-paperclip
 RES=data/backup/link-result.json

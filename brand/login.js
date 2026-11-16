@@ -61,6 +61,17 @@
       while ((tn = wk.nextNode())) {
         if (tn.nodeValue && tn.nodeValue.indexOf("Hermes Agent") !== -1) tn.nodeValue = tn.nodeValue.replace(/Hermes Agent/g, "Suburban Cyber Agent OS");
       }
+      // "Forgot password?" under the sign-in button
+      if (!document.getElementById("sct-forgot")) {
+        var sb = null, bl = document.querySelectorAll("button");
+        for (var q = 0; q < bl.length; q++) { if (norm(bl[q].textContent) === "sign in") { sb = bl[q]; break; } }
+        if (sb && sb.parentNode) {
+          var fa = document.createElement("a");
+          fa.id = "sct-forgot"; fa.href = "/sct-brand/reset.html"; fa.textContent = "Forgot password?";
+          fa.style.cssText = "display:block;margin-top:14px;text-align:center;font-size:13px;color:#25c9ee;text-decoration:none";
+          sb.parentNode.insertBefore(fa, sb.nextSibling);
+        }
+      }
       // recolor the SIGN IN button to brand cyan
       var btns = document.querySelectorAll("button");
       for (var b = 0; b < btns.length; b++) {

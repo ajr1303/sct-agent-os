@@ -124,7 +124,7 @@ sudo ./scripts/set-hostnames.sh agent-os.example.com
 
 It derives `agent-os-paperclip.example.com` and `agent-os-n8n.example.com` (one-level names, so the free Cloudflare certificate covers them), writes the settings to `.env`, prints the three tunnel routes to create, and runs the updater. Details in [docs/RUNBOOK.md](docs/RUNBOOK.md) §3.
 
-**Login:** the installer generates a random dashboard password (user `admin`) and prints it at the end; it's also stored in `/opt/sct-agent-os/.env` as `DASHBOARD_PASSWORD`. To change it, edit that value and run `sudo ./scripts/update.sh` (a plain restart does not pick it up).
+**Login:** the installer generates a random dashboard password (user `admin`) and prints it at the end. Change it on the **Security** page, which then shows a one-time **reset code**: save it, because "Forgot password?" on the sign-in page needs it to set a new password. With no reset code, `sudo ./scripts/dashboard-password.sh` on the server sets a new password.
 
 ---
 
@@ -204,6 +204,15 @@ and copied to Google Drive, S3-compatible storage or another supported store.
 The Overview shows when the last backup ran and whether the off-site copy worked.
 `sudo ./scripts/restore.sh <file>` opens a backup and checks every part. Details and
 the restore steps are in [docs/RUNBOOK.md](docs/RUNBOOK.md) §13.
+
+## Password and reset code
+
+On the **Security** page the owner can change the dashboard password (current
+password, then the new one) without touching the server. After every change the page
+shows a **reset code** once. If the password is later forgotten, **Forgot password?**
+on the sign-in page takes that code and a new password. The code works once and a new
+one is issued each time. Someone with no reset code needs whoever looks after the
+server to run `sudo ./scripts/dashboard-password.sh`.
 
 ## Two-step sign-in
 
@@ -359,8 +368,9 @@ scripts/
   sync-chat-tools.sh        Install the chat-tools config and routing skill
   backup.sh, restore.sh     Nightly full backup; open, check and restore one
   install-cron.sh           Install or refresh every scheduled job
-  host-requests.sh          Carries out dashboard requests that need the host (Update now, Link my team, two-step sign-in switch)
+  host-requests.sh          Carries out dashboard requests that need the host (Update now, password changes, Link my team, two-step sign-in switch)
   update-requested.sh       Runs the updater for the dashboard's "Update now" button and records the result
+  dashboard-password.sh     Set a new dashboard password from the server
   mfa-reset.sh              Turn two-step sign-in off from the server (lost phone)
   agent-models.sh, agent-ssh.sh  Read each agent's model; allow model changes over SSH
   enable-plugins.sh, gen-tls.sh, watchdog.sh, smoke-test.sh, check-updates.sh
@@ -375,7 +385,7 @@ docs/ARCHITECTURE.md        How the layer works
 
 ## Status
 
-**v0.33.** The last clean one-command install on a fresh VM was run at v0.26 (Hermes v0.23.1, n8n 2.47.5), reached through a Cloudflare Tunnel. Changes since then are tested piece by piece but a fresh end-to-end install of this version has not been rerun yet.
+**v0.34.** The last clean one-command install on a fresh VM was run at v0.26 (Hermes v0.23.1, n8n 2.47.5), reached through a Cloudflare Tunnel. Changes since then are tested piece by piece but a fresh end-to-end install of this version has not been rerun yet.
 
 Verified live:
 
@@ -395,7 +405,7 @@ Verified live:
 Known limitations:
 
 - **Not yet tested: a server reboot, and restoring a backup onto a new server.** Restore opens and checks a backup; putting one back (`--apply`) is unproven, and the team database is not reloaded automatically.
-- **"Update now" on the banner is tested against a stand-in updater, not yet on a live install.**
+- **"Update now", and changing or resetting the password from the dashboard, are tested against stand-ins, not yet on a live install.**
 - **The stuck-agent watch's scheduled run in n8n, the Appointments tile, Link my team, several sites on the Website page, the installer changes in v0.28, team chart, task replies and the Agents page editor are tested against stand-ins** (a mock board, and for the model check a local database and mock gateways), not yet confirmed on a live one.
 - **Bookings and Mailboxes are view-only.** Agents cannot yet book appointments or send/draft email.
 - **Per-agent model choice does not apply to delegated tasks** (all Paperclip runs use the default Hermes profile).

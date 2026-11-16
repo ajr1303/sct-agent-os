@@ -23,6 +23,99 @@
     }
     function when(iso) { try { return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }); } catch (e) { return ""; } }
 
+    // Password: change it, and keep a reset code for the day it is forgotten.
+    function PasswordCard() {
+      var s;
+      s = useState(null);  var info = s[0], setInfo = s[1];
+      s = useState("");    var mode = s[0], setMode = s[1];          // "" | "change" | "code"
+      s = useState({ current: "", next: "", again: "" }); var f = s[0], setF = s[1];
+      s = useState("");    var err = s[0], setErr = s[1];
+      s = useState("");    var waitId = s[0], setWaitId = s[1];
+      s = useState(null);  var done = s[0], setDone = s[1];          // {mode, reset_code}
+      s = useState(false); var saved = s[0], setSaved = s[1];
+      var KEY = "aos-pw-id";
+      function stored(v) { try { if (v === undefined) return sessionStorage.getItem(KEY) || ""; if (v) sessionStorage.setItem(KEY, v); else sessionStorage.removeItem(KEY); } catch (e) {} return v || ""; }
+      function load() { return api("/security/password").then(setInfo).catch(function () {}); }
+      useEffect(function () { load(); var id = stored(); if (id) setWaitId(id); }, []);
+      useEffect(function () {
+        if (!waitId) return;
+        var stop = false, tries = 0;
+        function tick() {
+          if (stop) return;
+          fetch("/api/connectors/account/password-result?id=" + waitId, { credentials: "same-origin", cache: "no-store" })
+            .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, status: r.status, j: j }; }); })
+            .then(function (x) {
+              if (stop) return;
+              if (x.ok && x.j.done) {
+                stored(""); setWaitId(""); setF({ current: "", next: "", again: "" });
+                if (x.j.ok) { setMode(""); setDone({ mode: x.j.mode, reset_code: x.j.reset_code }); load(); }
+                else setErr(x.j.message || "That did not work. Please try again.");
+                return;
+              }
+              if (x.status === 404 || x.status === 400) { stored(""); setWaitId(""); return; }
+              next();
+            }).catch(next);
+        }
+        function next() { tries++; if (tries > 80) { stored(""); setWaitId(""); setErr("This is taking longer than expected. Reload the page in a few minutes."); return; } setTimeout(tick, 4000); }
+        tick();
+        return function () { stop = true; };
+      }, [waitId]);
+      function set(k) { return function (e) { var n = Object.assign({}, f); n[k] = e.target.value; setF(n); }; }
+      function submit(e) {
+        e.preventDefault(); setErr("");
+        if (mode === "change" && f.next !== f.again) { setErr("The two new passwords do not match."); return; }
+        api("/security/password", { method: "POST", body: JSON.stringify({ current: f.current, "new": mode === "change" ? f.next : "" }) })
+          .then(function (x) { stored(x.id); setWaitId(x.id); })
+          .catch(function (e2) { setErr(String(e2.message || e2)); });
+      }
+      function download() {
+        var text = "Agent OS password reset code\n" + new Date().toISOString().slice(0, 10) + "\n\nUse this on the sign-in page (Forgot password?) to set a new password. It works once.\n\n" + done.reset_code + "\n";
+        var a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" })); a.download = "agent-os-reset-code.txt";
+        document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+      }
+      function pw(label, k, auto) {
+        return h("label", { className: "ss-field" }, h("span", null, label),
+          h("input", { className: "ss-in", type: "password", autoComplete: auto, value: f[k], maxLength: 256, onChange: set(k) }));
+      }
+
+      if (done) return h("div", { className: "ss-card" },
+        h("div", { className: "ss-name" }, done.mode === "change" ? "Password changed. Save your new reset code" : "Save your reset code"),
+        h("div", { className: "ss-p" }, "If you ever forget the password, this code lets you set a new one from the sign-in page (Forgot password?). It works once, and any earlier reset code has stopped working. Keep it somewhere safe that is not this server: a password manager, or printed. It is not shown again."),
+        done.reset_code ? h("code", { className: "ss-secret" }, done.reset_code)
+          : h("div", { className: "ss-msg" }, "The code could not be shown. Use “Get a new reset code” below to make another."),
+        done.reset_code ? h("div", { className: "ss-acts ss-left" }, h("button", { type: "button", className: "ss-btn", onClick: download }, "Download as a file")) : null,
+        h("label", { className: "ss-check" }, h("input", { type: "checkbox", checked: saved, onChange: function (e) { setSaved(e.target.checked); } }),
+          h("span", null, "I have saved this code.")),
+        h("div", { className: "ss-acts ss-left" }, h("button", { type: "button", className: "ss-btn ss-primary", disabled: !saved && !!done.reset_code,
+          onClick: function () { setDone(null); setSaved(false); } }, "Done")),
+        done.mode === "change" ? h("div", { className: "ss-dim ss-small" }, "You may be asked to sign in again with the new password.") : null);
+
+      if (waitId) return h("div", { className: "ss-card" },
+        h("div", { className: "ss-head" }, h("div", { className: "ss-name" }, "Password"), h("span", { className: "ss-state ss-wait" }, "Working…")),
+        h("div", { className: "ss-p" }, "The server is checking your password" + (mode === "change" ? " and applying the new one. The dashboard restarts, so this can take a minute or two and you may be asked to sign in again." : ". This takes up to a minute.") + " Keep this page open."));
+
+      return h("div", { className: "ss-card" },
+        h("div", { className: "ss-head" }, h("div", { className: "ss-name" }, "Password"),
+          info ? h("span", { className: "ss-state " + (info.reset_code_set ? "ss-on" : "ss-wait") }, info.reset_code_set ? "Reset code saved" : "No reset code yet") : null),
+        h("div", { className: "ss-p" }, "The password for signing in to this dashboard as admin. A reset code lets you set a new password yourself if you forget it."
+          + (info && info.reset_code_set && info.reset_code_at ? " Your reset code was made on " + when(info.reset_code_at) + "." : "")),
+        info && !info.reset_code_set && !mode ? h("div", { className: "ss-msg" }, "You have no reset code. If the password is forgotten, only someone with access to the server can reset it. Get a code now.") : null,
+        mode ? h("form", { className: "ss-ask", onSubmit: submit },
+            pw("Current password", "current", "current-password"),
+            mode === "change" ? pw("New password", "next", "new-password") : null,
+            mode === "change" ? pw("New password again", "again", "new-password") : null,
+            mode === "change" && info ? h("div", { className: "ss-dim ss-small" }, info.rule) : null,
+            mode === "change" ? h("div", { className: "ss-dim ss-small" }, "The dashboard restarts for about a minute. Agents and automations keep running.") : null,
+            err ? h("div", { className: "ss-msg" }, err) : null,
+            h("div", { className: "ss-acts ss-left" },
+              h("button", { type: "submit", className: "ss-btn ss-primary", disabled: !f.current || (mode === "change" && (f.next.length < 12 || !f.again)) }, mode === "change" ? "Change password" : "Get the code"),
+              h("button", { type: "button", className: "ss-btn", onClick: function () { setMode(""); setErr(""); setF({ current: "", next: "", again: "" }); } }, "Cancel")))
+          : h("div", { className: "ss-acts ss-left" },
+              err ? h("div", { className: "ss-msg" }, err) : null,
+              h("button", { type: "button", className: "ss-btn", onClick: function () { setMode("change"); setErr(""); } }, "Change password"),
+              h("button", { type: "button", className: "ss-btn", onClick: function () { setMode("code"); setErr(""); } }, info && info.reset_code_set ? "Get a new reset code" : "Get a reset code")));
+    }
+
     function Security() {
       var s;
       s = useState(null);  var d = s[0], setD = s[1];
@@ -129,7 +222,8 @@
       }
       return h("div", { className: "ss-wrap" },
         h("div", { className: "ss-h1" }, "Security"),
-        h("div", { className: "ss-sub" }, "Extra protection for signing in to this dashboard."),
+        h("div", { className: "ss-sub" }, "Your password and extra protection for signing in to this dashboard."),
+        h(PasswordCard),
         body);
     }
     try { PLUGINS.register("suburban-security", Security); console.info(TAG, "registered"); }

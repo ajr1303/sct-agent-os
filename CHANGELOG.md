@@ -2,6 +2,20 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.34.0] — 2026-11-16 — Change and reset the password from the dashboard
+
+- **Security page: Change password.** Enter the current password and a new one. The
+  dashboard restarts for about a minute; agents and automations keep running.
+- **Reset code.** After each change the page shows a one-time code. Save it: it sets a
+  new password if the old one is forgotten. Existing installs can get one with "Get a
+  reset code" (asks for the current password).
+- **Forgot password?** on the sign-in page takes the reset code and a new password, and
+  then shows the next reset code. Wrong codes lock the page for a while.
+- For whoever looks after the server: `sudo ./scripts/dashboard-password.sh` sets a new
+  random password (or `--ask`), replacing the old "edit .env and run the updater".
+- Passwords are 12 to 128 characters from letters, numbers and
+  `! @ % ^ * ( ) _ + . , : ; ? ~ -`.
+
 ## [0.33.0] — 2026-11-16 — Update from the dashboard
 
 - The "Update available" banner on the Overview now has an **Update now** button, so

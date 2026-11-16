@@ -1972,6 +1972,199 @@ def system_update_request(_auth=Depends(require_auth)):
     return {"requested": True}
 
 
+# --- Dashboard password: change, and reset with a saved code --------------------------
+# The password is DASHBOARD_PASSWORD in the host's .env, which this service cannot see
+# or write. A change is left as a request for the host's every-minute job
+# (scripts/dashboard-password.sh), which checks the current password against .env,
+# writes the new one and restarts the dashboard. The browser gets a random request id
+# and polls for the outcome with it, because its session may not survive the restart.
+#
+# Forgotten password: the owner holds a one-time reset code, shown once after each
+# successful password operation. Only its hash is kept. The reset page is reachable
+# without the password (it sits behind two-step sign-in when that is on).
+_PW_REQ = os.path.join(os.environ.get("AOS_BACKUP_CONFIG", "/backup-config"), "password-request")
+_PW_RES = os.path.join(os.environ.get("AOS_BACKUP_CONFIG", "/backup-config"), "password-result.json")
+_PW_ALLOWED = re.compile(r"^[A-Za-z0-9!@%^*()_+.,:;?~-]{12,128}$")
+_PW_RULE = "Use 12 or more letters, numbers and these symbols: ! @ % ^ * ( ) _ + . , : ; ? ~ -"
+_PW_PENDING_SECONDS = 6 * 60
+_pw_lock = threading.Lock()
+
+
+def _pw_hash(text):
+    return hashlib.sha256(("aos-reset:" + text).encode()).hexdigest()
+
+
+def _pw_norm_code(code):
+    return re.sub(r"[^A-Z2-7]", "", (code or "").upper())
+
+
+def _pw_new_code():
+    raw = base64.b32encode(os.urandom(15)).decode()          # 24 characters, 120 bits
+    return "-".join(raw[i:i + 4] for i in range(0, 24, 4))
+
+
+def _pw_state():
+    try:
+        d = json.loads(_kv_get("password_state") or "{}")
+    except Exception:
+        d = {}
+    return d if isinstance(d, dict) else {}
+
+
+def _pw_save(d):
+    _kv_set("password_state", json.dumps(d))
+
+
+def _pw_pending(d):
+    p = d.get("pending") or {}
+    return p if p and time.time() - float(p.get("at") or 0) < _PW_PENDING_SECONDS else None
+
+
+def _pw_submit(d, mode, current, new):
+    """Leave a request for the host. Returns the id the browser polls with."""
+    rid = os.urandom(24).hex()
+    os.makedirs(os.path.dirname(_PW_REQ), exist_ok=True)
+    try:
+        os.remove(_PW_RES)
+    except FileNotFoundError:
+        pass
+    fd = os.open(_PW_REQ, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write("%s\n%s\n%s\n%s\n" % (mode, rid, base64.b64encode(current.encode()).decode(),
+                                      base64.b64encode(new.encode()).decode()))
+    d["pending"] = {"id_hash": _pw_hash(rid), "mode": mode, "at": time.time()}
+    d.pop("outcome", None)
+    _pw_save(d)
+    return rid
+
+
+class PasswordChange(BaseModel):
+    current: str = ""
+    new: str = ""
+
+
+class PasswordReset(BaseModel):
+    code: str = ""
+    new: str = ""
+
+
+@app.get("/security/password")
+def password_info(_auth=Depends(require_auth)):
+    d = _pw_state()
+    return {"reset_code_set": bool(d.get("code_hash")), "reset_code_at": d.get("code_at"),
+            "changed_at": d.get("changed_at"), "busy": bool(_pw_pending(d)), "rule": _PW_RULE}
+
+
+@app.post("/security/password")
+def password_change(b: PasswordChange, _auth=Depends(require_auth)):
+    """Change the password (current + new), or with no new password just prove the
+    current one to get a fresh reset code."""
+    mode = "change" if b.new else "verify"
+    if not b.current or len(b.current) > 256:
+        raise HTTPException(status_code=400, detail="Enter your current password.")
+    if mode == "change":
+        if not _PW_ALLOWED.match(b.new):
+            raise HTTPException(status_code=400, detail="That password cannot be used. " + _PW_RULE)
+        if b.new == b.current:
+            raise HTTPException(status_code=400, detail="The new password is the same as the current one.")
+    with _pw_lock:
+        d = _pw_state()
+        if _pw_pending(d):
+            raise HTTPException(status_code=409, detail="A password request is already being handled. Try again in a few minutes.")
+        return {"id": _pw_submit(d, mode, b.current, b.new if mode == "change" else "")}
+
+
+@app.get("/account/reset")
+def account_reset_info():
+    """For the reset page (no sign-in): only whether a reset is possible right now."""
+    d = _pw_state()
+    wait = max(0, int(float(d.get("locked_until") or 0) - time.time()))
+    return {"available": bool(d.get("code_hash")), "locked_seconds": wait, "rule": _PW_RULE}
+
+
+@app.post("/account/reset")
+def account_reset(b: PasswordReset):
+    """Forgotten password. No sign-in: the saved reset code is the proof. Five wrong
+    codes lock this for 15 minutes, then longer."""
+    with _pw_lock:
+        d = _pw_state()
+        wait = max(0, int(float(d.get("locked_until") or 0) - time.time()))
+        if wait:
+            return JSONResponse(status_code=429, content={"error": "Too many wrong codes. Try again in %d minutes." % ((wait + 59) // 60)})
+        code = _pw_norm_code(b.code)
+        if not d.get("code_hash") or len(code) != 24 or not hmac.compare_digest(_pw_hash(code), str(d.get("code_hash"))):
+            d["fails"] = int(d.get("fails") or 0) + 1
+            if d["fails"] >= 5:
+                d["locked_until"] = time.time() + min(86400, 900 * (2 ** (d["fails"] - 5)))
+            _pw_save(d)
+            return JSONResponse(status_code=400, content={"error": "That reset code is not right."})
+        if not _PW_ALLOWED.match(b.new or ""):
+            return JSONResponse(status_code=400, content={"error": "That password cannot be used. " + _PW_RULE})
+        if _pw_pending(d):
+            return JSONResponse(status_code=409, content={"error": "A password request is already being handled. Try again in a few minutes."})
+        d["fails"] = 0
+        d["locked_until"] = 0
+        return {"id": _pw_submit(d, "reset", "", b.new)}
+
+
+@app.get("/account/password-result")
+def password_result(id: str = ""):
+    """Outcome of a change or reset, for the browser that asked (it holds the id). On
+    success this is also where the new reset code is handed over; it stays readable
+    with the id for ten minutes in case the page reloads while the dashboard restarts."""
+    if not re.match(r"^[a-f0-9]{48}$", id or ""):
+        raise HTTPException(status_code=400, detail="Bad request.")
+    idh = _pw_hash(id)
+    with _pw_lock:
+        d = _pw_state()
+        out = d.get("outcome") or {}
+        if out and hmac.compare_digest(str(out.get("id_hash")), idh):
+            if time.time() - float(out.get("at") or 0) > 600:
+                return {"done": True, "ok": bool(out.get("ok")), "message": out.get("message") or "", "mode": out.get("mode"), "reset_code": None}
+            code = None
+            if out.get("code_enc"):
+                try:
+                    code = fernet.decrypt(out["code_enc"].encode()).decode()
+                except Exception:
+                    code = None
+            return {"done": True, "ok": bool(out.get("ok")), "message": out.get("message") or "", "mode": out.get("mode"), "reset_code": code}
+        p = d.get("pending") or {}
+        if not p or not hmac.compare_digest(str(p.get("id_hash")), idh):
+            raise HTTPException(status_code=404, detail="Nothing to show.")
+        res = None
+        try:
+            with open(_PW_RES, "r", encoding="utf-8") as f:
+                res = json.load(f)
+        except Exception:
+            res = None
+        if not isinstance(res, dict) or not hmac.compare_digest(_pw_hash(str(res.get("id") or "")), idh):
+            if time.time() - float(p.get("at") or 0) > _PW_PENDING_SECONDS:
+                d.pop("pending", None)
+                _pw_save(d)
+                return {"done": True, "ok": False, "mode": p.get("mode"), "reset_code": None,
+                        "message": "The server did not pick this up. Its scheduled jobs may not be running: ask whoever looks after it."}
+            return {"done": False}
+        ok = bool(res.get("ok"))
+        outcome = {"id_hash": idh, "ok": ok, "mode": p.get("mode"), "at": time.time(),
+                   "message": str(res.get("message") or "")[:300]}
+        code = None
+        if ok:
+            code = _pw_new_code()
+            d["code_hash"] = _pw_hash(_pw_norm_code(code))
+            d["code_at"] = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+            if p.get("mode") in ("change", "reset"):
+                d["changed_at"] = d["code_at"]
+            outcome["code_enc"] = fernet.encrypt(code.encode()).decode()
+        d.pop("pending", None)
+        d["outcome"] = outcome
+        _pw_save(d)
+        try:
+            os.remove(_PW_RES)
+        except OSError:
+            pass
+        return {"done": True, "ok": ok, "message": outcome["message"], "mode": outcome["mode"], "reset_code": code}
+
+
 # --- Stuck-agent watch ------------------------------------------------------------
 # Finds agents that have stopped moving and gives them a careful push:
 #   * an agent whose connection failed its check       -> ask Paperclip to retry it

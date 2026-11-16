@@ -243,3 +243,23 @@ denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
 - The request carries no parameters: the updater pulls only the repository and branch
   the install already tracks.
 
+## Dashboard password
+
+- The password is `DASHBOARD_PASSWORD` in the host's `.env`; Hermes reads it at start.
+  The connectors service never sees it.
+- Change: `POST /security/password {current, new}` writes `data/backup/password-request`
+  (mode, random id, base64 current and new; mode 0600) and returns the id.
+  `scripts/host-requests.sh` runs `scripts/dashboard-password.sh --from-request`, which
+  deletes the request, compares `current` with `.env`, rewrites the line, recreates the
+  `hermes` container, restarts the proxy and writes `password-result.json` with the id.
+- The browser polls `GET /account/password-result?id=`; the id is the only credential
+  (the session may not survive the restart). Only a hash of the id is stored.
+- Reset code: 120 random bits, base32. Stored as a SHA-256 hash in `kv`
+  (`password_state`). A new one is generated on every successful change, reset or
+  current-password check, and handed over through the result call (kept encrypted for
+  ten minutes so a reload can still show it).
+- Forgot password: `brand/reset.html` (linked from the sign-in page by `brand/login.js`)
+  calls `POST /account/reset {code, new}` with no session. Five wrong codes lock it for
+  15 minutes, doubling to a day. When two-step sign-in is on, the proxy gate applies
+  to this call as to every other.
+

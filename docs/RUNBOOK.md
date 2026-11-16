@@ -296,12 +296,30 @@ Operations:
 ### The three logins
 | Login | Used by | Reset |
 |---|---|---|
-| Dashboard (`admin`) | The client | Change `DASHBOARD_PASSWORD` in `.env`, then `sudo ./scripts/update.sh` |
+| Dashboard (`admin`) | The client | Client: Security page, or "Forgot password?" with their reset code. Operator: `sudo ./scripts/dashboard-password.sh` |
 | Paperclip | Operator | `sudo ./scripts/paperclip-reset-password.sh` |
 | n8n (owner email) | Operator | n8n's own reset; needs mail configured or a command-line reset. Not yet validated on this stack. |
 
 The dashboard has one shared login. Do not hand a shared password to a team; use
 Cloudflare Access so each person signs in as themselves.
+
+### Dashboard password
+
+- **Change it:** Dashboard > Security > Password > **Change password** (current password,
+  then the new one twice). The dashboard restarts for about a minute; agents and
+  automations keep running. Afterwards the page shows a new **reset code**.
+- **Reset code:** one code, shown once, that sets a new password without the old one.
+  Every successful change or reset replaces it. On an install that has none yet:
+  Security > **Get a reset code** (asks for the current password). Have the client
+  store it away from the server, next to the two-step recovery codes.
+- **Forgot it:** the sign-in page has **Forgot password?**. Enter the reset code and a
+  new password. Five wrong codes lock the page for 15 minutes, then longer. With
+  two-step sign-in on, the code from the phone is asked for first.
+- **No reset code either:** on the server, `sudo ./scripts/dashboard-password.sh`
+  prints a new random password (`--ask` to type one). Give it to the owner directly
+  and have them change it and save a new reset code.
+- Passwords are 12 to 128 characters: letters, numbers and `! @ % ^ * ( ) _ + . , : ; ? ~ -`.
+- Stuck on "Working…": the every-minute job is not running (`sudo ./scripts/install-cron.sh`).
 
 ### Team access with Cloudflare Access (hosted boxes)
 Each person signs in with their own email (one-time code, or Google/Microsoft if you
