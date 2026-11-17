@@ -2,6 +2,15 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.42.1] — 2026-11-17 — Memory note in chat, full workflow list, tables in chat
+
+- **Memory switched off in chat.** Installs made before the installer gave the owner a
+  default name could have an empty name in the memory settings. Hermes then turned
+  memory off and said so at the end of every answer. The updater now fills the gap.
+- **Agents saw only the first 100 workflows.** The workflow list given to agents, and
+  the names on the Automations run list, now cover every workflow.
+- **Tables in chat** are drawn as tables instead of rows of bars.
+
 ## [0.42.0] — 2026-11-16 — Big jobs are split into small tasks
 
 - **A job that is really many jobs no longer runs until it is cut off.** When a task

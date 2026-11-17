@@ -722,3 +722,18 @@ things now prevent that for agents on this server:
 New parts count toward the hourly task limit. Agents on their own servers, and tasks
 created directly in Paperclip, are not covered.
 
+## 23. "Honcho memory is off for this session" in chat
+
+Hermes prints this when the memory settings name no owner. The updater fills an empty
+or missing `peerName` in `data/hermes/honcho.json` with `owner` and restarts Hermes.
+To use the owner's real name instead, set it once before any memories build up:
+
+```bash
+cd /opt/sct-agent-os && sudo docker compose exec -T hermes hermes honcho peer --user "Their Name"
+sudo docker compose restart hermes
+```
+
+Changing the name later starts a new memory profile; what was learned under the old
+name stays filed under it. If the note is still there after an update, read
+`sudo cat data/hermes/honcho.json` (it holds no secrets) and check the `peerName` line.
+

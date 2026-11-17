@@ -51,8 +51,22 @@
           return '<a href="' + esc(u.href) + '" target="_blank" rel="noopener noreferrer">' + label + "</a>";
         } catch (e) { return label; }
       });
+      // Tables: a header row, a |---| row, then rows. Built from text that is already
+      // escaped, and swapped back in after line breaks are added.
+      var tables = [];
+      text = text.replace(/(^|\n)((?:[ \t]*\|[^\n]*\|[ \t]*(?:\n|$)){2,})/g, function (m, lead, block) {
+        var lines = block.replace(/\n$/, "").split("\n");
+        if (!/^[ \t]*\|[\s:|-]+\|[ \t]*$/.test(lines[1]) || lines[1].indexOf("-") < 0) return m;
+        function cells(l) { return l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(function (c) { return c.trim(); }); }
+        var head = cells(lines[0]), rows = lines.slice(2).map(cells);
+        var html = '<div class="scc-tablewrap"><table class="scc-table"><thead><tr>' + head.map(function (c) { return "<th>" + c + "</th>"; }).join("") + "</tr></thead><tbody>"
+          + rows.map(function (r) { return "<tr>" + r.map(function (c) { return "<td>" + c + "</td>"; }).join("") + "</tr>"; }).join("") + "</tbody></table></div>";
+        tables.push(html);
+        return lead + "\u0000T" + (tables.length - 1) + "\u0000";
+      });
       text = text.replace(/(^|\n)\s*[-*]\s+/g, "$1• ");
       text = text.replace(/\n/g, "<br>");
+      text = text.replace(/(?:<br>)?\u0000T(\d+)\u0000(?:<br>)?/g, function (_, i) { return tables[+i]; });
       text = text.replace(/\u0000C(\d+)\u0000/g, function (_, i) { return '<pre class="scc-code">' + esc(blocks[+i]) + "</pre>"; });
       return text;
     }

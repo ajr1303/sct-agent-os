@@ -69,3 +69,7 @@
 .scc-send:disabled{opacity:.4;cursor:default}
 .scc-stop{padding:0 22px;height:44px;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;background:transparent;color:var(--color-destructive,#ff7a73);border:1px solid var(--color-destructive,#ff7a73);border-radius:12px;cursor:pointer}
 @media (max-width:760px){.scc-rail{width:190px}}
+.scc-tablewrap{overflow-x:auto;margin:8px 0}
+.scc-table{border-collapse:collapse;font-size:13px;line-height:1.45;width:100%}
+.scc-table th,.scc-table td{border:1px solid var(--color-border,rgba(255,255,255,.16));padding:6px 10px;text-align:left;vertical-align:top;color:inherit}
+.scc-table th{font-weight:600;background:rgba(255,255,255,.05)}

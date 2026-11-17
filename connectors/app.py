@@ -979,7 +979,14 @@ def deactivate_workflow(wid: str, _auth=Depends(require_auth)):
 @app.get("/automations/executions")
 def automations_executions(_auth=Depends(require_auth)):
     try:
-        wfdata = _n8n_api("/api/v1/workflows", params={"limit": 100})
+        wfdata = {"data": []}
+        cursor = None
+        while len(wfdata["data"]) < 2000:
+            page = _n8n_api("/api/v1/workflows", params=dict({"limit": 250}, **({"cursor": cursor} if cursor else {})))
+            wfdata["data"] += page.get("data") or []
+            cursor = page.get("nextCursor")
+            if not cursor:
+                break
         exdata = _n8n_api("/api/v1/executions", params={"limit": 15})
     except PermissionError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -4718,12 +4725,29 @@ def t_request_hiring_review(a):
             "for them to approve or decline." % (key, _agent_name(ceo)))
 
 
+def _n8n_all_workflows(cap=2000):
+    """Every workflow, following n8n's paging. One page is at most 250, and a business
+    can have more than that, so a single request silently misses the rest."""
+    out, cursor = [], None
+    while len(out) < cap:
+        q = {"limit": 250}
+        if cursor:
+            q["cursor"] = cursor
+        d = _n8n_send("GET", "/api/v1/workflows", q)
+        out += [w for w in (d.get("data") or []) if isinstance(w, dict)]
+        cursor = d.get("nextCursor")
+        if not cursor:
+            break
+    return out
+
+
 def t_list_workflows(a):
-    wfs = (_n8n_send("GET", "/api/v1/workflows", {"limit": 100}).get("data")) or []
+    wfs = _n8n_all_workflows()
     if not wfs:
         return "No workflows yet."
-    return "\n".join("- id %s | %s | %s" % (w.get("id"), "ACTIVE" if w.get("active") else "inactive",
-                                             w.get("name") or "Workflow") for w in wfs)
+    return ("%d workflows in total:\n" % len(wfs)) + "\n".join(
+        "- id %s | %s | %s" % (w.get("id"), "ACTIVE" if w.get("active") else "inactive", w.get("name") or "Workflow")
+        for w in wfs)
 
 
 def t_workflow_failures(a):
@@ -4734,8 +4758,7 @@ def t_workflow_failures(a):
     ex = (_n8n_send("GET", "/api/v1/executions", {"status": "error", "limit": lim}).get("data")) or []
     if not ex:
         return "No failed runs."
-    names = {str(w.get("id")): w.get("name") for w in
-             (_n8n_send("GET", "/api/v1/workflows", {"limit": 100}).get("data") or [])}
+    names = {str(w.get("id")): w.get("name") for w in _n8n_all_workflows()}
     return "\n".join("- run %s | workflow %s (%s) | %s" % (
         e.get("id"), e.get("workflowId"), names.get(str(e.get("workflowId"))) or "?", e.get("startedAt"))
         for e in ex)

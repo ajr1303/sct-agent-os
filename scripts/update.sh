@@ -60,6 +60,21 @@ if [ -f .env ] && ! grep -q '^N8N_TIMEZONE=' .env; then
   echo "N8N_TIMEZONE=America/New_York" >> .env
   echo "Kept the automations timezone (America/New_York). Change N8N_TIMEZONE in .env if that is not yours."
 fi
+# Memory: an install made before the installer gave the owner a default name can have
+# an empty name in honcho.json. Hermes then switches memory off in every chat and says
+# so at the end of each answer. Fill the gap; never change a name that is already set.
+HJ=data/hermes/honcho.json
+if [ -f "$HJ" ]; then
+  fixed=$(sed -E -e 's/("peerName":[[:space:]]*)""/\1"owner"/' -e 's/("aiPeer":[[:space:]]*)""/\1"assistant"/' "$HJ")
+  if ! printf '%s' "$fixed" | grep -q '"peerName"'; then
+    # No owner entry at all: add one after the agent's, when that line ends in a comma.
+    fixed=$(printf '%s\n' "$fixed" | sed -E '/"aiPeer":[[:space:]]*"[^"]*",[[:space:]]*$/a\      "peerName": "owner",')
+  fi
+  if [ -n "$fixed" ] && [ "$fixed" != "$(cat "$HJ")" ]; then
+    cp -p "$HJ" "$HJ.bak" && printf '%s\n' "$fixed" > "$HJ"
+    echo "Memory had no owner name set, which switched it off in chat. Set it to \"owner\" (previous file kept as honcho.json.bak)."
+  fi
+fi
 # Prefer prebuilt images for this release; fall back to a local build if unavailable.
 docker compose pull -q --ignore-pull-failures 2>/dev/null || true
 docker compose build connectors
