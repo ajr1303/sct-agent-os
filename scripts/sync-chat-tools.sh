@@ -22,5 +22,22 @@ if [ -d skills/agent-os ]; then
   chown -R --reference="$H" "$H/skills/agent-os" 2>/dev/null || true
 fi
 
+# Writing style -> the assistant's standing instructions (SOUL.md in the Hermes home).
+# Only the block between the two markers is ours; anything else in the file is the
+# owner's and is left exactly as it is.
+if [ -f templates/writing-style.md ]; then
+  SOUL="$H/SOUL.md"; BEGIN='<!-- agent-os:writing-style -->'; END='<!-- /agent-os:writing-style -->'
+  block=$(printf '%s\n%s\n%s\n' "$BEGIN" "$(cat templates/writing-style.md)" "$END")
+  if [ -f "$SOUL" ]; then
+    rest=$(awk -v b="$BEGIN" -v e="$END" '$0==b{skip=1} !skip{print} $0==e{skip=0}' "$SOUL")
+    new=$(printf '%s\n\n%s\n' "$(printf '%s' "$rest" | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}')" "$block")
+    [ "$new" = "$(cat "$SOUL")" ] || printf '%s\n' "$new" > "$SOUL"
+  else
+    printf '%s\n' "$block" > "$SOUL"
+    chown --reference="$H" "$SOUL" 2>/dev/null || true
+    chmod 644 "$SOUL"
+  fi
+fi
+
 docker compose run --rm --no-deps -T -v "$H_ABS:/hermes" --entrypoint python connectors /app/mcp_config.py \
   || warn "could not write the chat-tools config; chat delegation tools will be unavailable"

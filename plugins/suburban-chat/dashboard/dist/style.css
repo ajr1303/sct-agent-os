@@ -73,3 +73,14 @@
 .scc-table{border-collapse:collapse;font-size:13px;line-height:1.45;width:100%}
 .scc-table th,.scc-table td{border:1px solid var(--color-border,rgba(255,255,255,.16));padding:6px 10px;text-align:left;vertical-align:top;color:inherit}
 .scc-table th{font-weight:600;background:rgba(255,255,255,.05)}
+.scc-md{white-space:normal;font-size:15px;line-height:1.6;max-width:760px}
+.scc-md p{margin:0 0 10px}
+.scc-md>:last-child{margin-bottom:0}
+.scc-md .scc-h{font-weight:600;margin:14px 0 6px;line-height:1.3}
+.scc-md>.scc-h:first-child{margin-top:0}
+.scc-md .scc-h1{font-size:18px}.scc-md .scc-h2{font-size:16.5px}.scc-md .scc-h3{font-size:15px}
+.scc-md .scc-list{margin:0 0 10px;padding-left:22px}
+.scc-md .scc-list li{margin:3px 0}
+.scc-md .scc-hr{border:0;border-top:1px solid var(--color-border,rgba(255,255,255,.14));margin:12px 0}
+.scc-md .scc-quote{margin:0 0 10px;padding:2px 12px;border-left:3px solid var(--color-primary,#25c9ee);opacity:.9}
+.scc-md strong{font-weight:600}

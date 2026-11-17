@@ -2,6 +2,17 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.43.0] — 2026-11-17 — Chat answers that are easy to read
+
+- **Chat lays answers out properly.** Headings, bullet and numbered lists, tables,
+  quotes and paragraphs are now drawn as such, with more comfortable spacing, instead
+  of one block of text with symbols in it.
+- **The assistant is told how to write to an owner.** Answer first, plain words, short
+  sentences, names instead of IDs, a list or small table only when it helps, no
+  technical notes tacked on the end. This is added to the assistant's standing
+  instructions on every install and update; anything the owner wrote there is kept.
+- How closely it follows this depends on the AI model the assistant runs on.
+
 ## [0.42.2] — 2026-11-17 — Memory in chat: the real cause
 
 - **"Honcho memory is off for this session" at the end of chat answers.** The memory

@@ -62,11 +62,32 @@
         var html = '<div class="scc-tablewrap"><table class="scc-table"><thead><tr>' + head.map(function (c) { return "<th>" + c + "</th>"; }).join("") + "</tr></thead><tbody>"
           + rows.map(function (r) { return "<tr>" + r.map(function (c) { return "<td>" + c + "</td>"; }).join("") + "</tr>"; }).join("") + "</tbody></table></div>";
         tables.push(html);
-        return lead + "\u0000T" + (tables.length - 1) + "\u0000";
+        return lead + "\u0000T" + (tables.length - 1) + "\u0000\n";
       });
-      text = text.replace(/(^|\n)\s*[-*]\s+/g, "$1• ");
-      text = text.replace(/\n/g, "<br>");
-      text = text.replace(/(?:<br>)?\u0000T(\d+)\u0000(?:<br>)?/g, function (_, i) { return tables[+i]; });
+      // Blocks: headings, bullet and numbered lists, quotes, rules and paragraphs, so an
+      // answer reads like a short note instead of a wall of text.
+      var lines = text.split("\n"), out = [], para = [], list = null, m;
+      function flushPara() { if (para.length) { out.push("<p>" + para.join("<br>") + "</p>"); para = []; } }
+      function flushList() {
+        if (list) { out.push("<" + list.tag + ' class="scc-list">' + list.items.map(function (i) { return "<li>" + i + "</li>"; }).join("") + "</" + list.tag + ">"); list = null; }
+      }
+      function flush() { flushPara(); flushList(); }
+      function item(tag, body) { flushPara(); if (!list || list.tag !== tag) { flushList(); list = { tag: tag, items: [] }; } list.items.push(body); }
+      for (var li = 0; li < lines.length; li++) {
+        var line = lines[li], t = line.trim();
+        if (!t) { flush(); continue; }
+        if (/^\u0000[TC]\d+\u0000$/.test(t)) { flush(); out.push(t); continue; }
+        if ((m = /^(#{1,6})\s+(.+)$/.exec(t))) { flush(); out.push('<div class="scc-h scc-h' + Math.min(m[1].length, 3) + '">' + m[2].replace(/\s*#+\s*$/, "") + "</div>"); continue; }
+        if (/^(-{3,}|\*{3,}|_{3,})$/.test(t)) { flush(); out.push('<hr class="scc-hr">'); continue; }
+        if ((m = /^[-*\u2022]\s+(.+)$/.exec(t))) { item("ul", m[1]); continue; }
+        if ((m = /^\d{1,3}[.)]\s+(.+)$/.exec(t))) { item("ol", m[1]); continue; }
+        if ((m = /^&gt;\s?(.*)$/.exec(t))) { flush(); out.push('<blockquote class="scc-quote">' + m[1] + "</blockquote>"); continue; }
+        if (list && /^\s{2,}\S/.test(line)) { list.items[list.items.length - 1] += " " + t; continue; }   // wrapped list item
+        flushList(); para.push(t);
+      }
+      flush();
+      text = out.join("");
+      text = text.replace(/\u0000T(\d+)\u0000/g, function (_, i) { return tables[+i]; });
       text = text.replace(/\u0000C(\d+)\u0000/g, function (_, i) { return '<pre class="scc-code">' + esc(blocks[+i]) + "</pre>"; });
       return text;
     }
@@ -197,7 +218,7 @@
       }
       function msgRow(key, role, text, time, pend) {
         var body = role === "assistant" && !pend
-          ? h("div", { className: "scc-bubble", dangerouslySetInnerHTML: { __html: mdToHtml(text) } })
+          ? h("div", { className: "scc-bubble scc-md", dangerouslySetInnerHTML: { __html: mdToHtml(text) } })
           : h("div", { className: "scc-bubble" + (pend ? " scc-pending" : "") }, text);
         return h("div", { className: "scc-msg scc-" + role, key: key },
           avatar(role),

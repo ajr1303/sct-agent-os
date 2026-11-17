@@ -744,3 +744,16 @@ Changing the name later starts a new memory profile; what was learned under the 
 name stays filed under it. If the note is still there after an update, read
 `sudo cat data/hermes/honcho.json` (it holds no secrets) and check the `peerName` line.
 
+## 24. How the assistant writes
+
+- The house style lives in `templates/writing-style.md`. Each install and update copies
+  it into `data/hermes/SOUL.md` between two `agent-os:writing-style` markers, and into
+  a skill (`writing-to-the-owner`). Text outside the markers is the owner's and is
+  never touched; edit there to add a persona or business-specific wording.
+- To change the house style for one install, edit the block in `SOUL.md`; the next
+  update puts the standard text back, so lasting changes belong outside the markers.
+- The same guidance rides along with the Agent OS tools, so it also reaches agents
+  working on tasks on this server.
+- Results vary with the model. If answers are still dense, try a stronger model for
+  the main assistant on the AI models page.
+
