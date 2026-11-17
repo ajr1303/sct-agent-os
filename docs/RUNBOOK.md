@@ -320,6 +320,22 @@ Cloudflare Access so each person signs in as themselves.
   two-step sign-in.
 - The sign-in name is `DASHBOARD_USER` in `.env`. Forgotten: `grep DASHBOARD_USER .env`.
 
+### The menu, and operator tools
+
+- **Your team / Connections / Settings** are what an owner sees. Hermes pages an owner
+  uses carry plain names: Messaging (Channels), Messaging access (Pairing), AI models
+  (Local Models), Keys, Skills, Chat history (Sessions).
+- **Operator tools** (Hermes Profiles, MCP, Plugins, Scheduled Jobs, Files, Webhooks,
+  Config, System, Logs) are hidden until Account > **Show operator tools in the menu**
+  is ticked. This tidies the menu and is not a lock: with one shared sign-in the
+  pages still open by address. Several of them can stop the system (System can stop
+  the gateway and wipe agent memory, Files can delete agent data, Plugins can install
+  code), and Hermes' own backup/restore on System is separate from Agent OS backups.
+- Kanban, Achievements and Hermes' Documentation are not listed. Tasks replaces Kanban.
+- **Main assistant's name:** the Chat page shows the name of the first agent the owner
+  creates. Change it on Account > Your details. Older installs show "default" until a
+  name is entered there.
+
 ### Dashboard password
 
 - **Change it:** Dashboard > Account > Password > **Change password** (current password,

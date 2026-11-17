@@ -46,6 +46,7 @@ pre[class^="ss-"], pre[class^="sbk-"], pre[class^="sw-"], pre[class^="so-"] {
 #app-sidebar nav.sct-nav .sct-hide{display:none!important}
 #app-sidebar nav.sct-nav li{flex:none}
 #app-sidebar nav.sct-nav:not(.sct-adv-open) li.sct-adv{display:none}
+#app-sidebar nav.sct-nav:not(.sct-op) li.sct-adv,#app-sidebar nav.sct-nav:not(.sct-op) #sct-navh-adv{display:none!important}
 /* The per-plugin copies of links are retired; Hermes' own links are used. */
 #so-nav,#st-nav,#sa-nav,#sm-nav,#sb-nav{display:none!important}
 .sct-navh{flex:none;display:block;width:100%;text-align:left;font:inherit;font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:inherit;opacity:.45;padding:18px 20px 6px;background:none;border:0}

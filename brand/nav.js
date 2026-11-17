@@ -6,8 +6,11 @@
  * app. This script is now the only thing that arranges the sidebar:
  *   - it never moves or clones Hermes' own links (so clicks stay in-app and the
  *     active highlight keeps working); it only sets CSS `order` on them;
- *   - items are grouped, and the long tail of operator tabs sits under a
- *     collapsible "Advanced" group whose open/closed state is remembered.
+ *   - items are grouped: everyday pages, connections, settings. Hermes' technical
+ *     pages sit in a collapsible "Operator tools" group that only appears when the
+ *     owner turns it on (Account page); a few Hermes pages that duplicate ours or
+ *     do nothing for an owner are not listed at all. This tidies the menu; it is
+ *     not access control.
  * Loaded on every page by the proxy (templates/nginx.conf). Safe to fail: if it
  * throws, sct.css reveals the stock sidebar after a short delay.
  */
@@ -20,11 +23,28 @@
   var GROUPS = [
     { id: "main", label: "", items: ["/chat"] },                    // Overview is added in front of Chat
     { id: "team", label: "Your team", items: ["/tasks", "/team", "/orchestration", "/automations", "/usage"] },
-    { id: "conn", label: "Connections", items: ["/bookings", "/mailboxes", "/website", "/backups", "/security"] },
-    { id: "adv", label: "Advanced", items: ["/profiles", "/models", "/skills", "/mcp", "/plugins", "/cron",
-        "/sessions", "/files", "/channels", "/webhooks", "/pairing", "/env", "/config", "/system", "/logs",
-        "/kanban", "/achievements", "/docs"] }
+    { id: "conn", label: "Connections", items: ["/bookings", "/mailboxes", "/website", "/channels", "/pairing", "/backups"] },
+    { id: "set", label: "Settings", items: ["/security", "/models", "/env", "/skills", "/sessions"] },
+    { id: "adv", label: "Operator tools", items: ["/profiles", "/mcp", "/plugins", "/cron", "/files", "/webhooks",
+        "/config", "/system", "/logs"] }
   ];
+  // Hermes pages left out of the menu: its own task board (Tasks replaces it), usage
+  // badges, and its own manual.
+  var GONE = { "/kanban": 1, "/achievements": 1, "/docs": 1 };
+  // Plain names for Hermes pages an owner uses.
+  var RENAME = { "/channels": "Messaging", "/pairing": "Messaging access", "/models": "AI models", "/env": "Keys", "/sessions": "Chat history" };
+  var OPKEY = "sct-operator";
+  function operatorOn() { return store(OPKEY) === "1"; }
+  function relabel(a, text) {
+    try {
+      var w = document.createTreeWalker(a, NodeFilter.SHOW_TEXT, null), t;
+      while ((t = w.nextNode())) {
+        if (!(t.nodeValue || "").trim()) continue;
+        if (t.nodeValue.trim() !== text) t.nodeValue = text;
+        return;
+      }
+    } catch (e) {}
+  }
   var CLONES = { "sc-overview-nav": 1, "so-nav": 1, "st-nav": 1, "sa-nav": 1, "sm-nav": 1, "sb-nav": 1 };
   var KEY = "sct-nav-advanced";
   var pos = {}, n = 0;
@@ -85,8 +105,9 @@
       for (var p = li.parentElement; p && p !== nav; p = p.parentElement) p.classList.add("sct-flat");
       if (!a) { li.classList.add("sct-hide"); continue; }
       var path = pathOf(a), slot = pos[path];
-      if (seen[path]) { li.classList.add("sct-hide"); continue; }   // a second entry for the same page
+      if (seen[path] || GONE[path]) { li.classList.add("sct-hide"); continue; }   // a duplicate, or a page we leave out
       seen[path] = 1;
+      if (RENAME[path]) relabel(a, RENAME[path]);
       li.classList.remove("sct-hide");
       var isAdv = !slot || slot.g === ADV;
       li.style.order = String(slot ? slot.order : extra++);
@@ -102,6 +123,8 @@
       if (!c.querySelector("li")) c.classList.add("sct-hide");
     }
     for (var gi = 1; gi < GROUPS.length; gi++) header(nav, GROUPS[gi]);
+    // Operator tools only show when switched on, or when you are on one of those pages.
+    nav.classList.toggle("sct-op", operatorOn() || curInAdv);
 
     if (!nav.classList.contains("sct-nav")) {
       nav.classList.add("sct-nav");
@@ -149,6 +172,8 @@
         .then(function (s) { if (s && s.required && !s.ok) window.location.assign("/sct-brand/mfa.html"); }).catch(function () {});
     } catch (e) {}
   }
+  window.addEventListener("sct-operator", schedule);
+
   // Account: a new install's first sign-in goes to the welcome screen. On every install,
   // the sign-in name at the bottom of the sidebar shows the owner's name and opens Account.
   var acct = null;
@@ -180,6 +205,7 @@
         if (!a) return;
         if (a.setup_needed) { window.location.assign("/sct-brand/welcome.html"); return; }
         acct = a; nameTag();
+        if ((a.operator_tools ? "1" : "0") !== (store(OPKEY) || "0")) { store(OPKEY, a.operator_tools ? "1" : "0"); schedule(); }
         try { new MutationObserver(function () { clearTimeout(nameTag._t); nameTag._t = setTimeout(nameTag, 150); }).observe(document.body, { childList: true, subtree: true }); } catch (e) {}
       }).catch(function () {});
   } catch (e) {}

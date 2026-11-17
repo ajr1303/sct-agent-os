@@ -1219,6 +1219,7 @@ def create_agent(a: AgentCreate, _auth=Depends(require_auth)):
     seeded = False
     if is_first_agent and new_id:
         seeded = _seed_welcome_task(cid, new_id)
+        _acct_note_first_agent(data.get("name") or name)
     return {"ok": True, "agent": {"id": new_id, "name": data.get("name") or name}, "welcome_seeded": seeded}
 
 
@@ -2049,6 +2050,8 @@ class PasswordChange(BaseModel):
 class AccountInfo(BaseModel):
     name: str = ""
     email: str = ""
+    main_agent: str | None = None      # what the Chat page calls the main assistant
+    operator_tools: bool | None = None  # show the operator pages in the sidebar
 
 
 # --- Account: who the owner is, and the first-run welcome ------------------------------
@@ -2067,6 +2070,22 @@ def _acct():
     except Exception:
         d = {}
     return d if isinstance(d, dict) else {}
+
+
+def _clean_agent_name(v):
+    return re.sub(r"[\x00-\x1f<>]", "", str(v or "")).strip()[:60]
+
+
+def _acct_note_first_agent(name):
+    """The first agent a new owner creates becomes the name shown on the Chat page,
+    unless they have already chosen one. Never raises."""
+    try:
+        a = _acct()
+        if not a.get("main_agent") and _clean_agent_name(name):
+            a["main_agent"] = _clean_agent_name(name)
+            _kv_set("account", json.dumps(a))
+    except Exception:
+        pass
 
 
 def _acct_username():
@@ -2094,6 +2113,7 @@ def account_me(_auth=Depends(require_auth)):
     except Exception:
         mfa_on = False
     return {"name": a.get("name") or "", "email": a.get("email") or "", "username": _acct_username(),
+            "main_agent": a.get("main_agent") or "", "operator_tools": bool(a.get("operator_tools")),
             "setup_needed": os.path.exists(_ACCT_SETUP_FLAG), "reset_code_set": bool(d.get("code_hash")),
             "reset_by_email": bool(d.get("email")), "two_step": mfa_on, "rule": _PW_RULE}
 
@@ -2104,8 +2124,15 @@ def account_save(b: AccountInfo, _auth=Depends(require_auth)):
     email_addr = b.email.strip()[:320]
     if email_addr and not _ACCT_EMAIL_OK.match(email_addr):
         raise HTTPException(status_code=400, detail="That email address does not look right.")
-    _kv_set("account", json.dumps({"name": name, "email": email_addr}))
-    return {"name": name, "email": email_addr}
+    a = _acct()
+    a["name"], a["email"] = name, email_addr
+    if b.main_agent is not None:
+        a["main_agent"] = _clean_agent_name(b.main_agent)
+    if b.operator_tools is not None:
+        a["operator_tools"] = bool(b.operator_tools)
+    _kv_set("account", json.dumps(a))
+    return {"name": name, "email": email_addr, "main_agent": a.get("main_agent") or "",
+            "operator_tools": bool(a.get("operator_tools"))}
 
 
 @app.post("/account/setup-done")

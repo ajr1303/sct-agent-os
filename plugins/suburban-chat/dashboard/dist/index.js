@@ -94,8 +94,12 @@
       useEffect(function () {
         Promise.resolve(api.getProfiles ? api.getProfiles() : null).then(function (p) {
           var a = arr(p); var def = a.find(function (x) { return x.is_default; }) || a[0];
-          if (def) setAgentName(def.display_name || def.name || "Agent");
+          if (def) setAgentName(function (cur) { return cur !== "Agent" ? cur : (def.display_name || def.name || "Agent"); });
         }).catch(function () {});
+        // The owner's name for their main assistant (set when the first agent is
+        // created, or on the Account page) replaces the profile's technical name.
+        fetch("/api/connectors/account/me", { credentials: "same-origin" }).then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (m) { if (m && m.main_agent) setAgentName(m.main_agent); }).catch(function () {});
       }, []);
 
       function openPty(resumeId) {

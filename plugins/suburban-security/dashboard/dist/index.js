@@ -27,13 +27,13 @@
     function AccountCard() {
       var s;
       s = useState(null);  var me = s[0], setMe = s[1];
-      s = useState({ name: "", email: "" }); var f = s[0], setF = s[1];
+      s = useState({ name: "", email: "", main_agent: "" }); var f = s[0], setF = s[1];
       s = useState("");    var note = s[0], setNote = s[1];
       s = useState("");    var err = s[0], setErr = s[1];
       s = useState(false); var ask = s[0], setAsk = s[1];             // changing the sign-in name
       s = useState({ username: "", current: "" }); var u = s[0], setU = s[1];
       s = useState("");    var waitId = s[0], setWaitId = s[1];
-      function load() { return api("/account/me").then(function (m) { setMe(m); setF({ name: m.name || "", email: m.email || "" }); }).catch(function () {}); }
+      function load() { return api("/account/me").then(function (m) { setMe(m); setF({ name: m.name || "", email: m.email || "", main_agent: m.main_agent || "" }); }).catch(function () {}); }
       useEffect(function () { load(); }, []);
       useEffect(function () {
         if (!waitId) return;
@@ -70,14 +70,21 @@
           .catch(function (e2) { setErr(String(e2.message || e2)); });
       }
       if (!me) return null;
-      var dirty = f.name !== (me.name || "") || f.email !== (me.email || "");
+      var dirty = f.name !== (me.name || "") || f.email !== (me.email || "") || f.main_agent !== (me.main_agent || "");
+      function setOp(on) {
+        api("/account/me", { method: "PUT", body: JSON.stringify({ name: me.name || "", email: me.email || "", operator_tools: on }) })
+          .then(function () { try { localStorage.setItem("sct-operator", on ? "1" : "0"); window.dispatchEvent(new Event("sct-operator")); } catch (e) {} load(); })
+          .catch(function (e2) { setErr(String(e2.message || e2)); });
+      }
       return h("div", { className: "ss-card" },
         h("div", { className: "ss-head" }, h("div", { className: "ss-name" }, "Your details")),
         h("form", { className: "ss-ask", onSubmit: save },
           h("label", { className: "ss-field" }, h("span", null, "Your name"),
-            h("input", { className: "ss-in", type: "text", maxLength: 80, autoComplete: "name", value: f.name, onChange: function (e) { setF({ name: e.target.value, email: f.email }); } })),
+            h("input", { className: "ss-in", type: "text", maxLength: 80, autoComplete: "name", value: f.name, onChange: function (e) { setF(Object.assign({}, f, { name: e.target.value })); } })),
           h("label", { className: "ss-field" }, h("span", null, "Your email"),
-            h("input", { className: "ss-in", type: "email", maxLength: 320, autoComplete: "email", value: f.email, onChange: function (e) { setF({ name: f.name, email: e.target.value }); } })),
+            h("input", { className: "ss-in", type: "email", maxLength: 320, autoComplete: "email", value: f.email, onChange: function (e) { setF(Object.assign({}, f, { email: e.target.value })); } })),
+          h("label", { className: "ss-field" }, h("span", null, "Your main assistant's name"),
+            h("input", { className: "ss-in", type: "text", maxLength: 60, autoComplete: "off", placeholder: "Shown on the Chat page", value: f.main_agent, onChange: function (e) { setF(Object.assign({}, f, { main_agent: e.target.value })); } })),
           h("div", { className: "ss-acts ss-left" }, h("button", { type: "submit", className: "ss-btn ss-primary", disabled: !dirty }, "Save"))),
         h("div", { className: "ss-facts" }, h("div", null, h("span", { className: "ss-dim" }, "Sign-in name"), h("b", null, me.username))),
         waitId ? h("div", { className: "ss-p" }, "Changing your sign-in name. The dashboard restarts, so this takes a minute or two and you may be asked to sign in again. Keep this page open.")
@@ -91,6 +98,9 @@
                 h("button", { type: "submit", className: "ss-btn ss-primary", disabled: u.username.trim().length < 3 || !u.current }, "Change sign-in name"),
                 h("button", { type: "button", className: "ss-btn", onClick: function () { setAsk(false); setErr(""); } }, "Cancel")))
           : h("div", { className: "ss-acts ss-left" }, h("button", { type: "button", className: "ss-btn", onClick: function () { setAsk(true); setErr(""); setNote(""); } }, "Change sign-in name")),
+        h("label", { className: "ss-check" },
+          h("input", { type: "checkbox", checked: !!me.operator_tools, onChange: function (e) { setOp(e.target.checked); } }),
+          h("span", null, "Show operator tools in the menu. These are technical pages for whoever looks after the system (files, logs, raw settings, plugins). Changes made there can stop the system working.")),
         note ? h("div", { className: "ss-ok" }, note) : null,
         err ? h("div", { className: "ss-msg" }, err) : null);
     }

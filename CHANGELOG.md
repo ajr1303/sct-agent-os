@@ -2,6 +2,17 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.37.0] — 2026-11-16 — A simpler menu, and a name for your main assistant
+
+- **Menu.** "Advanced" is gone. Messaging and Messaging access move up to Connections.
+  A new Settings group holds Account, AI models, Keys, Skills and Chat history.
+- **Operator tools** (Hermes Profiles, MCP, Plugins, Scheduled Jobs, Files, Webhooks,
+  Config, System, Logs) are hidden unless switched on from the Account page. This is
+  to keep them out of the way, not to lock them.
+- Kanban, Achievements and Hermes' Documentation are no longer listed.
+- **Chat shows your main assistant's name** instead of "default". It is set from the
+  first agent you create and can be changed on the Account page.
+
 ## [0.36.0] — 2026-11-16 — Welcome screen and Account page
 
 - **Welcome screen on new installs.** The first sign-in asks the owner for their name
