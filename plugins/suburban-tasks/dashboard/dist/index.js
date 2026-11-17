@@ -68,6 +68,10 @@
       s = useState(false); var rBusy = s[0], setRBusy = s[1];
       s = useState(null);  var rErr = s[0], setRErr = s[1];
       s = useState(false); var askCancel = s[0], setAskCancel = s[1];
+      s = useState(false); var picking = s[0], setPicking = s[1];  // choosing several tasks to close at once
+      s = useState({});    var picked = s[0], setPicked = s[1];    // key -> true
+      s = useState(false); var bulkBusy = s[0], setBulkBusy = s[1];
+      s = useState(null);  var bulkMsg = s[0], setBulkMsg = s[1];
 
       function loadList() {
         return api("/orchestration/tasks").then(function (d) { setList(d); setErr(null); return d; })
@@ -150,7 +154,51 @@
         }));
       }
 
+      function pickedKeys() { return Object.keys(picked).filter(function (k) { return picked[k]; }); }
+      function togglePick(key) { var n = Object.assign({}, picked); if (n[key]) delete n[key]; else n[key] = true; setPicked(n); }
+      function stopPicking() { setPicking(false); setPicked({}); }
+      function bulkClose(st) {
+        var keys = pickedKeys(); if (!keys.length) return;
+        var word = st === "done" ? "done" : "cancelled";
+        if (!window.confirm("Mark " + keys.length + " task" + (keys.length === 1 ? "" : "s") + " " + word + "?\n\nAgents waiting on these will not get an answer from you. You can reopen a task later from its page.")) return;
+        setBulkBusy(true); setBulkMsg(null);
+        api("/orchestration/tasks/bulk-status", { method: "POST", body: JSON.stringify({ keys: keys.slice(0, 100), status: st }) })
+          .then(function (d) {
+            setBulkBusy(false); setPicked({});
+            var f = (d.failed || []).length;
+            setBulkMsg(d.ok + " task" + (d.ok === 1 ? "" : "s") + " marked " + word + "." + (f ? " " + f + " could not be changed: " + d.failed[0].error : ""));
+            loadList();
+          }).catch(function (e) { setBulkBusy(false); setBulkMsg(String(e.message || e)); });
+      }
+      function bulkBar() {
+        var writable = !(list && list.connected === false);
+        if (!writable || !shown.length) return null;
+        var open = shown.filter(function (t) { return !isClosed(t.status); });
+        if (!picking) return h("div", { className: "st-bulk" },
+          h("button", { type: "button", className: "st-bulk-btn", onClick: function () { setPicking(true); setBulkMsg(null); } }, "Select several"),
+          bulkMsg ? h("span", { className: "st-bulk-msg" }, bulkMsg) : null);
+        var n = pickedKeys().length;
+        return h("div", { className: "st-bulk st-bulk-on" },
+          h("button", { type: "button", className: "st-bulk-btn", onClick: function () { var m = {}; open.slice(0, 100).forEach(function (t) { m[t.key] = true; }); setPicked(m); } },
+            "Select all shown" + (open.length > 100 ? " (first 100)" : "")),
+          h("button", { type: "button", className: "st-bulk-btn st-bulk-go", disabled: !n || bulkBusy, onClick: function () { bulkClose("done"); } }, bulkBusy ? "Working…" : "Mark " + n + " done"),
+          h("button", { type: "button", className: "st-bulk-btn", disabled: !n || bulkBusy, onClick: function () { bulkClose("cancelled"); } }, "Cancel " + n),
+          h("button", { type: "button", className: "st-bulk-btn", onClick: stopPicking }, "Finish"),
+          bulkMsg ? h("span", { className: "st-bulk-msg" }, bulkMsg) : null);
+      }
       function row(t) {
+        if (picking) {
+          var closed = isClosed(t.status);
+          return h("label", { key: t.key, className: "st-row st-row-pick" + (picked[t.key] ? " sel" : "") + (closed ? " st-row-off" : "") },
+            h("input", { type: "checkbox", className: "st-pick", checked: !!picked[t.key], disabled: closed, onChange: function () { togglePick(t.key); } }),
+            h("div", { className: "st-row-main" },
+              h("div", { className: "st-row-title" }, t.title),
+              h("div", { className: "st-row-meta" },
+                t.agentName ? h("span", { className: "st-agent" }, t.agentName) : null,
+                h("span", { className: "st-key" }, t.key),
+                t.updatedAt ? h("span", { className: "st-time" }, whenStr(t.updatedAt)) : null)),
+            chip(t.status, t.running));
+        }
         return h("button", { key: t.key, className: "st-row" + (sel === t.key ? " sel" : ""), onClick: function () { open(t.key); } },
           h("div", { className: "st-row-main" },
             h("div", { className: "st-row-title" }, t.title),
@@ -164,6 +212,7 @@
       function listPane() {
         return h("div", { className: "st-listpane" },
           filters(),
+          bulkBar(),
           up === false ? h("div", { className: "st-empty" }, "Team management is starting. Tasks will appear once it's up.")
             : list == null ? h("div", { className: "st-empty" }, err ? "Couldn't load tasks. Try again in a minute." : "Loading…")
             : list.connected === false ? h("div", { className: "st-empty" }, "Your team isn't linked yet. ",

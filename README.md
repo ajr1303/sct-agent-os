@@ -406,7 +406,7 @@ docs/ARCHITECTURE.md        How the layer works
 
 ## Status
 
-**v0.40.** The last clean one-command install on a fresh VM was run at v0.26 (Hermes v0.23.1, n8n 2.47.5), reached through a Cloudflare Tunnel. Changes since then are tested piece by piece but a fresh end-to-end install of this version has not been rerun yet.
+**v0.41.** The last clean one-command install on a fresh VM was run at v0.26 (Hermes v0.23.1, n8n 2.47.5), reached through a Cloudflare Tunnel. Changes since then are tested piece by piece but a fresh end-to-end install of this version has not been rerun yet.
 
 Verified live:
 

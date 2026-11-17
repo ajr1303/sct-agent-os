@@ -695,4 +695,7 @@ owner do that. Agents on their own servers do not have this tool.
   (total and new), what is in progress, hand-offs, and agents in error.
 - The summary step carries an internal token in the workflow, the same one the
   stuck-agent watch uses. The address only answers inside the server.
+- **Clearing a backlog:** Tasks > Needs you > **Select several** > Select all shown >
+  Mark done (up to 100 at a time; the list reloads with the next batch). Closed tasks
+  can be reopened one at a time from the task itself.
 

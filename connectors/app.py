@@ -4090,7 +4090,7 @@ def list_tasks(agent: str = "", _auth=Depends(require_auth)):
     # arbitrary first page: everything being worked on, what is waiting on the owner,
     # what is queued, and the most recently finished. Newest activity first.
     issues, seen = [], set()
-    for st, lim in (("in_progress", 60), ("in_review,blocked", 80), ("todo", 40), ("done", 60)):
+    for st, lim in (("in_progress", 60), ("in_review,blocked", 200), ("todo", 40), ("done", 60)):
         try:
             for i in _rows("?status=" + st + "&sortField=updated&sortDir=desc&limit=" + str(lim)):
                 if isinstance(i, dict) and i.get("id") not in seen:
@@ -4229,6 +4229,41 @@ def task_set_status(key: str, body: TaskStatus, _auth=Depends(require_auth)):
         raise HTTPException(status_code=400, detail="Status must be one of: done, todo, cancelled.")
     d = _pc_send("PATCH", "/api/issues/" + _safe_id(key), {"status": st}, what=_OWNER_TASK_STATUS[st])
     return {"ok": True, "status": (d.get("status") if isinstance(d, dict) else None) or st}
+
+
+class TaskBulk(BaseModel):
+    keys: list[str] = []
+    status: str = "done"
+
+
+@app.post("/orchestration/tasks/bulk-status")
+def task_bulk_status(body: TaskBulk, _auth=Depends(require_auth)):
+    """Owner action from the Tasks tab: close several tasks at once (done or cancelled).
+    Each one gets a note saying the owner closed it, so the record shows who did."""
+    _task_writable()
+    st = (body.status or "").strip().lower()
+    if st not in ("done", "cancelled"):
+        raise HTTPException(status_code=400, detail="Several tasks at once can only be marked done or cancelled.")
+    keys = []
+    for k in body.keys[:200]:
+        k = str(k or "").strip()
+        if re.match(r"^[A-Za-z0-9-]{1,80}$", k) and k not in keys:
+            keys.append(k)
+    if not keys:
+        raise HTTPException(status_code=400, detail="Select at least one task.")
+    if len(keys) > 100:
+        raise HTTPException(status_code=400, detail="Close up to 100 tasks at a time.")
+    note = "Closed by the owner from the Tasks page." if st == "done" else "Cancelled by the owner from the Tasks page."
+    done, failed = 0, []
+    for k in keys:
+        try:
+            _pc_send("PATCH", "/api/issues/" + _safe_id(k), {"status": st, "comment": note}, what=_OWNER_TASK_STATUS[st])
+            done += 1
+        except HTTPException as e:
+            failed.append({"key": k, "error": str(e.detail)[:160]})
+        except Exception as e:
+            failed.append({"key": k, "error": _scrub_secrets(str(e))[:160]})
+    return {"ok": done, "failed": failed, "status": st}
 
 
 class BudgetSet(BaseModel):

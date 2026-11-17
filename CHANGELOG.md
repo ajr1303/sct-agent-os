@@ -2,6 +2,13 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.41.0] — 2026-11-16 — Close several tasks at once
+
+- **Tasks page: Select several.** Tick tasks (or "Select all shown") and mark them done
+  or cancelled in one go, up to 100 at a time. Each gets a note that the owner closed
+  it. Useful for clearing a backlog of items that only needed a look.
+- The Tasks page now loads up to 200 items waiting on you, up from 80.
+
 ## [0.40.0] — 2026-11-16 — Agents close routine work; you get one daily summary
 
 - **Fewer items waiting on you.** Agents are now trusted to finish routine work
