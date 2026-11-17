@@ -2,6 +2,17 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.44.0] — 2026-11-17 — The dashboard on a phone
+
+- **One title per page.** On a phone the page title was shown twice, with the first one
+  half hidden under the top bar. The top bar is now shorter and the repeated title is
+  gone.
+- **Chat fits a phone.** It shows the list of chats or the conversation, not both
+  squeezed side by side, with a "Chats" button to go back to the list.
+- **Overview, Tasks and Orchestration** no longer wrap one word per line or run off the
+  right edge: the heading and status stack, agent rows stack their buttons, and page
+  margins are smaller.
+
 ## [0.43.0] — 2026-11-17 — Chat answers that are easy to read
 
 - **Chat lays answers out properly.** Headings, bullet and numbered lists, tables,

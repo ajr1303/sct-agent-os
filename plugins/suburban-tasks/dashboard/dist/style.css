@@ -101,3 +101,7 @@
 .st-row-pick{cursor:pointer;display:flex;align-items:center;gap:12px}
 .st-row-off{opacity:.45;cursor:default}
 .st-pick{flex:none;width:16px;height:16px;accent-color:var(--color-primary,#25c9ee)}
+@media (max-width:700px){
+  .st-row-meta{flex-wrap:wrap;row-gap:2px}
+  .st-agent{max-width:60vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+}

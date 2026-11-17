@@ -88,3 +88,8 @@
 .sc-updbar-pulse{animation:sc-upd-pulse 1.4s ease-in-out infinite}
 @keyframes sc-upd-pulse{0%,100%{opacity:1}50%{opacity:.25}}
 @media (prefers-reduced-motion:reduce){.sc-updbar-pulse{animation:none}}
+@media (max-width:700px){
+  .sc-wrap{padding:14px 14px 22px}
+  .sc-top{flex-direction:column;align-items:flex-start;gap:10px}
+  .sc-h1{font-size:22px;line-height:1.25}
+}

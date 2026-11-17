@@ -95,6 +95,8 @@
     function ChatPage() {
       var m0 = useState([]), messages = m0[0], setMessages = m0[1];
       var se0 = useState([]), sessions = se0[0], setSessions = se0[1];
+      // On a phone there is room for the list of chats or the conversation, not both.
+      var sm0 = useState("chat"), phoneView = sm0[0], setPhoneView = sm0[1];
       var a0 = useState(null), activeSid = a0[0], setActiveSid = a0[1];
       var st0 = useState("idle"), status = st0[0], setStatus = st0[1];
       var i0 = useState(""), input = i0[0], setInput = i0[1];
@@ -150,11 +152,13 @@
         }).catch(function () { setStatus("error"); });
       }
       function newChat() {
+        setPhoneView("chat");
         setMessages([]); setPending([]); setActiveSid(null); activeRef.current = null; setConfirmId(null); setEditingId(null);
         Promise.resolve(api.getSessions()).then(function (ss) { baseRef.current = {}; arr(ss).forEach(function (s) { baseRef.current[s.id] = 1; }); })
           .catch(function () { baseRef.current = {}; }).then(function () { openPty(null); });
       }
       function openSession(s) {
+        setPhoneView("chat");
         if (activeRef.current === s.id) return;
         setMessages([]); setPending([]); baseRef.current = null; setConfirmId(null); setEditingId(null);
         setActiveSid(s.id); activeRef.current = s.id; atBottomRef.current = true; setAtBottom(true);
@@ -269,12 +273,13 @@
             h("button", { title: "Delete", className: "scc-ic", onClick: function () { setConfirmId(s.id); } }, "✕")));
       });
 
-      return h("div", { className: "scc-wrap" },
+      return h("div", { className: "scc-wrap scc-phone-" + phoneView },
         h("div", { className: "scc-rail" },
           h("button", { className: "scc-newbtn", onClick: newChat }, "+  New chat"),
           h("div", { className: "scc-sesslist" }, railItems.length ? railItems : h("div", { className: "scc-railempty" }, "No conversations yet"))),
         h("div", { className: "scc-main" },
           h("div", { className: "scc-head" },
+            h("button", { type: "button", className: "scc-back", onClick: function () { setPhoneView("list"); }, "aria-label": "All chats" }, "‹ Chats"),
             h("div", { className: "scc-agentchip" },
               h("span", { className: "scc-av scc-av-agent scc-av-sm" }, (agentName || "A").slice(0, 1).toUpperCase()),
               h("span", { className: "scc-agentname" }, agentName)),

@@ -84,3 +84,20 @@
 .scc-md .scc-hr{border:0;border-top:1px solid var(--color-border,rgba(255,255,255,.14));margin:12px 0}
 .scc-md .scc-quote{margin:0 0 10px;padding:2px 12px;border-left:3px solid var(--color-primary,#25c9ee);opacity:.9}
 .scc-md strong{font-weight:600}
+.scc-back{display:none}
+@media (max-width:760px){
+  .scc-wrap{height:calc(100dvh - 56px)}
+  .scc-rail{width:100%;border-right:0}
+  .scc-phone-chat .scc-rail{display:none}
+  .scc-phone-list .scc-main{display:none}
+  .scc-back{display:inline-flex;align-items:center;flex:none;font:inherit;font-size:14px;color:var(--color-primary,#25c9ee);background:transparent;border:0;padding:8px 6px 8px 0;cursor:pointer}
+  .scc-head{padding:8px 12px;gap:8px}
+  .scc-agentchip{min-width:0;flex:1}
+  .scc-agentname{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .scc-conn{flex:none;font-size:10px;padding:3px 7px}
+  .scc-scroll{padding-left:10px;padding-right:10px}
+  .scc-md{font-size:15px}
+  .scc-sess-open{padding:14px 12px}
+  .scc-sess-t{font-size:15px}
+  .scc-input{font-size:16px}
+}

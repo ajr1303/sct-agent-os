@@ -55,3 +55,19 @@ pre[class^="ss-"], pre[class^="sbk-"], pre[class^="sw-"], pre[class^="so-"] {
 .sct-navh-btn::after{content:"+";font-size:14px;letter-spacing:0}
 nav.sct-adv-open .sct-navh-btn::after{content:"\2212"}
 .sct-navh-btn:focus-visible{outline:2px solid var(--color-primary,#25c9ee);outline-offset:-2px;opacity:1}
+
+/* ---- Phones and small tablets ------------------------------------------------------
+   Hermes' top bar is fixed and the page starts about 53px down. Our logo made the bar
+   72px tall, so it covered half of the strip beneath it. Keep the bar to 52px. */
+@media (max-width:1023.98px){
+  header.fixed.top-0.z-40{box-sizing:border-box!important;height:52px!important;min-height:52px!important;max-height:52px!important;padding-top:3px!important;padding-bottom:3px!important;overflow:hidden}
+  header.fixed.top-0.z-40>*{max-height:46px!important}
+  header.fixed.top-0.z-40 :is(img,svg.sct-logo){max-height:42px!important;width:auto!important}
+  header.fixed.top-0.z-40>span{background-size:contain!important;background-position:left center!important;background-repeat:no-repeat!important}
+  /* One title per page. Every page has its own heading, so Hermes' title strip only
+     repeats it. Drop the title; keep the strip when it holds buttons or a search box. */
+  header.z-1:not(.fixed) h1{display:none!important}
+  header.z-1:not(.fixed):not(:has(button,input,select,a[href])){display:none!important}
+  header.z-1:not(.fixed){padding-top:6px!important;padding-bottom:6px!important}
+}
+@media (max-width:700px){.sg-wrap,.sa-wrap,.sbk-wrap,.sb-wrap,.so-wrap,.sm-wrap,.su-wrap,.ss-wrap,.sw-wrap,.st-wrap{padding:14px 14px 22px!important}}
