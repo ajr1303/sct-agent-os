@@ -296,26 +296,43 @@ Operations:
 ### The three logins
 | Login | Used by | Reset |
 |---|---|---|
-| Dashboard (`admin`) | The client | Client: Security page, or "Forgot password?" with their reset code. Operator: `sudo ./scripts/dashboard-password.sh` |
+| Dashboard | The client | Client: Account page, or "Forgot password?" with their reset code. Operator: `sudo ./scripts/dashboard-password.sh` |
 | Paperclip | Operator | `sudo ./scripts/paperclip-reset-password.sh` |
 | n8n (owner email) | Operator | n8n's own reset; needs mail configured or a command-line reset. Not yet validated on this stack. |
 
 The dashboard has one shared login. Do not hand a shared password to a team; use
 Cloudflare Access so each person signs in as themselves.
 
+### First sign-in and the Account page
+
+- A **new install** prints a temporary sign-in (`admin` plus a random password). The
+  first sign-in opens the welcome screen: name, email, a sign-in name and password of
+  the owner's own, then the reset code to save. The dashboard restarts and they sign in
+  again with the new details. "Skip for now" keeps the temporary sign-in.
+- Hand the temporary password to the owner and let them do this step themselves, so
+  nobody else knows the final password.
+- **Installs made before v0.36 are not affected**: no welcome screen, and the sign-in
+  stays as it was. To offer it on an older install:
+  `sudo touch /opt/sct-agent-os/data/backup/setup-needed`.
+- **Account page** (the tab formerly called Security; clicking the name at the bottom
+  of the sidebar opens it): name and email, **Change sign-in name** (asks for the
+  current password, restarts the dashboard), password, reset code, reset by email,
+  two-step sign-in.
+- The sign-in name is `DASHBOARD_USER` in `.env`. Forgotten: `grep DASHBOARD_USER .env`.
+
 ### Dashboard password
 
-- **Change it:** Dashboard > Security > Password > **Change password** (current password,
+- **Change it:** Dashboard > Account > Password > **Change password** (current password,
   then the new one twice). The dashboard restarts for about a minute; agents and
   automations keep running. Afterwards the page shows a new **reset code**.
 - **Reset code:** one code, shown once, that sets a new password without the old one.
   Every successful change or reset replaces it. On an install that has none yet:
-  Security > **Get a reset code** (asks for the current password). Have the client
+  Account > **Get a reset code** (asks for the current password). Have the client
   store it away from the server, next to the two-step recovery codes.
 - **Forgot it:** the sign-in page has **Forgot password?**. Enter the reset code and a
   new password. Five wrong codes lock the page for 15 minutes, then longer. With
   two-step sign-in on, the code from the phone is asked for first.
-- **Reset by email (optional):** Security > Password > **Set up reset by email**. Enter
+- **Reset by email (optional):** Account > Password > **Set up reset by email**. Enter
   the address that should receive the link and an outgoing mail account for the server
   to send from (Gmail: `smtp.gmail.com`, 587, the address, an app password; Microsoft
   365: `smtp.office365.com`, 587), plus the current dashboard password. A test message
@@ -539,7 +556,7 @@ watch off and report it; the "Check now" button works without n8n.
 
 ## 16. Two-step sign-in
 
-Dashboard > Security. Adds a code from an authenticator app to the dashboard password.
+Dashboard > Account. Adds a code from an authenticator app to the dashboard password.
 
 1. **Set up two-step sign-in**, scan the QR code with the app, enter the code it shows.
 2. Save the eight recovery codes somewhere that is not this server.

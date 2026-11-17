@@ -86,4 +86,4 @@ mkdir -p backups data/backup && chmod 700 backups data/backup
 ./scripts/check-updates.sh 2>/dev/null || true   # refresh update status (clears the banner)
 rm -f data/.install-incomplete
 echo "Updated to $(cat VERSION 2>/dev/null). Hard-refresh the dashboard (Ctrl+Shift+R)."
-echo "Dashboard login: admin. Forgotten password with no reset code: sudo ./scripts/dashboard-password.sh"
+echo "Forgotten dashboard password with no reset code: sudo ./scripts/dashboard-password.sh"

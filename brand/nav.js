@@ -149,6 +149,41 @@
         .then(function (s) { if (s && s.required && !s.ok) window.location.assign("/sct-brand/mfa.html"); }).catch(function () {});
     } catch (e) {}
   }
+  // Account: a new install's first sign-in goes to the welcome screen. On every install,
+  // the sign-in name at the bottom of the sidebar shows the owner's name and opens Account.
+  var acct = null;
+  function nameTag() {
+    if (!acct) return;
+    try {
+      var w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null), t;
+      while ((t = w.nextNode())) {
+        var v = (t.nodeValue || "").trim();
+        if (v !== acct.username && v !== acct.name) continue;
+        var el = t.parentElement, box = el && el.parentElement;
+        if (!el || !box || el.closest("a,main,[role=main]") || !/\bvia\s/i.test(box.textContent || "")) continue;
+        if (acct.name && v === acct.username) t.nodeValue = t.nodeValue.replace(acct.username, acct.name);
+        if (!box.getAttribute("data-sc-acct")) {
+          box.setAttribute("data-sc-acct", "1"); box.style.cursor = "pointer"; box.title = "Your account";
+          box.addEventListener("click", function (e) {
+            if (e.target.closest && e.target.closest("button,a")) return;      // leave sign out alone
+            var link = document.querySelector('nav a[href="/security"], a[href="/security"]');
+            if (link) link.click(); else window.location.assign("/security");
+          });
+        }
+        return;
+      }
+    } catch (e) {}
+  }
+  try {
+    fetch("/api/connectors/account/me", { credentials: "same-origin" }).then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (a) {
+        if (!a) return;
+        if (a.setup_needed) { window.location.assign("/sct-brand/welcome.html"); return; }
+        acct = a; nameTag();
+        try { new MutationObserver(function () { clearTimeout(nameTag._t); nameTag._t = setTimeout(nameTag, 150); }).observe(document.body, { childList: true, subtree: true }); } catch (e) {}
+      }).catch(function () {});
+  } catch (e) {}
+
   window.addEventListener("focus", codeCheck);
   setInterval(codeCheck, 5 * 60 * 1000);
 })();

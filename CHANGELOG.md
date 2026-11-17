@@ -2,6 +2,18 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.36.0] — 2026-11-16 — Welcome screen and Account page
+
+- **Welcome screen on new installs.** The first sign-in asks the owner for their name
+  and email and has them choose their own sign-in name and password, then shows the
+  reset code to save. The installer's sign-in is now only temporary. It can be skipped.
+- **Existing installs are unchanged**: no welcome screen appears and the sign-in stays
+  as it is.
+- **Account page.** The Security tab is now Account: your name and email, change your
+  sign-in name, password, reset code, reset by email and two-step sign-in in one place.
+- The name at the bottom of the sidebar shows the owner's name and opens Account.
+- Changing only the sign-in name keeps the existing reset code.
+
 ## [0.35.0] — 2026-11-16 — Reset the password by email
 
 - **Security page: Set up reset by email.** Give the address that should receive the

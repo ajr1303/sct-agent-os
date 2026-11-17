@@ -59,6 +59,12 @@ update_requested() {
 }
 update_requested
 
+# --- Sign-in name, for the Account page to show (not a secret) -------------------------
+if [ -f .env ] && [ -d data/backup ]; then
+  signin=$(grep -m1 '^DASHBOARD_USER=' .env | cut -d= -f2-); [ -n "$signin" ] || signin="admin"
+  [ "$(cat data/backup/dashboard-user 2>/dev/null)" = "$signin" ] || printf '%s\n' "$signin" > data/backup/dashboard-user
+fi
+
 # --- Dashboard password change or reset ------------------------------------------------
 if [ -f data/backup/password-request ] && [ -x scripts/dashboard-password.sh ]; then
   ./scripts/dashboard-password.sh --from-request

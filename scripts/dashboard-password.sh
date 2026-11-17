@@ -21,9 +21,20 @@ main() {
     return 0
   }
   current() { grep -m1 '^DASHBOARD_PASSWORD=' .env 2>/dev/null | cut -d= -f2-; }
-  apply() {   # apply <new password>; returns non-zero if the dashboard did not come back
-    local new=$1 tmp=.env.pw.$$
-    ( umask 077; grep -v '^DASHBOARD_PASSWORD=' .env > "$tmp"; printf 'DASHBOARD_PASSWORD=%s\n' "$new" >> "$tmp" ) || { rm -f "$tmp"; return 1; }
+  valid_user() {   # 3 to 64 characters: letters, numbers and . _ @ -
+    local u=$1
+    [ "${#u}" -ge 3 ] && [ "${#u}" -le 64 ] || return 1
+    case "$u" in *[!A-Za-z0-9._@-]*) return 1 ;; esac
+    return 0
+  }
+  apply() {   # apply <new password> [new sign-in name]; either may be empty to keep it.
+              # Returns non-zero if the dashboard did not come back.
+    local new=$1 user=${2:-} tmp=.env.pw.$$
+    [ -n "$new" ] || new=$(current)
+    ( umask 077
+      if [ -n "$user" ]; then grep -v -e '^DASHBOARD_PASSWORD=' -e '^DASHBOARD_USER=' .env > "$tmp"; printf 'DASHBOARD_USER=%s\n' "$user" >> "$tmp"
+      else grep -v '^DASHBOARD_PASSWORD=' .env > "$tmp"; fi
+      printf 'DASHBOARD_PASSWORD=%s\n' "$new" >> "$tmp" ) || { rm -f "$tmp"; return 1; }
     chmod --reference=.env "$tmp" 2>/dev/null; chown --reference=.env "$tmp" 2>/dev/null
     mv "$tmp" .env || return 1
     local had_flag=0; [ -f data/.maintenance ] && had_flag=1
@@ -41,12 +52,13 @@ main() {
   case "${1:-}" in
   --from-request)
     [ -f "$req" ] || exit 0
-    local mode id cur_b64 new_b64 cur new
+    local mode id cur_b64 new_b64 user_b64 cur new user
     mode=$(sed -n 1p "$req" | tr -cd 'a-z'); id=$(sed -n 2p "$req" | tr -cd 'a-f0-9' | cut -c1-64)
-    cur_b64=$(sed -n 3p "$req"); new_b64=$(sed -n 4p "$req")
+    cur_b64=$(sed -n 3p "$req"); new_b64=$(sed -n 4p "$req"); user_b64=$(sed -n 5p "$req")
     rm -f "$req"
     [ -n "$id" ] || exit 0
     cur=$(printf '%s' "$cur_b64" | base64 -d 2>/dev/null); new=$(printf '%s' "$new_b64" | base64 -d 2>/dev/null)
+    user=$(printf '%s' "$user_b64" | base64 -d 2>/dev/null)
     if [ -f data/backup/.update.lock ] && ! flock -n data/backup/.update.lock true 2>/dev/null; then
       result "$id" false "An update is running. Try again when it has finished."; exit 0
     fi
@@ -58,8 +70,11 @@ main() {
       exit 0
     fi
     if [ "$mode" = verify ]; then result "$id" true "Checked."; exit 0; fi
-    if ! valid "$new"; then result "$id" false "That password cannot be used. Use 12 or more letters, numbers and these symbols: ! @ % ^ * ( ) _ + . , : ; ? ~ -"; exit 0; fi
-    if apply "$new"; then result "$id" true "Password changed."
+    [ "$mode" = change ] || user=""          # a reset never changes the sign-in name
+    if [ -z "$new" ] && [ -z "$user" ]; then result "$id" false "Nothing to change."; exit 0; fi
+    if [ -n "$new" ] && ! valid "$new"; then result "$id" false "That password cannot be used. Use 12 or more letters, numbers and these symbols: ! @ % ^ * ( ) _ + . , : ; ? ~ -"; exit 0; fi
+    if [ -n "$user" ] && ! valid_user "$user"; then result "$id" false "That sign-in name cannot be used. Use 3 to 64 letters, numbers and . _ @ -"; exit 0; fi
+    if apply "$new" "$user"; then result "$id" true "Saved."
     else result "$id" false "The password was saved but the dashboard did not restart cleanly. Ask whoever looks after the server to check it."; fi
     ;;
   --ask)

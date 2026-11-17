@@ -2020,7 +2020,7 @@ def _pw_pending(d):
     return p if p and time.time() - float(p.get("at") or 0) < _PW_PENDING_SECONDS else None
 
 
-def _pw_submit(d, mode, current, new, extra=None):
+def _pw_submit(d, mode, current, new, extra=None, username=""):
     """Leave a request for the host. Returns the id the browser polls with."""
     rid = os.urandom(24).hex()
     os.makedirs(os.path.dirname(_PW_REQ), exist_ok=True)
@@ -2030,8 +2030,9 @@ def _pw_submit(d, mode, current, new, extra=None):
         pass
     fd = os.open(_PW_REQ, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write("%s\n%s\n%s\n%s\n" % (mode, rid, base64.b64encode(current.encode()).decode(),
-                                      base64.b64encode(new.encode()).decode()))
+        f.write("%s\n%s\n%s\n%s\n%s\n" % (mode, rid, base64.b64encode(current.encode()).decode(),
+                                          base64.b64encode(new.encode()).decode(),
+                                          base64.b64encode(username.encode()).decode()))
     d["pending"] = {"id_hash": _pw_hash(rid), "mode": mode, "at": time.time()}
     d["pending"].update(extra or {})
     d.pop("outcome", None)
@@ -2042,6 +2043,76 @@ def _pw_submit(d, mode, current, new, extra=None):
 class PasswordChange(BaseModel):
     current: str = ""
     new: str = ""
+    username: str = ""      # optional new sign-in name
+
+
+class AccountInfo(BaseModel):
+    name: str = ""
+    email: str = ""
+
+
+# --- Account: who the owner is, and the first-run welcome ------------------------------
+# The dashboard has one sign-in. Its name and password live in the host's .env; the
+# owner's display name and email live here. A new install leaves `setup-needed` so the
+# first sign-in opens the welcome screen; installs made before that never see it.
+_ACCT_SETUP_FLAG = os.path.join(os.environ.get("AOS_BACKUP_CONFIG", "/backup-config"), "setup-needed")
+_ACCT_USER_FILE = os.path.join(os.environ.get("AOS_BACKUP_CONFIG", "/backup-config"), "dashboard-user")
+_ACCT_USER_OK = re.compile(r"^[A-Za-z0-9._@-]{3,64}$")
+_ACCT_EMAIL_OK = re.compile(r"^[^@\s]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,}$")
+
+
+def _acct():
+    try:
+        d = json.loads(_kv_get("account") or "{}")
+    except Exception:
+        d = {}
+    return d if isinstance(d, dict) else {}
+
+
+def _acct_username():
+    try:
+        with open(_ACCT_USER_FILE, "r", encoding="utf-8") as f:
+            u = f.read().strip()
+        return u if _ACCT_USER_OK.match(u) else "admin"
+    except Exception:
+        return "admin"
+
+
+def _acct_setup_done():
+    try:
+        os.remove(_ACCT_SETUP_FLAG)
+    except OSError:
+        pass
+
+
+@app.get("/account/me")
+def account_me(_auth=Depends(require_auth)):
+    a = _acct()
+    d = _pw_state()
+    try:
+        mfa_on = bool(_mfa_load().get("enabled"))
+    except Exception:
+        mfa_on = False
+    return {"name": a.get("name") or "", "email": a.get("email") or "", "username": _acct_username(),
+            "setup_needed": os.path.exists(_ACCT_SETUP_FLAG), "reset_code_set": bool(d.get("code_hash")),
+            "reset_by_email": bool(d.get("email")), "two_step": mfa_on, "rule": _PW_RULE}
+
+
+@app.put("/account/me")
+def account_save(b: AccountInfo, _auth=Depends(require_auth)):
+    name = re.sub(r"[\x00-\x1f<>]", "", b.name).strip()[:80]
+    email_addr = b.email.strip()[:320]
+    if email_addr and not _ACCT_EMAIL_OK.match(email_addr):
+        raise HTTPException(status_code=400, detail="That email address does not look right.")
+    _kv_set("account", json.dumps({"name": name, "email": email_addr}))
+    return {"name": name, "email": email_addr}
+
+
+@app.post("/account/setup-done")
+def account_setup_done(_auth=Depends(require_auth)):
+    """Close the welcome screen (finished, or "skip for now")."""
+    _acct_setup_done()
+    return {"ok": True}
 
 
 class PasswordReset(BaseModel):
@@ -2113,7 +2184,7 @@ def _pw_email_apply(d, p):
         return "Those settings could not be read. Please enter them again."
     problem = _pw_send_mail(cfg, "Agent OS: password reset by email is set up",
                             "This address will receive the link when someone uses \"Forgot password?\" on the Agent OS "
-                            "sign-in page at %s.\n\nIf you did not set this up, sign in and turn it off on the Security page, "
+                            "sign-in page at %s.\n\nIf you did not set this up, sign in and turn it off on the Account page, "
                             "then change the password.\n" % cfg.get("base_url", ""))
     if problem:
         return "Your password was right, but the test message did not go. " + problem
@@ -2213,10 +2284,13 @@ def password_info(_auth=Depends(require_auth)):
 def password_change(b: PasswordChange, _auth=Depends(require_auth)):
     """Change the password (current + new), or with no new password just prove the
     current one to get a fresh reset code."""
-    mode = "change" if b.new else "verify"
+    username = b.username.strip()
+    mode = "change" if (b.new or username) else "verify"
     if not b.current or len(b.current) > 256:
         raise HTTPException(status_code=400, detail="Enter your current password.")
-    if mode == "change":
+    if username and not _ACCT_USER_OK.match(username):
+        raise HTTPException(status_code=400, detail="That sign-in name cannot be used. Use 3 to 64 letters, numbers and . _ @ -")
+    if mode == "change" and b.new:
         if not _PW_ALLOWED.match(b.new):
             raise HTTPException(status_code=400, detail="That password cannot be used. " + _PW_RULE)
         if b.new == b.current:
@@ -2225,7 +2299,9 @@ def password_change(b: PasswordChange, _auth=Depends(require_auth)):
         d = _pw_state()
         if _pw_pending(d):
             raise HTTPException(status_code=409, detail="A password request is already being handled. Try again in a few minutes.")
-        return {"id": _pw_submit(d, mode, b.current, b.new if mode == "change" else "")}
+        # A sign-in name change on its own leaves the reset code as it is.
+        extra = {"keep_code": True} if (mode == "change" and not b.new) else None
+        return {"id": _pw_submit(d, mode, b.current, b.new if mode == "change" else "", extra, username=username)}
 
 
 @app.get("/account/reset")
@@ -2318,12 +2394,16 @@ def password_result(id: str = ""):
             problem = _pw_email_apply(d, p)
             outcome["ok"] = ok = not problem
             outcome["message"] = problem or "Reset by email is on. A test message was sent."
+        elif ok and p.get("keep_code"):
+            _acct_setup_done()
         elif ok:
             code = _pw_new_code()
             d["code_hash"] = _pw_hash(_pw_norm_code(code))
             d["code_at"] = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
             if p.get("mode") in ("change", "reset"):
                 d["changed_at"] = d["code_at"]
+            if p.get("mode") == "change":
+                _acct_setup_done()         # the owner now has their own password
             outcome["code_enc"] = fernet.encrypt(code.encode()).decode()
         d.pop("pending", None)
         d["outcome"] = outcome

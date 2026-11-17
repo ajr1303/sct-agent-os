@@ -271,3 +271,19 @@ denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
   accepts `token` in place of `code`. The link carries the token in the URL fragment,
   which the reset page removes from the address bar on load.
 
+## Account and first run
+
+- One dashboard sign-in. Name and password are `DASHBOARD_USER` / `DASHBOARD_PASSWORD`
+  in `.env`, passed to Hermes as its basic-auth pair. The owner's display name and email
+  are in connectors `kv` (`account`).
+- `install.sh` leaves `data/backup/setup-needed`. `brand/nav.js` asks `GET /account/me`
+  on load and sends the browser to `brand/welcome.html` while the flag exists. The flag
+  is removed when a password or sign-in name change succeeds, or by
+  `POST /account/setup-done` (skip). Updates never create the flag.
+- A sign-in name change travels on the same host request as a password change (fifth
+  line, base64) and is applied only in `change` mode after the current password check.
+  `host-requests.sh` copies the current name to `data/backup/dashboard-user` for display.
+- `nav.js` swaps the sign-in name shown at the foot of the sidebar for the display name
+  and makes that block open `/security` (the Account tab). If Hermes changes that part
+  of its page, the swap simply does not happen.
+

@@ -374,6 +374,8 @@ main() {
            Until then: $where"
   fi
   rm -f data/.install-incomplete
+  # First sign-in on a new install opens the welcome screen (own password, recovery).
+  mkdir -p data/backup && touch data/backup/setup-needed
   local pcwhere="http://localhost:3100 after: ssh -L 3100:127.0.0.1:3100 <user>@<this-server>"
   local n8where="http://localhost:5678 after: ssh -L 5678:127.0.0.1:5678 <user>@<this-server>"
   cat <<DONE
@@ -381,6 +383,8 @@ main() {
 Agent OS is running.
 Dashboard: $where
 Login:     admin / $(grep ^DASHBOARD_PASSWORD= .env | cut -d= -f2)   (also in $(pwd)/.env)
+           This password is temporary. The first sign-in opens a welcome screen where
+           the owner chooses their own sign-in name and password and sets up recovery.
 
 Three things left to do, once:
   1. Team (Paperclip): open it and create your owner account.

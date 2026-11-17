@@ -124,7 +124,7 @@ sudo ./scripts/set-hostnames.sh agent-os.example.com
 
 It derives `agent-os-paperclip.example.com` and `agent-os-n8n.example.com` (one-level names, so the free Cloudflare certificate covers them), writes the settings to `.env`, prints the three tunnel routes to create, and runs the updater. Details in [docs/RUNBOOK.md](docs/RUNBOOK.md) §3.
 
-**Login:** the installer generates a random dashboard password (user `admin`) and prints it at the end. Change it on the **Security** page, which then shows a one-time **reset code**: save it, because "Forgot password?" on the sign-in page needs it to set a new password. With no reset code, `sudo ./scripts/dashboard-password.sh` on the server sets a new password.
+**Login:** the installer prints a temporary sign-in (`admin` and a random password). The first sign-in on a new install opens a **welcome screen** where the owner enters their name and email, chooses their own sign-in name and password, and saves a one-time **reset code**. After that, the name at the bottom of the sidebar opens the **Account** page: details, password, recovery and two-step sign-in. With no reset code and no reset by email, `sudo ./scripts/dashboard-password.sh` on the server sets a new password.
 
 ---
 
@@ -207,7 +207,7 @@ the restore steps are in [docs/RUNBOOK.md](docs/RUNBOOK.md) §13.
 
 ## Password and reset code
 
-On the **Security** page the owner can change the dashboard password (current
+On the **Account** page the owner can change the dashboard password (current
 password, then the new one) without touching the server. After every change the page
 shows a **reset code** once. If the password is later forgotten, **Forgot password?**
 on the sign-in page takes that code and a new password. The code works once and a new
@@ -221,7 +221,7 @@ that mailbox can reset the dashboard password.
 
 ## Two-step sign-in
 
-The **Security** page adds a six-digit code from an authenticator app (Google
+The **Account** page adds a six-digit code from an authenticator app (Google
 Authenticator, Microsoft Authenticator, 1Password and similar) on top of the dashboard
 password. Scan the QR code, enter one code to confirm, and save the eight one-time
 recovery codes somewhere that is not the server. A browser is asked again after 12
@@ -390,7 +390,7 @@ docs/ARCHITECTURE.md        How the layer works
 
 ## Status
 
-**v0.35.** The last clean one-command install on a fresh VM was run at v0.26 (Hermes v0.23.1, n8n 2.47.5), reached through a Cloudflare Tunnel. Changes since then are tested piece by piece but a fresh end-to-end install of this version has not been rerun yet.
+**v0.36.** The last clean one-command install on a fresh VM was run at v0.26 (Hermes v0.23.1, n8n 2.47.5), reached through a Cloudflare Tunnel. Changes since then are tested piece by piece but a fresh end-to-end install of this version has not been rerun yet.
 
 Verified live:
 
@@ -410,11 +410,11 @@ Verified live:
 Known limitations:
 
 - **Not yet tested: a server reboot, and restoring a backup onto a new server.** Restore opens and checks a backup; putting one back (`--apply`) is unproven, and the team database is not reloaded automatically.
-- **"Update now", and changing or resetting the password from the dashboard, are tested against stand-ins, not yet on a live install. Reset by email has not yet sent through a real mail server.**
+- **"Update now", and changing or resetting the password from the dashboard, are tested against stand-ins, not yet on a live install. Reset by email has not yet sent through a real mail server. The welcome screen and the sidebar name link have not been seen on a live install.**
 - **The stuck-agent watch's scheduled run in n8n, the Appointments tile, Link my team, several sites on the Website page, the installer changes in v0.28, team chart, task replies and the Agents page editor are tested against stand-ins** (a mock board, and for the model check a local database and mock gateways), not yet confirmed on a live one.
 - **Bookings and Mailboxes are view-only.** Agents cannot yet book appointments or send/draft email.
 - **Per-agent model choice does not apply to delegated tasks** (all Paperclip runs use the default Hermes profile).
-- **The dashboard has one shared login.** Two-step sign-in (Security page) adds an authenticator-app code to it; per-person sign-in comes from Cloudflare Access in front of it; per-person roles are not built. Two-step sign-in does not cover n8n or Paperclip, which have their own sign-ins.
+- **The dashboard has one shared login.** Two-step sign-in (Account page) adds an authenticator-app code to it; per-person sign-in comes from Cloudflare Access in front of it; per-person roles are not built. Two-step sign-in does not cover n8n or Paperclip, which have their own sign-ins.
 - **Task completion by agents and the business profile** are built but not yet verified on a live box.
 - **Workflow failures do not surface in "Waiting on you"** on their own; the chat agent or Automation Engineer reads them on request.
 - **Token and cost figures** in the dashboard are incomplete (they exclude auxiliary model calls); the provider's own usage page is the source of truth.

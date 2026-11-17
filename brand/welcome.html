@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Welcome</title>
+<link rel="icon" href="/sct-brand/favicon.svg" type="image/svg+xml">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px;
+         background: #071217; color: #e6eef0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+  main { width: 100%; max-width: 440px; }
+  .logo { width: 220px; height: 64px; max-width: 70vw; margin: 0 auto 26px; background: url(/sct-brand/logo.png) no-repeat center/contain; }
+  h1 { font-size: 20px; margin: 0 0 6px; text-align: center; }
+  p { margin: 0 0 18px; opacity: .75; text-align: center; font-size: 14px; }
+  label { display: block; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; opacity: .65; margin-bottom: 6px; }
+  input[type=text], input[type=password] { width: 100%; padding: 12px 14px; font: inherit; font-size: 16px; margin-bottom: 14px;
+         color: inherit; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.22); font-variant-numeric: tabular-nums; }
+  input:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid #25c9ee; outline-offset: 2px; }
+  .remember { display: flex; gap: 9px; align-items: center; margin: 14px 0 18px; font-size: 13px; opacity: .85; cursor: pointer; text-transform: none; letter-spacing: 0; }
+  button { width: 100%; padding: 12px 16px; font: inherit; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; font-size: 13px;
+           color: #04202a; background: #25c9ee; border: 1px solid #25c9ee; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  .msg { margin-top: 14px; padding: 10px 12px; font-size: 13px; border: 1px solid rgba(255,189,56,.45); background: rgba(255,189,56,.08); }
+  .help { margin-top: 22px; font-size: 12px; opacity: .6; text-align: center; }
+  .code { display: block; margin: 0 0 14px; padding: 12px; text-align: center; font: 17px ui-monospace, SFMono-Regular, Menlo, monospace; color: #e6eef0; background: rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.22); user-select: all; overflow-wrap: anywhere; }
+  .second { margin-top: 10px; color: #e6eef0; background: transparent; border-color: rgba(255,255,255,.3); }
+  a { color: #25c9ee; }
+  .steps { display: flex; gap: 6px; justify-content: center; margin: 0 0 22px; }
+  .steps i { width: 34px; height: 3px; background: rgba(255,255,255,.18); }
+  .steps i.on { background: #25c9ee; }
+  .hint { margin: -8px 0 14px; font-size: 12px; opacity: .6; text-align: left; }
+  .skip { display: block; margin-top: 18px; text-align: center; font-size: 13px; background: none; border: 0; color: #25c9ee; text-transform: none; letter-spacing: 0; font-weight: 400; padding: 6px; }
+  ul { margin: 0 0 18px; padding-left: 20px; font-size: 14px; opacity: .85; }
+  li { margin-bottom: 8px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <div class="logo" role="img" aria-label="Agent OS"></div>
+  <div class="steps" aria-hidden="true"><i id="d1" class="on"></i><i id="d2"></i><i id="d3"></i></div>
+
+  <section id="s-form">
+    <h1>Welcome. Set up your account</h1>
+    <p>You signed in with a temporary password. Choose your own sign-in details so only you have them.</p>
+    <form id="f" autocomplete="off">
+      <label for="name">Your name</label>
+      <input id="name" type="text" maxlength="80" autocomplete="name" required>
+      <label for="email">Your email</label>
+      <input id="email" type="text" inputmode="email" maxlength="320" autocomplete="email" required>
+      <div class="hint">Used for password recovery. Nothing is sent to it now.</div>
+      <label for="user">Sign-in name</label>
+      <input id="user" type="text" maxlength="64" autocapitalize="none" spellcheck="false" autocomplete="username" required>
+      <div class="hint">What you type to sign in. Letters, numbers and . _ @ -</div>
+      <label for="cur">Temporary password (the one you just used)</label>
+      <input id="cur" type="password" maxlength="256" autocomplete="current-password" required>
+      <label for="pw">New password</label>
+      <input id="pw" type="password" minlength="12" maxlength="128" autocomplete="new-password" required>
+      <div class="hint" id="rule"></div>
+      <label for="pw2">New password again</label>
+      <input id="pw2" type="password" minlength="12" maxlength="128" autocomplete="new-password" required>
+      <button id="go" type="submit">Save and continue</button>
+      <div id="msg" class="msg" role="alert" hidden></div>
+    </form>
+    <button id="skip" type="button" class="skip">Skip for now</button>
+  </section>
+
+  <section id="s-wait" hidden>
+    <h1>Saving your sign-in details…</h1>
+    <p>The dashboard restarts, so this takes a minute or two. Keep this page open.</p>
+    <div id="waitmsg" class="msg" role="status" hidden></div>
+  </section>
+
+  <section id="s-code" hidden>
+    <h1>Save your reset code</h1>
+    <p>If you ever forget your password, this code lets you set a new one from the sign-in page. It works once and is not shown again. Keep it somewhere that is not this server.</p>
+    <code id="newcode" class="code"></code>
+    <button id="dl" type="button" class="second">Download as a file</button>
+    <label class="remember"><input id="saved" type="checkbox"> I have saved this code</label>
+    <button id="next" type="button" disabled>Continue</button>
+  </section>
+
+  <section id="s-done" hidden>
+    <h1>You're set up</h1>
+    <p>Sign in again with your new sign-in name and password.</p>
+    <ul>
+      <li><b>Turn on two-step sign-in.</b> After signing in, open Account and add a code from an authenticator app on your phone. Recommended for every install.</li>
+      <li><b>Reset by email</b> is optional and also on the Account page.</li>
+    </ul>
+    <button id="signin" type="button">Sign in</button>
+  </section>
+</main>
+<script>
+(function () {
+  function $(i) { return document.getElementById(i); }
+  var KEY = "aos-welcome-id";
+  function show(t) { $("msg").textContent = t; $("msg").hidden = !t; }
+  function stage(n, dots) {
+    ["s-form", "s-wait", "s-code", "s-done"].forEach(function (s) { $(s).hidden = s !== n; });
+    ["d1", "d2", "d3"].forEach(function (d, i) { $(d).className = i < dots ? "on" : ""; });
+  }
+  function stored(v) { try { if (v === undefined) return sessionStorage.getItem(KEY); if (v) sessionStorage.setItem(KEY, v); else sessionStorage.removeItem(KEY); } catch (e) {} return v; }
+  function json(r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, status: r.status, j: j }; }); }
+  function call(path, method, body) {
+    return fetch("/api/connectors" + path, { method: method || "GET", credentials: "same-origin", cache: "no-store",
+      headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined }).then(json);
+  }
+
+  function poll(id, tries) {
+    tries = tries || 0;
+    call("/account/password-result?id=" + id).then(function (x) {
+      if (x.ok && x.j.done) {
+        stored("");
+        if (x.j.ok) { if (x.j.reset_code) { $("newcode").textContent = x.j.reset_code; stage("s-code", 2); } else stage("s-done", 3); return; }
+        stage("s-form", 1); $("go").disabled = false;
+        show(x.j.message === "The current password is not right." ? "The temporary password is not right." : (x.j.message || "That did not work. Please try again."));
+        return;
+      }
+      if (x.status === 404 || x.status === 400) { stored(""); stage("s-form", 1); $("go").disabled = false; return; }
+      again();
+    }).catch(again);
+    function again() {
+      if (tries > 70) { $("waitmsg").textContent = "This is taking longer than expected. Try signing in with your new details in a few minutes."; $("waitmsg").hidden = false; return; }
+      setTimeout(function () { poll(id, tries + 1); }, 5000);
+    }
+  }
+
+  var pending = stored();
+  if (pending) { stage("s-wait", 1); poll(pending); }
+  else call("/account/me").then(function (x) {
+    if (x.status === 401) { location.replace("/"); return; }
+    if (!x.ok) return;
+    if (!x.j.setup_needed) { location.replace("/"); return; }
+    $("name").value = x.j.name || ""; $("email").value = x.j.email || ""; $("user").value = x.j.username || ""; $("rule").textContent = x.j.rule || "";
+    $("name").focus();
+  }).catch(function () {});
+
+  $("f").addEventListener("submit", function (e) {
+    e.preventDefault(); show("");
+    if ($("pw").value !== $("pw2").value) { show("The two new passwords do not match."); return; }
+    $("go").disabled = true;
+    function fail(x) { $("go").disabled = false; show((x && x.j && (x.j.detail || x.j.error)) || "That did not work. Please try again."); }
+    call("/account/me", "PUT", { name: $("name").value, email: $("email").value }).then(function (a) {
+      if (!a.ok) { fail(a); return; }
+      return call("/security/password", "POST", { current: $("cur").value, "new": $("pw").value, username: $("user").value.trim() }).then(function (x) {
+        if (!x.ok || !x.j.id) { fail(x); return; }
+        stored(x.j.id); $("cur").value = ""; $("pw").value = ""; $("pw2").value = ""; stage("s-wait", 1); poll(x.j.id);
+      });
+    }).catch(function () { $("go").disabled = false; show("Could not reach the server. Check your connection and try again."); });
+  });
+  $("skip").addEventListener("click", function () {
+    if (!window.confirm("Skip for now? You keep the temporary sign-in details. You can change them later on the Account page.")) return;
+    call("/account/setup-done", "POST").then(function () { location.replace("/"); }).catch(function () { location.replace("/"); });
+  });
+  $("saved").addEventListener("change", function () { $("next").disabled = !$("saved").checked; });
+  $("next").addEventListener("click", function () { stage("s-done", 3); });
+  $("signin").addEventListener("click", function () { location.replace("/"); });
+  $("dl").addEventListener("click", function () {
+    var text = "Agent OS password reset code\n" + new Date().toISOString().slice(0, 10) + "\n\nUse this on the sign-in page (Forgot password?) to set a new password. It works once.\n\n" + $("newcode").textContent + "\n";
+    var a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" })); a.download = "agent-os-reset-code.txt";
+    document.body.appendChild(a); a.click(); a.remove();
+  });
+})();
+</script>
+</body>
+</html>

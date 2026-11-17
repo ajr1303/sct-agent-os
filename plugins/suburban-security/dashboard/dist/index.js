@@ -23,6 +23,78 @@
     }
     function when(iso) { try { return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }); } catch (e) { return ""; } }
 
+    // Who you are: display name, email, and the name you sign in with.
+    function AccountCard() {
+      var s;
+      s = useState(null);  var me = s[0], setMe = s[1];
+      s = useState({ name: "", email: "" }); var f = s[0], setF = s[1];
+      s = useState("");    var note = s[0], setNote = s[1];
+      s = useState("");    var err = s[0], setErr = s[1];
+      s = useState(false); var ask = s[0], setAsk = s[1];             // changing the sign-in name
+      s = useState({ username: "", current: "" }); var u = s[0], setU = s[1];
+      s = useState("");    var waitId = s[0], setWaitId = s[1];
+      function load() { return api("/account/me").then(function (m) { setMe(m); setF({ name: m.name || "", email: m.email || "" }); }).catch(function () {}); }
+      useEffect(function () { load(); }, []);
+      useEffect(function () {
+        if (!waitId) return;
+        var stop = false, tries = 0;
+        function tick() {
+          if (stop) return;
+          fetch("/api/connectors/account/password-result?id=" + waitId, { credentials: "same-origin", cache: "no-store" })
+            .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, status: r.status, j: j }; }); })
+            .then(function (x) {
+              if (stop) return;
+              if (x.ok && x.j.done) {
+                setWaitId("");
+                if (x.j.ok) { setAsk(false); setNote("Sign-in name changed. Use it the next time you sign in."); load(); }
+                else setErr(x.j.message || "That did not work. Please try again.");
+                return;
+              }
+              if (x.status === 404 || x.status === 400) { setWaitId(""); return; }
+              next();
+            }).catch(next);
+        }
+        function next() { tries++; if (tries > 80) { setWaitId(""); setErr("This is taking longer than expected. Reload the page in a few minutes."); return; } setTimeout(tick, 4000); }
+        tick();
+        return function () { stop = true; };
+      }, [waitId]);
+      function save(e) {
+        e.preventDefault(); setErr(""); setNote("");
+        api("/account/me", { method: "PUT", body: JSON.stringify(f) }).then(function () { setNote("Saved."); load(); })
+          .catch(function (e2) { setErr(String(e2.message || e2)); });
+      }
+      function changeUser(e) {
+        e.preventDefault(); setErr(""); setNote("");
+        api("/security/password", { method: "POST", body: JSON.stringify({ current: u.current, "new": "", username: u.username.trim() }) })
+          .then(function (x) { setU({ username: "", current: "" }); setWaitId(x.id); })
+          .catch(function (e2) { setErr(String(e2.message || e2)); });
+      }
+      if (!me) return null;
+      var dirty = f.name !== (me.name || "") || f.email !== (me.email || "");
+      return h("div", { className: "ss-card" },
+        h("div", { className: "ss-head" }, h("div", { className: "ss-name" }, "Your details")),
+        h("form", { className: "ss-ask", onSubmit: save },
+          h("label", { className: "ss-field" }, h("span", null, "Your name"),
+            h("input", { className: "ss-in", type: "text", maxLength: 80, autoComplete: "name", value: f.name, onChange: function (e) { setF({ name: e.target.value, email: f.email }); } })),
+          h("label", { className: "ss-field" }, h("span", null, "Your email"),
+            h("input", { className: "ss-in", type: "email", maxLength: 320, autoComplete: "email", value: f.email, onChange: function (e) { setF({ name: f.name, email: e.target.value }); } })),
+          h("div", { className: "ss-acts ss-left" }, h("button", { type: "submit", className: "ss-btn ss-primary", disabled: !dirty }, "Save"))),
+        h("div", { className: "ss-facts" }, h("div", null, h("span", { className: "ss-dim" }, "Sign-in name"), h("b", null, me.username))),
+        waitId ? h("div", { className: "ss-p" }, "Changing your sign-in name. The dashboard restarts, so this takes a minute or two and you may be asked to sign in again. Keep this page open.")
+          : ask ? h("form", { className: "ss-ask", onSubmit: changeUser },
+              h("label", { className: "ss-field" }, h("span", null, "New sign-in name"),
+                h("input", { className: "ss-in", type: "text", maxLength: 64, autoCapitalize: "none", spellCheck: false, autoComplete: "off", value: u.username, onChange: function (e) { setU({ username: e.target.value, current: u.current }); } })),
+              h("label", { className: "ss-field" }, h("span", null, "Current password"),
+                h("input", { className: "ss-in", type: "password", maxLength: 256, autoComplete: "current-password", value: u.current, onChange: function (e) { setU({ username: u.username, current: e.target.value }); } })),
+              h("div", { className: "ss-dim ss-small" }, "3 to 64 letters, numbers and . _ @ - The dashboard restarts for about a minute."),
+              h("div", { className: "ss-acts ss-left" },
+                h("button", { type: "submit", className: "ss-btn ss-primary", disabled: u.username.trim().length < 3 || !u.current }, "Change sign-in name"),
+                h("button", { type: "button", className: "ss-btn", onClick: function () { setAsk(false); setErr(""); } }, "Cancel")))
+          : h("div", { className: "ss-acts ss-left" }, h("button", { type: "button", className: "ss-btn", onClick: function () { setAsk(true); setErr(""); setNote(""); } }, "Change sign-in name")),
+        note ? h("div", { className: "ss-ok" }, note) : null,
+        err ? h("div", { className: "ss-msg" }, err) : null);
+    }
+
     // Password: change it, and keep a reset code for the day it is forgotten.
     function PasswordCard() {
       var s;
@@ -176,12 +248,12 @@
         document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
       }
 
-      if (d == null) return h("div", { className: "ss-wrap" }, h("div", { className: "ss-h1" }, "Security"),
+      if (d == null) return h("div", { className: "ss-wrap" }, h("div", { className: "ss-h1" }, "Account"),
         err ? h("div", { className: "ss-msg" }, err) : h("div", { className: "ss-dim" }, "Loading…"));
 
       // Recovery codes are shown once, right after turning on or replacing them.
       if (codes) return h("div", { className: "ss-wrap" },
-        h("div", { className: "ss-h1" }, "Security"),
+        h("div", { className: "ss-h1" }, "Account"),
         h("div", { className: "ss-card" },
           h("div", { className: "ss-name" }, "Save your recovery codes"),
           h("div", { className: "ss-p" }, "If you lose your phone, one of these gets you in instead of the app's code. Each works once. Keep them somewhere safe that is not this server: a password manager, or printed. They are not shown again."),
@@ -246,8 +318,9 @@
           h("div", { className: "ss-dim ss-small" }, "Lost the phone and the recovery codes? On the server, run: sudo ./scripts/mfa-reset.sh"));
       }
       return h("div", { className: "ss-wrap" },
-        h("div", { className: "ss-h1" }, "Security"),
-        h("div", { className: "ss-sub" }, "Your password and extra protection for signing in to this dashboard."),
+        h("div", { className: "ss-h1" }, "Account"),
+        h("div", { className: "ss-sub" }, "Your details, your password and extra protection for signing in to this dashboard."),
+        h(AccountCard),
         h(PasswordCard),
         body);
     }

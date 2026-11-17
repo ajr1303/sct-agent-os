@@ -43,3 +43,4 @@
 .ss-codes code,.ss-secret{color:inherit!important;-webkit-text-fill-color:currentColor!important}
 .ss-in,.ss-in::placeholder{-webkit-text-fill-color:currentColor}
 .ss-in::placeholder{opacity:.4}
+.ss-ok{font-size:13px;line-height:1.5;padding:10px 12px;border:1px solid rgba(52,211,153,.45);background:rgba(52,211,153,.08)}

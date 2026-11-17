@@ -1,10 +1,12 @@
 {
   "name": "suburban-security",
-  "label": "Security",
-  "description": "Two-step sign-in with an authenticator app",
-  "icon": "ShieldCheck",
+  "label": "Account",
+  "description": "Your sign-in details, password recovery and two-step sign-in",
+  "icon": "UserCog",
   "version": "0.1.0",
-  "tab": { "path": "/security" },
+  "tab": {
+    "path": "/security"
+  },
   "entry": "dist/index.js",
   "css": "dist/style.css"
 }
