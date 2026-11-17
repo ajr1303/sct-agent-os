@@ -2,6 +2,19 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.38.0] — 2026-11-16 — Agents can read mail and prepare replies
+
+- **Mail tools for agents, on every install.** Agents can list unread messages, read
+  one, and save a reply in the mailbox's Drafts folder. They cannot send, delete, move
+  or mark mail; the owner sends drafts from their own mail app.
+- **You choose per mailbox** on the Mailboxes page. It is ticked by default when
+  connecting a mailbox. Mailboxes already connected stay off until you tick them.
+- Sign-in codes, password resets and similar messages are kept from agents, and each
+  email is handed over marked as outside content, not instructions.
+- The Mailboxes page shows what agents did with your mail.
+- The Customer Support, Lead Qualifier, Front Desk, IT Helpdesk and Review templates
+  now tell the agent how to use mail. Agents already created keep their instructions.
+
 ## [0.37.0] — 2026-11-16 — A simpler menu, and a name for your main assistant
 
 - **Menu.** "Advanced" is gone. Messaging and Messaging access move up to Connections.

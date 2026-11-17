@@ -57,7 +57,7 @@ Re-running the command updates an existing install in place, or resumes one that
 | **Usage** | How much of your AI provider plan is used, what is left, when it resets, and whether it is on pace to run out first. MiniMax M Plan supported today. |
 | **Tasks** | Tasks delegated to agents, their status, replies and files. **Reply, reopen, mark done or cancel** from the dashboard; a reply wakes the assigned agent. Agents close their own tasks; runaway tasks are halted automatically and can be released. |
 | **Automations** | Bundled **n8n**. Workflow and run status, **turn workflows on and off** from the dashboard, one-click open, and **Waiting for your approval**: agents can build workflows but only the owner can switch one on. A built-in **stuck-agent watch** retries failed connections and reminds agents about tasks that have gone quiet, then hands them to you after two tries. |
-| **Mailboxes** | Connect email accounts (Gmail, Microsoft 365, any IMAP) and see a combined unread/preview. View-only today. Credentials encrypted at rest. |
+| **Mailboxes** | Connect email accounts (Gmail, Microsoft 365, any IMAP) and see a combined unread/preview. Per mailbox, you choose whether agents may read it and save draft replies; they can never send. Credentials encrypted at rest. |
 | **Bookings** | Connect a scheduling app (Cal.com, Calendly, Acuity, Setmore, or an iCal link) and see upcoming appointments. View-only today. |
 | **Memory** | Self-hosted Honcho long-term memory (Postgres + pgvector + deriver), wired into Hermes. |
 | **Access** | Loopback by default; SSH tunnel, **Cloudflare Tunnel** (HTTPS, no open ports), or LAN. Per-person team sign-in via Cloudflare Access. |
@@ -231,6 +231,22 @@ Lost the phone and the codes: `sudo ./scripts/mfa-reset.sh` on the server turns 
 off. It covers the dashboard only; n8n and Paperclip have their own sign-ins. See
 [docs/RUNBOOK.md](docs/RUNBOOK.md) §16.
 
+## Email for your agents
+
+Every install gives agents four mail tools: see which mailboxes are open to them, list
+unread messages, read one, and save a reply in the mailbox's **Drafts** folder. They
+work as soon as a mailbox is connected with "Let my agents read this mailbox" ticked
+(on by default when connecting; mailboxes connected before v0.38 start switched off).
+
+- **Agents never send.** A draft waits in Drafts until the owner reads and sends it.
+- **Nothing is changed in the inbox.** Messages an agent reads stay unread for you; it
+  cannot delete or move mail, and attachments are named but never opened.
+- **Security mail is kept from agents:** sign-in codes, password resets and similar.
+  The filter works on wording, so it is a safeguard and not a guarantee. Use a shared
+  business inbox (support@, hello@), not a personal one.
+- **An email cannot give an agent orders.** Every message is handed over marked as
+  outside content, and the Mailboxes page lists what agents did with your mail.
+
 ## Automations (bundled n8n)
 
 Agent OS ships its **own fresh [n8n](https://n8n.io) instance** (the `automation` compose profile, on by default), pinned to a tested version, on a dedicated volume with its own encryption key.
@@ -390,7 +406,7 @@ docs/ARCHITECTURE.md        How the layer works
 
 ## Status
 
-**v0.37.** The last clean one-command install on a fresh VM was run at v0.26 (Hermes v0.23.1, n8n 2.47.5), reached through a Cloudflare Tunnel. Changes since then are tested piece by piece but a fresh end-to-end install of this version has not been rerun yet.
+**v0.38.** The last clean one-command install on a fresh VM was run at v0.26 (Hermes v0.23.1, n8n 2.47.5), reached through a Cloudflare Tunnel. Changes since then are tested piece by piece but a fresh end-to-end install of this version has not been rerun yet.
 
 Verified live:
 
@@ -412,7 +428,7 @@ Known limitations:
 - **Not yet tested: a server reboot, and restoring a backup onto a new server.** Restore opens and checks a backup; putting one back (`--apply`) is unproven, and the team database is not reloaded automatically.
 - **"Update now", and changing or resetting the password from the dashboard, are tested against stand-ins, not yet on a live install. Reset by email has not yet sent through a real mail server. The welcome screen and the sidebar name link have not been seen on a live install.**
 - **The stuck-agent watch's scheduled run in n8n, the Appointments tile, Link my team, several sites on the Website page, the installer changes in v0.28, team chart, task replies and the Agents page editor are tested against stand-ins** (a mock board, and for the model check a local database and mock gateways), not yet confirmed on a live one.
-- **Bookings and Mailboxes are view-only.** Agents cannot yet book appointments or send/draft email.
+- **Agents can read mail and save drafts, not send.** Sending stays with the owner, from their own mail app. Bookings are still view-only: agents cannot book appointments yet. The mail tools are tested against a stand-in mailbox, not yet a real Gmail or Microsoft 365 account.
 - **Per-agent model choice does not apply to delegated tasks** (all Paperclip runs use the default Hermes profile).
 - **The dashboard has one shared login.** Two-step sign-in (Account page) adds an authenticator-app code to it; per-person sign-in comes from Cloudflare Access in front of it; per-person roles are not built. Two-step sign-in does not cover n8n or Paperclip, which have their own sign-ins.
 - **Task completion by agents and the business profile** are built but not yet verified on a live box.

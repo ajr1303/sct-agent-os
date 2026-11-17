@@ -632,3 +632,28 @@ The top row adapts to what is connected. Nothing needs configuring.
 
 A tile that stays empty after connecting: reload the page, then check the matching
 page (Automations, Bookings, Website) for an error message.
+
+## 19. Email for agents
+
+Agents on this server get `list_mailboxes`, `list_mail`, `read_mail` and `draft_reply`
+through the Agent OS tool server. Nothing to install: connect a mailbox and they work.
+
+- **Switch per mailbox:** Mailboxes page, tick "Agents can read this mailbox…". New
+  connections have it ticked unless the owner unticks it. Mailboxes connected before
+  v0.38 are off until ticked.
+- **What an agent can do:** list unread mail, read a message as text (8,000 characters
+  at most), and save a reply to Drafts. It cannot send, delete, move or mark mail.
+- **Drafts:** saved to the folder the mail server marks as Drafts (falls back to common
+  names). If none is found the agent is told to post its reply on the task instead.
+- **Kept from agents:** messages whose subject or opening lines look like a sign-in
+  code, a reset link or an account confirmation. This is pattern matching and will
+  miss unusual wording, so advise a shared business inbox, never the owner's personal
+  one, and never the address that receives Agent OS reset links.
+- **Outside content:** every message carries a notice that it is information, not
+  instructions. That lowers the risk of a hostile email steering an agent; it does not
+  remove it, which is why agents cannot send or change anything.
+- **Audit:** "What agents did with your mail" on the Mailboxes page (last 500 kept).
+- Agents that run on their own servers do not have these tools.
+- Problems: "Could not sign in" means the mailbox password or app password changed;
+  remove and reconnect it.
+

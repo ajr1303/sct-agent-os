@@ -52,10 +52,17 @@
       s = useState(null);  var ok = s[0], setOk = s[1];
       s = useState(false); var showForm = s[0], setShowForm = s[1];
       s = useState(null);  var confirmId = s[0], setConfirmId = s[1];
+      s = useState(true);  var agentOk = s[0], setAgentOk = s[1];       // connect form: let agents use this mailbox
+      s = useState([]);    var activity = s[0], setActivity = s[1];
 
       function refresh() {
         api("/mailboxes").then(setBoxes).catch(function () {});
         api("/summary").then(setSummary).catch(function () {});
+        api("/mailboxes/agent-activity").then(function (a) { setActivity(Array.isArray(a) ? a : []); }).catch(function () {});
+      }
+      function setAccess(id, on) {
+        api("/mailboxes/" + id + "/agent-access", { method: "PUT", body: JSON.stringify({ agent_access: on }) })
+          .then(refresh).catch(function (e2) { setErr(String(e2.message || e2)); });
       }
 
       function applyPreset(key, p) {
@@ -80,7 +87,7 @@
         api("/mailboxes", { method: "POST", body: JSON.stringify({
           label: label, email: emailv, provider: provider,
           imap_host: host, imap_port: +port || 993, use_ssl: true,
-          username: username, password: password
+          username: username, password: password, agent_access: agentOk
         }) }).then(function () {
           setBusy(false); setOk("Mailbox connected."); setPassword(""); setEmail(""); setLabel(""); setUsername("");
           setShowForm(false); refresh();
@@ -122,6 +129,9 @@
             onChange: function (e) { setUsername(e.target.value); } })) : null
         ),
         hint ? h("div", { className: "sm-hint" }, hint) : null,
+        h("label", { className: "sm-check" },
+          h("input", { type: "checkbox", checked: agentOk, onChange: function (e) { setAgentOk(e.target.checked); } }),
+          h("span", null, "Let my agents read this mailbox and save draft replies. They cannot send, delete or move mail, and sign-in codes and reset links are kept from them. Best for a shared business inbox, not a personal one.")),
         err ? h("div", { className: "sm-msg sm-err" }, err) : null,
         h("div", { className: "sm-form-actions" },
           h("button", { type: "button", className: "sm-btn sm-ghost", onClick: function () { setShowForm(false); setErr(null); } }, "Cancel"),
@@ -149,6 +159,10 @@
                     h("button", { className: "sm-x", onClick: function () { del(b.id); } }, "Remove"),
                     h("button", { className: "sm-x sm-x-mut", onClick: function () { setConfirmId(null); } }, "Cancel"))
                 : h("button", { className: "sm-iconbtn", title: "Remove", onClick: function () { setConfirmId(b.id); } }, "✕"))),
+          h("label", { className: "sm-check sm-check-row" },
+            h("input", { type: "checkbox", checked: !!b.agent_access, onChange: function (e) { setAccess(b.id, e.target.checked); } }),
+            h("span", null, b.agent_access ? "Agents can read this mailbox and save draft replies. They cannot send."
+              : "Agents cannot use this mailbox. Tick to let them read it and save draft replies.")),
           boxErr ? h("div", { className: "sm-box-err" }, "Couldn't reach this mailbox: " + boxErr)
             : msgs.length === 0
               ? h("div", { className: "sm-box-empty" }, unread === 0 ? "Inbox zero — nothing unread." : "No unread preview.")
@@ -164,7 +178,7 @@
         h("div", { className: "sm-top" },
           h("div", null,
             h("div", { className: "sm-h1" }, "Mailboxes"),
-            h("div", { className: "sm-sub" }, "Connect the email accounts your agents work with — multiple accounts, any provider.")),
+            h("div", { className: "sm-sub" }, "Connect your business inboxes. You choose, per mailbox, whether your agents may read it and prepare draft replies.")),
           h("div", { className: "sm-top-right" },
             totalUnread != null ? h("span", { className: "sm-total" }, totalUnread + " unread across " + (summary.mailbox_count || 0)) : null,
             h("button", { className: "sm-btn sm-primary", onClick: function () { setShowForm(!showForm); setErr(null); setOk(null); } },
@@ -177,7 +191,14 @@
               h("div", { className: "sm-zero-sub" }, "Connect Gmail, Microsoft 365, or any hosted-domain inbox to get started."),
               h("button", { className: "sm-btn sm-primary", onClick: function () { setShowForm(true); } }, "+ Connect a mailbox"))
           : h("div", { className: "sm-list" }, list),
-        h("div", { className: "sm-foot" }, "Credentials are encrypted at rest. Passwords are never shown again after you connect.")
+        activity.length ? h("div", { className: "sm-act" },
+          h("div", { className: "sm-act-h" }, "What agents did with your mail"),
+          activity.slice(0, 12).map(function (a, i) {
+            return h("div", { className: "sm-act-row", key: i },
+              h("span", { className: "sm-act-when" }, (a.at || "").replace("T", " ").slice(0, 16)),
+              h("span", null, "An agent " + a.action + (a.subject ? ": " + a.subject : "") + " (" + a.mailbox + ")"));
+          })) : null,
+        h("div", { className: "sm-foot" }, "Credentials are encrypted at rest. Passwords are never shown again after you connect. Agents only ever save drafts; you send them from your own mail app.")
       );
     }
 

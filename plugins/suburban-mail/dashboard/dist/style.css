@@ -52,3 +52,10 @@
 .sm-msg-date{opacity:.45;font-size:12px;text-align:right}
 @media (max-width:720px){.sm-msg-row{grid-template-columns:1fr;gap:2px}.sm-msg-date{text-align:left}}
 .sm-foot{font-size:11px;opacity:.5;margin-top:4px}
+.sm-check{display:flex;gap:9px;align-items:flex-start;font-size:13px;line-height:1.45;margin:10px 0 4px;cursor:pointer}
+.sm-check input{margin-top:3px;flex:none}
+.sm-check-row{padding:10px 16px;margin:0;border-top:1px solid var(--color-border,rgba(255,255,255,.08));opacity:.85}
+.sm-act{border:1px solid var(--color-border,rgba(255,255,255,.12));padding:14px 16px;display:flex;flex-direction:column;gap:6px}
+.sm-act-h{font-size:11px;letter-spacing:.08em;text-transform:uppercase;opacity:.6;margin-bottom:4px}
+.sm-act-row{display:flex;gap:12px;font-size:13px;line-height:1.4}
+.sm-act-when{flex:none;opacity:.55;font-variant-numeric:tabular-nums}
