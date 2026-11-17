@@ -2,6 +2,13 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.42.2] — 2026-11-17 — Memory in chat: the real cause
+
+- **"Honcho memory is off for this session" at the end of chat answers.** The memory
+  settings file was owned by root, and the agent service, which runs as its own user,
+  could not read it. The updater and the installer now give the file the right owner.
+  (0.42.1 fixed a different, rarer cause: an empty owner name.)
+
 ## [0.42.1] — 2026-11-17 — Memory note in chat, full workflow list, tables in chat
 
 - **Memory switched off in chat.** Installs made before the installer gave the owner a

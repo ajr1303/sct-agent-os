@@ -75,6 +75,19 @@ if [ -f "$HJ" ]; then
     echo "Memory had no owner name set, which switched it off in chat. Set it to \"owner\" (previous file kept as honcho.json.bak)."
   fi
 fi
+# The memory settings are written by root, but Hermes runs as its own user inside the
+# container. If it cannot read the file it turns memory off in every chat. Give the
+# file the same owner as Hermes' own config.
+fix_memory_owner() {
+  local f=data/hermes/honcho.json ref=data/hermes/config.yaml
+  [ -f "$f" ] || return 0
+  [ -f "$ref" ] || ref=data/hermes
+  if [ "$(stat -c '%u:%g' "$f")" != "$(stat -c '%u:%g' "$ref")" ]; then
+    chown --reference="$ref" "$f" && echo "Memory settings were not readable by the agent service, which switched memory off in chat. Fixed."
+  fi
+  chmod 600 "$f"
+}
+fix_memory_owner
 # Prefer prebuilt images for this release; fall back to a local build if unavailable.
 docker compose pull -q --ignore-pull-failures 2>/dev/null || true
 docker compose build connectors

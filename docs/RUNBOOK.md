@@ -724,8 +724,15 @@ created directly in Paperclip, are not covered.
 
 ## 23. "Honcho memory is off for this session" in chat
 
-Hermes prints this when the memory settings name no owner. The updater fills an empty
-or missing `peerName` in `data/hermes/honcho.json` with `owner` and restarts Hermes.
+Hermes prints this when it cannot use `data/hermes/honcho.json`. Two causes, both
+repaired by the updater:
+
+1. **It cannot read the file** (most common). The file is owned by root, but Hermes
+   runs as its own user. `hermes honcho peer --user X` then reports
+   `Permission denied: '/opt/data/honcho.json'`. Fix by hand:
+   `sudo chown --reference=data/hermes/config.yaml data/hermes/honcho.json && sudo docker compose restart hermes`
+2. **The file names no owner**: an empty or missing `peerName`, which the updater
+   fills with `owner`.
 To use the owner's real name instead, set it once before any memories build up:
 
 ```bash

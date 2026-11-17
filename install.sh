@@ -356,6 +356,13 @@ main() {
   hermes_first_run
   say "Setting up chat tools (delegation + automations)"
   ./scripts/sync-chat-tools.sh || warn "chat tools setup reported problems; re-run: ./scripts/sync-chat-tools.sh"
+  # Hermes runs as its own user in the container and must be able to read the memory
+  # settings the installer wrote as root, or memory is switched off in every chat.
+  if [ -f data/hermes/honcho.json ]; then
+    if [ -f data/hermes/config.yaml ]; then chown --reference=data/hermes/config.yaml data/hermes/honcho.json
+    else chown --reference=data/hermes data/hermes/honcho.json; fi
+    chmod 600 data/hermes/honcho.json
+  fi
   start_stack
   enable_plugins
   install_cron
