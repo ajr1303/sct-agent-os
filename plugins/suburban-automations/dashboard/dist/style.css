@@ -93,3 +93,4 @@
 .sa-watch-logrow{display:grid;grid-template-columns:120px minmax(120px,1fr) 2fr;gap:10px}
 .sa-watch-hint{font-size:12px;opacity:.6;line-height:1.5}
 @media (max-width:640px){.sa-watch-logrow{grid-template-columns:1fr}}
+.sa-sum-pre{white-space:pre-wrap;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:inherit!important;-webkit-text-fill-color:currentColor!important;background:rgba(0,0,0,.25);margin:0;max-height:340px;overflow:auto}

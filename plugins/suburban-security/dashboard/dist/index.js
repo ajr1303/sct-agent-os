@@ -99,6 +99,10 @@
                 h("button", { type: "button", className: "ss-btn", onClick: function () { setAsk(false); setErr(""); } }, "Cancel")))
           : h("div", { className: "ss-acts ss-left" }, h("button", { type: "button", className: "ss-btn", onClick: function () { setAsk(true); setErr(""); setNote(""); } }, "Change sign-in name")),
         h("label", { className: "ss-check" },
+          h("input", { type: "checkbox", checked: me.agents_close_routine !== false, onChange: function (e) {
+            api("/account/me", { method: "PUT", body: JSON.stringify({ name: me.name || "", email: me.email || "", agents_close_routine: e.target.checked }) }).then(load).catch(function (e2) { setErr(String(e2.message || e2)); }); } }),
+          h("span", null, "Let agents finish routine work without asking me. They close it themselves and it appears in the daily task summary. They still ask before anything involving money, messages to people outside the business, prices or dates, passwords or access, deleting data, or a security incident.")),
+        h("label", { className: "ss-check" },
           h("input", { type: "checkbox", checked: !!me.operator_tools, onChange: function (e) { setOp(e.target.checked); } }),
           h("span", null, "Show operator tools in the menu. These are technical pages for whoever looks after the system (files, logs, raw settings, plugins). Changes made there can stop the system working.")),
         note ? h("div", { className: "ss-ok" }, note) : null,

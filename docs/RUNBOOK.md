@@ -675,3 +675,24 @@ for the colleague and the original is left waiting on it.
 Agents still cannot create fresh tasks of their own; only the chat assistant and the
 owner do that. Agents on their own servers do not have this tool.
 
+## 21. Fewer "Needs you" items, and the daily task summary
+
+- **Account > "Let agents finish routine work without asking me"** (on by default).
+  With it on, an agent that asks the owner only to verify, confirm or close finished
+  work is refused and told to close it with `complete_task`. Agents still ask about:
+  money; anything sent, published or promised outside the business; prices, dates and
+  scope; passwords, codes and access; deleting data; security incidents; hiring; and
+  genuine choices. Untick it to have agents ask about everything again.
+- The check is on the wording of the question, so it catches the common
+  "please verify and close" pattern and lets anything that names a real decision through.
+- It applies to agents that run on this server. Agents on their own servers follow
+  their own instructions; give them the same rule there.
+- **Automations > Daily task summary.** "Show today's summary" previews it. "Create the
+  workflow" adds "Agent OS: daily task summary" to n8n, switched off: add an email
+  (or Telegram, Slack) step using `{{ $json.text }}` and switch it on. To include it
+  in an existing daily brief, copy the "Get the task summary" step into that workflow.
+- The summary lists what was closed in the last 24 hours, what is waiting on the owner
+  (total and new), what is in progress, hand-offs, and agents in error.
+- The summary step carries an internal token in the workflow, the same one the
+  stuck-agent watch uses. The address only answers inside the server.
+

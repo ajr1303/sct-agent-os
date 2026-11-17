@@ -2092,6 +2092,7 @@ class AccountInfo(BaseModel):
     email: str = ""
     main_agent: str | None = None      # what the Chat page calls the main assistant
     operator_tools: bool | None = None  # show the operator pages in the sidebar
+    agents_close_routine: bool | None = None  # agents finish routine work without asking the owner
 
 
 # --- Account: who the owner is, and the first-run welcome ------------------------------
@@ -2110,6 +2111,13 @@ def _acct():
     except Exception:
         d = {}
     return d if isinstance(d, dict) else {}
+
+
+def _agents_close_routine(a=None):
+    """Owner's choice: agents finish routine work themselves and only ask about what
+    matters. On unless the owner switches it off."""
+    a = _acct() if a is None else a
+    return a.get("agents_close_routine") is not False
 
 
 def _clean_agent_name(v):
@@ -2154,6 +2162,7 @@ def account_me(_auth=Depends(require_auth)):
         mfa_on = False
     return {"name": a.get("name") or "", "email": a.get("email") or "", "username": _acct_username(),
             "main_agent": a.get("main_agent") or "", "operator_tools": bool(a.get("operator_tools")),
+            "agents_close_routine": _agents_close_routine(a),
             "setup_needed": os.path.exists(_ACCT_SETUP_FLAG), "reset_code_set": bool(d.get("code_hash")),
             "reset_by_email": bool(d.get("email")), "two_step": mfa_on, "rule": _PW_RULE}
 
@@ -2170,6 +2179,8 @@ def account_save(b: AccountInfo, _auth=Depends(require_auth)):
         a["main_agent"] = _clean_agent_name(b.main_agent)
     if b.operator_tools is not None:
         a["operator_tools"] = bool(b.operator_tools)
+    if b.agents_close_routine is not None:
+        a["agents_close_routine"] = bool(b.agents_close_routine)
     _kv_set("account", json.dumps(a))
     return {"name": name, "email": email_addr, "main_agent": a.get("main_agent") or "",
             "operator_tools": bool(a.get("operator_tools"))}
@@ -2792,6 +2803,177 @@ async def stuck_watch_internal(request: Request):
         return await asyncio.to_thread(stuck_watch_run, False)
     finally:
         _watch_lock.release()
+
+
+# --- Daily task summary ---------------------------------------------------------------
+# Agents close routine work themselves; the owner reads what happened once a day
+# instead of approving each item. This builds that digest. A workflow in n8n fetches
+# it (token-checked, not reachable through the public proxy) and sends it on.
+SUMMARY_WORKFLOW_NAME = "Agent OS: daily task summary"
+
+
+def _summary_when(v):
+    try:
+        return dtparse.parse(str(v)).timestamp()
+    except Exception:
+        return 0
+
+
+def _task_summary(hours=24):
+    hours = max(1, min(int(hours or 24), 168))
+    cutoff = time.time() - hours * 3600
+    cid = _pc_company_id()
+    if not cid:
+        raise ToolError("The team is not linked yet.")
+    names = {}
+    agents = []
+    try:
+        _, agents = _tool_agents()
+        names = {str(x.get("id")): _agent_name(x) for x in agents}
+    except Exception:
+        pass
+
+    def rows(status, limit):
+        try:
+            d = _pc_get("/api/companies/" + str(cid) + "/issues?status=" + status + "&sortField=updated&sortDir=desc&limit=" + str(limit))
+            return [i for i in (d if isinstance(d, list) else (d.get("issues") or d.get("items") or d.get("rows") or d.get("data") or []))
+                    if isinstance(i, dict)]
+        except Exception:
+            return []
+
+    def line(i):
+        key = i.get("identifier") or i.get("humanKey") or i.get("key") or ""
+        who = names.get(str(i.get("assigneeAgentId")), "unassigned")
+        return ("%s %s (%s)" % (key, str(i.get("title") or "(untitled)")[:110], who)).strip()
+
+    def recent(i):
+        return _summary_when(i.get("updatedAt") or i.get("lastActivityAt") or i.get("createdAt")) >= cutoff
+
+    done = [i for i in rows("done", 200) if recent(i)]
+    waiting = rows("in_review,blocked", 200)
+    waiting_new = [i for i in waiting if recent(i)]
+    working = rows("in_progress", 100)
+    in_error = [_agent_name(x) for x in agents if (x.get("status") or "") == "error"]
+    handed = 0
+    try:
+        with closing(get_db()) as con:
+            handed = con.execute("SELECT COUNT(*) FROM task_handoffs WHERE at >= ?",
+                                 (datetime.datetime.utcfromtimestamp(cutoff).strftime("%Y-%m-%dT%H:%M:%SZ"),)).fetchone()[0]
+    except Exception:
+        pass
+    period = "the last %d hours" % hours if hours != 24 else "the last 24 hours"
+    out = ["Task summary for " + period, ""]
+    out.append("Closed by your agents: %d" % len(done))
+    out += ["  - " + line(i) for i in done[:40]]
+    if len(done) > 40:
+        out.append("  ... and %d more" % (len(done) - 40))
+    out += ["", "Waiting on you: %d in total, %d new" % (len(waiting), len(waiting_new))]
+    out += ["  - " + line(i) for i in waiting_new[:25]]
+    if len(waiting_new) > 25:
+        out.append("  ... and %d more" % (len(waiting_new) - 25))
+    out += ["", "In progress: %d" % len(working)]
+    out += ["  - " + line(i) for i in working[:15]]
+    if handed:
+        out += ["", "Passed between agents: %d" % handed]
+    if in_error:
+        out += ["", "Agents in error: " + ", ".join(in_error)]
+    text = "\n".join(out)
+    import html as _html
+    return {"hours": hours, "closed": len(done), "waiting_total": len(waiting), "waiting_new": len(waiting_new),
+            "in_progress": len(working), "handed_off": handed, "agents_in_error": in_error,
+            "text": text, "html": "<pre style=\"font:14px/1.5 system-ui,Arial,sans-serif;white-space:pre-wrap\">" + _html.escape(text) + "</pre>"}
+
+
+@app.api_route("/internal/task-summary", methods=["GET", "POST"])
+async def task_summary_internal(request: Request, hours: int = 24):
+    """Called by a workflow in n8n. Same token as the stuck-agent watch."""
+    got = request.headers.get("x-watch-token") or ""
+    if not hmac.compare_digest(got.encode(), _watch_token().encode()):
+        return JSONResponse(status_code=401, content={"error": "unauthorized"})
+    try:
+        return await asyncio.to_thread(_task_summary, hours)
+    except ToolError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"error": "Could not build the summary: " + _scrub_secrets(str(e))[:160]})
+
+
+def _summary_workflow_body():
+    return {
+        "name": SUMMARY_WORKFLOW_NAME,
+        "settings": {"executionOrder": "v1"},
+        "nodes": [
+            {"id": "b2e1d4c3-0001-4b00-9000-000000000001", "name": "Every morning", "type": "n8n-nodes-base.scheduleTrigger",
+             "typeVersion": 1.2, "position": [0, 0],
+             "parameters": {"rule": {"interval": [{"field": "days", "daysInterval": 1, "triggerAtHour": 7, "triggerAtMinute": 0}]}}},
+            {"id": "b2e1d4c3-0002-4b00-9000-000000000002", "name": "Get the task summary", "type": "n8n-nodes-base.httpRequest",
+             "typeVersion": 4.2, "position": [240, 0],
+             "parameters": {"method": "GET", "url": "http://connectors:8000/internal/task-summary?hours=24",
+                            "sendHeaders": True,
+                            "headerParameters": {"parameters": [{"name": "X-Watch-Token", "value": _watch_token()}]},
+                            "options": {"timeout": 60000}}},
+            {"id": "b2e1d4c3-0003-4b00-9000-000000000003", "name": "Add your email step here",
+             "type": "n8n-nodes-base.noOp", "typeVersion": 1, "position": [480, 0], "parameters": {},
+             "notes": "Add an email, Telegram or Slack step after this one. Use {{ $json.text }} as the message (or {{ $json.html }} for an HTML email). To put it in an existing daily brief instead, copy the 'Get the task summary' step into that workflow.",
+             "notesInFlow": True},
+        ],
+        "connections": {
+            "Every morning": {"main": [[{"node": "Get the task summary", "type": "main", "index": 0}]]},
+            "Get the task summary": {"main": [[{"node": "Add your email step here", "type": "main", "index": 0}]]},
+        },
+    }
+
+
+def _summary_workflow():
+    wid = _kv_get("task_summary_workflow_id")
+    if not wid or not _n8n_conn():
+        return None
+    try:
+        w = _n8n_api("/api/v1/workflows/" + wid)
+        return w if isinstance(w, dict) and w.get("id") and not w.get("isArchived") else None
+    except Exception:
+        return None
+
+
+def _summary_status():
+    w = _summary_workflow()
+    return {"n8n_connected": bool(_n8n_conn()), "team_linked": bool(_pc_key()), "installed": bool(w),
+            "active": bool(w and w.get("active")), "workflow_id": w.get("id") if w else None,
+            "agents_close_routine": _agents_close_routine()}
+
+
+@app.get("/automations/task-summary")
+def task_summary_get(_auth=Depends(require_auth)):
+    return _summary_status()
+
+
+@app.post("/automations/task-summary/create")
+def task_summary_create(_auth=Depends(require_auth)):
+    """Owner action: put the summary workflow in n8n, switched off, ready for an email step."""
+    if not _n8n_conn():
+        raise HTTPException(status_code=400, detail="Connect Automations first (the n8n key at the top of this page).")
+    if not _summary_workflow():
+        try:
+            w = _n8n_send("POST", "/api/v1/workflows", _summary_workflow_body())
+            if not w.get("id"):
+                raise ToolError("n8n did not return the new workflow.")
+            _kv_set("task_summary_workflow_id", str(w["id"]))
+        except ToolError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    return _summary_status()
+
+
+@app.get("/automations/task-summary/preview")
+def task_summary_preview(_auth=Depends(require_auth)):
+    """What today's summary would say, for the owner to read on the page."""
+    if not _pc_key():
+        raise HTTPException(status_code=400, detail="Link your team first, on the Orchestration page.")
+    try:
+        return _task_summary(24)
+    except ToolError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Could not build the summary: " + _scrub_secrets(str(e))[:160])
 
 
 def _watch_workflow_body():
@@ -4620,10 +4802,31 @@ def t_complete_task(a):
     return "Task marked done. You are finished; stop here."
 
 
+# What always goes to the owner, whatever the trust setting.
+_OWNER_ONLY = ("spending or moving money; sending, publishing or promising anything to someone outside the "
+               "business; a price, a date or a scope commitment; passwords, codes or access; deleting data; "
+               "a security incident; hiring; or a choice only the owner can make")
+_ROUTINE_ASK = re.compile(
+    r"(^\s*(please\s+)?(verify|confirm|review|check|approve|acknowledge|sign[- ]?off|close|mark)\b"
+    r"|verify and close|review and close|confirm and close|ok(ay)? to close|can (i|we) close|ready (to|for) clos"
+    r"|ready for (your )?review|for your (review|approval|confirmation|sign[- ]?off)|please (confirm|verify|close|acknowledge)"
+    r"|confirm (this|that|it|the task) (is|was|has been) (done|complete|completed|finished|resolved)"
+    r"|awaiting (board|owner|your) (confirmation|sign[- ]?off|acknowledg))", re.I)
+_REAL_DECISION = re.compile(
+    r"(\$|\bpay|invoice|refund|budget|spend|purchase|\bbuy\b|price|quote|discount|contract|send|publish|post\b|email|"
+    r"reply|client|customer|password|credential|login|access|\bkey\b|token|mfa|delete|remove|wipe|restore|"
+    r"security|breach|phish|malware|incident|hire|legal|compliance|deadline|\bdate\b|which|should (i|we)|\bor\b)", re.I)
+
+
 def t_need_owner_input(a):
     q = (a.get("question") or "").strip()
     if len(q) < 10:
         raise ToolError("Ask a clear, specific question the owner can answer.")
+    if _agents_close_routine() and _ROUTINE_ASK.search(q) and not _REAL_DECISION.search(q):
+        raise ToolError("That is a routine confirmation, and the owner has asked agents to finish routine work "
+                        "without asking. If the work is done, post your result on the task and call "
+                        "complete_task; it goes into the owner's daily summary. Ask the owner only about: "
+                        + _OWNER_ONLY + ".")
     issue = _own_issue(a)
     if issue.get("status") in ("done", "cancelled"):
         return "That task is already closed. Stop here."
@@ -5001,13 +5204,17 @@ MCP_TOOLS = {
     "complete_task": (t_complete_task, "all",
         "For an agent working on an assigned task: call this when the work is finished and your result "
         "is posted on the task. This is what gives the task its final disposition; without it the task "
-        "is treated as unfinished and you will be woken again.",
+        "is treated as unfinished and you will be woken again. You are trusted to close routine work "
+        "yourself: do not park a finished task for the owner to verify or acknowledge. The owner reads "
+        "what was closed in a daily summary, so make the summary line say what was done and the result.",
         _schema({"task": {"type": "string", "description": "Task id or key from your task brief"},
                  "agent_id": {"type": "string", "description": "Your Agent ID from the runtime identity"},
                  "summary": _S}, ("task", "agent_id", "summary"))),
     "need_owner_input": (t_need_owner_input, "all",
-        "For an agent working on an assigned task: call this when you cannot finish without the owner "
-        "(a decision, a login, missing information). Marks the task as waiting on them.",
+        "For an agent working on an assigned task: call this only when you cannot go on without the "
+        "owner. That means: " + _OWNER_ONLY + ". It is not for 'please verify', 'please confirm' or 'ok "
+        "to close?': finished routine work is closed with complete_task. Ask one clear question the owner "
+        "can answer in a line. Marks the task as waiting on them.",
         _schema({"task": _S, "agent_id": _S, "question": _S}, ("task", "agent_id", "question"))),
     "hand_off_task": (t_hand_off_task, "all",
         "For an agent working on an assigned task: pass the task to a colleague when it is not yours to "

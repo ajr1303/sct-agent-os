@@ -2,6 +2,18 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.40.0] — 2026-11-16 — Agents close routine work; you get one daily summary
+
+- **Fewer items waiting on you.** Agents are now trusted to finish routine work
+  themselves. A request that only asks you to verify, confirm or close finished work
+  is turned back and the agent closes it. Agents still ask before anything involving
+  money, messages outside the business, prices or dates, passwords or access, deleting
+  data, or a security incident. Switch it off on the Account page if you prefer to be
+  asked about everything.
+- **Daily task summary.** Automations has a new card: preview what your agents closed,
+  what is waiting on you and what is in progress, and create a workflow that fetches
+  it every morning for you to email or add to a daily brief you already have.
+
 ## [0.39.0] — 2026-11-16 — Agents can pass a task to a colleague
 
 - **New tool on every install: hand a task over.** An agent working a task can pass

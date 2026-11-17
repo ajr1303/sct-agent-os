@@ -70,6 +70,10 @@
       s = useState("");    var swBusy = s[0], setSwBusy = s[1];
       s = useState(null);  var swErr = s[0], setSwErr = s[1];
       s = useState(null);  var swPreview = s[0], setSwPreview = s[1];
+      s = useState(null);  var ds = s[0], setDs = s[1];            // daily task summary status
+      s = useState("");    var dsBusy = s[0], setDsBusy = s[1];
+      s = useState(null);  var dsErr = s[0], setDsErr = s[1];
+      s = useState(null);  var dsText = s[0], setDsText = s[1];
       s = useState(null);  var reqBusy = s[0], setReqBusy = s[1];
       s = useState(null);  var reqErr = s[0], setReqErr = s[1];
 
@@ -112,6 +116,29 @@
       }
       function swWhen(iso) { try { return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); } catch (e) { return ""; } }
       // Built-in: a workflow that checks every ten minutes for agents that stopped moving.
+      function loadSummary() { api("/automations/task-summary").then(setDs).catch(function () {}); }
+      // Built-in: one daily digest of what agents closed, what is waiting on you and what is in progress.
+      function summaryPanel() {
+        if (!ds) return null;
+        return h("div", { className: "sa-panel sa-watch" },
+          h("div", { className: "sa-panel-h" }, "DAILY TASK SUMMARY",
+            h("span", { className: "sa-watch-state" + (ds.active ? " sa-on" : "") }, ds.active ? "On · every morning" : ds.installed ? "Created · switched off" : "Not set up")),
+          h("div", { className: "sa-watch-body" },
+            h("div", { className: "sa-watch-p" }, "One message a day with what your agents closed, what is waiting on you and what is in progress, so you do not have to approve routine work one item at a time."
+              + (ds.agents_close_routine ? " Agents are set to finish routine work without asking you." : " Agents are currently set to ask you about everything; change that on the Account page.")),
+            h("div", { className: "sa-watch-acts" },
+              ds.installed ? null : h("button", { type: "button", className: "sa-btn sa-primary", disabled: dsBusy === "create",
+                onClick: function () { setDsBusy("create"); setDsErr(null); api("/automations/task-summary/create", { method: "POST" }).then(function (d) { setDsBusy(""); setDs(d); loadData(); }).catch(function (e) { setDsBusy(""); setDsErr(String(e.message || e)); }); } },
+                dsBusy === "create" ? "Creating…" : "Create the workflow"),
+              h("button", { type: "button", className: "sa-btn", disabled: dsBusy === "preview",
+                onClick: function () { setDsBusy("preview"); setDsErr(null); api("/automations/task-summary/preview").then(function (d) { setDsBusy(""); setDsText(d.text); }).catch(function (e) { setDsBusy(""); setDsErr(String(e.message || e)); }); } },
+                dsBusy === "preview" ? "Building…" : "Show today's summary")),
+            dsErr ? h("div", { className: "sa-msg sa-err" }, dsErr) : null,
+            dsText ? h("pre", { className: "sa-watch-result sa-sum-pre" }, dsText) : null,
+            h("div", { className: "sa-watch-hint" }, ds.installed
+              ? "It is a workflow named “Agent OS: daily task summary”, created switched off. Open it in the builder, add your email step after the last one, then switch it on. To put the summary in a daily brief you already have, copy its “Get the task summary” step into that workflow."
+              : "Creating it adds a workflow named “Agent OS: daily task summary”, switched off. You then add your own email step and switch it on.")));
+      }
       function watchPanel() {
         if (!sw) return null;
         var st = sw.settings || {}, last = sw.last, on = sw.active;
@@ -149,7 +176,7 @@
       }
 
       function loadData() {
-        loadWatch();
+        loadWatch(); loadSummary();
         api("/automations/workflows").then(setWf).catch(function () { setWf(null); });
         api("/automations/executions").then(setEx).catch(function () { setEx(null); });
         loadReqs();
@@ -278,6 +305,7 @@
         (up && !connected) ? connectPanel() : null,
         connected ? approvals() : null,
         connected ? watchPanel() : null,
+        connected ? summaryPanel() : null,
         connected ? dashboard() : null,
         h("div", { className: "sa-foot" }, "Local automations run on your server, not through the model — use them for scheduled jobs, data moves, and glue work to save tokens.")
       );
