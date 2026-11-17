@@ -204,6 +204,13 @@ def get_db():
         )
     """)
     con.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
+    # Who passed which task to whom, so a task cannot bounce between agents forever.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS task_handoffs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            issue_id TEXT NOT NULL, from_agent TEXT NOT NULL, to_agent TEXT NOT NULL, at TEXT NOT NULL
+        )
+    """)
     # Website analytics connection (Google Analytics): one per install, key encrypted.
     con.execute("""
         CREATE TABLE IF NOT EXISTS website_analytics (
@@ -4863,6 +4870,93 @@ def t_draft_reply(a):
             "it is waiting for them to read and send." % (row[2], to))
 
 
+# --- Passing a task to a colleague ------------------------------------------------------
+# An agent working a task can hand it to another agent. Guard rails, enforced here and
+# not left to the instructions: only the current assignee can hand it over; never to
+# itself, to an agent that is paused or in error, or back to an agent that already had
+# it; and at most HANDOFF_MAX times per task, after which it goes to the owner.
+HANDOFF_MAX = 3
+_HANDOFF_UNAVAILABLE = ("paused", "error", "terminated", "pending_approval")
+
+
+def _handoff_history(issue_id):
+    with closing(get_db()) as con:
+        return con.execute("SELECT from_agent, to_agent FROM task_handoffs WHERE issue_id=? ORDER BY id",
+                           (str(issue_id),)).fetchall()
+
+
+def _handoff_record(issue_id, from_agent, to_agent):
+    with closing(get_db()) as con:
+        con.execute("INSERT INTO task_handoffs(issue_id, from_agent, to_agent, at) VALUES(?,?,?,?)",
+                    (str(issue_id), str(from_agent), str(to_agent),
+                     datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")))
+        con.commit()
+
+
+def t_hand_off_task(a):
+    reason = (a.get("reason") or "").strip()
+    if len(reason) < 30:
+        raise ToolError("Say what the problem is, what you already tried and what you need from them, so "
+                        "they can pick it up without asking you again.")
+    issue = _own_issue(a)
+    if issue.get("status") in ("done", "cancelled"):
+        return "That task is already closed. Stop here."
+    me = str(issue.get("assigneeAgentId"))
+    _, agents = _tool_agents()
+    target = _find_agent(agents, a.get("to"))
+    others = [x for x in agents if str(x.get("id")) != me and (x.get("status") or "") not in _HANDOFF_UNAVAILABLE]
+    names = ", ".join(_agent_name(x) for x in others) or "none"
+    if not target:
+        raise ToolError("No agent matches '%s'. Available now: %s. If none fits, use need_owner_input."
+                        % (a.get("to"), names))
+    tid = str(target.get("id"))
+    if tid == me:
+        raise ToolError("That is you. Do the work, or hand it to someone else.")
+    if (target.get("status") or "") in _HANDOFF_UNAVAILABLE:
+        raise ToolError("%s is not available right now (%s). Available now: %s. If none fits, use "
+                        "need_owner_input and say who you wanted." % (_agent_name(target), target.get("status"), names))
+    history = _handoff_history(issue["id"])
+    if len(history) >= HANDOFF_MAX:
+        raise ToolError("This task has already been passed on %d times. Do not pass it again. Use "
+                        "need_owner_input and tell the owner what is stuck." % len(history))
+    if tid in {h[0] for h in history}:
+        raise ToolError("%s already had this task and passed it on. Do not send it back. Use "
+                        "need_owner_input and explain what is missing." % _agent_name(target))
+    my_name = next((_agent_name(x) for x in agents if str(x.get("id")) == me), "an agent")
+    note = "Handed from %s to %s.\n\n%s" % (my_name, _agent_name(target), reason[:5000])
+    moved = False
+    try:
+        _pc_send("PATCH", "/api/issues/" + _safe_id(str(issue["id"])),
+                 {"assigneeAgentId": tid, "status": "todo", "comment": note}, what="hand the task over")
+        check = _pc_get("/api/issues/" + _safe_id(str(issue["id"])))
+        moved = isinstance(check, dict) and str(check.get("assigneeAgentId") or "") == tid
+    except Exception:
+        moved = False
+    if moved:
+        _handoff_record(issue["id"], me, tid)
+        return ("Task handed to %s. It stays open with them. You are finished with it; stop here and do "
+                "not close it." % _agent_name(target))
+    # The board would not move the task itself: open a linked task for the colleague and
+    # leave the original waiting on it, so nothing is lost and nothing is closed.
+    key = issue.get("humanKey") or issue.get("identifier") or issue.get("key") or issue.get("id")
+    new_key = _create_issue(_pc_company_id(), target, "Handed over: " + str(issue.get("title") or key)[:170],
+                            "Passed on by %s from task %s.\n\n%s\n\n--- Original task ---\n%s"
+                            % (my_name, key, reason[:5000], str(issue.get("description") or "")[:2500]),
+                            issue.get("priority"))
+    try:
+        new = _pc_get("/api/issues/" + _safe_id(str(new_key)))
+        if isinstance(new, dict) and new.get("id"):
+            for h in history:
+                _handoff_record(new["id"], h[0], h[1])
+            _handoff_record(new["id"], me, tid)
+    except Exception:
+        pass
+    _handoff_record(issue["id"], me, tid)
+    _set_issue(issue, "blocked", "Handed to %s as task %s. This one waits on that." % (_agent_name(target), new_key))
+    return ("Task handed to %s as %s. The original is left open, waiting on it. You are finished; stop here."
+            % (_agent_name(target), new_key))
+
+
 def _schema(props, required=()):
     return {"type": "object", "properties": props, "required": list(required), "additionalProperties": False}
 
@@ -4915,6 +5009,17 @@ MCP_TOOLS = {
         "For an agent working on an assigned task: call this when you cannot finish without the owner "
         "(a decision, a login, missing information). Marks the task as waiting on them.",
         _schema({"task": _S, "agent_id": _S, "question": _S}, ("task", "agent_id", "question"))),
+    "hand_off_task": (t_hand_off_task, "all",
+        "For an agent working on an assigned task: pass the task to a colleague when it is not yours to "
+        "finish (outside your role, or it needs their access or skill). Give the colleague's name and a "
+        "reason that says what the problem is, what you tried and what you need, so they need not ask "
+        "you. The task stays open with them; do not close it. You cannot hand a task back to someone who "
+        "already passed it on, or to an agent that is paused or in error, and a task can be passed on at "
+        "most three times; after that, or when nobody fits, use need_owner_input.",
+        _schema({"task": {"type": "string", "description": "Task id or key from your task brief"},
+                 "agent_id": {"type": "string", "description": "Your Agent ID from the runtime identity"},
+                 "to": {"type": "string", "description": "Name of the agent to take it over"},
+                 "reason": _S}, ("task", "agent_id", "to", "reason"))),
     "get_business_profile": (t_get_business_profile, "all",
         "The business's name and what the owner has said about it (services, hours, tone, contact). "
         "Use it instead of placeholders such as [Company Name].", _schema({})),

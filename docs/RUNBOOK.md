@@ -657,3 +657,21 @@ through the Agent OS tool server. Nothing to install: connect a mailbox and they
 - Problems: "Could not sign in" means the mailbox password or app password changed;
   remove and reconnect it.
 
+## 20. Passing a task between agents
+
+Agents on this server have `hand_off_task`: the agent holding a task can pass it to a
+named colleague with a reason. The task stays open and moves to that agent.
+
+Limits enforced by the system, whatever the agent's instructions say:
+- only the agent the task is assigned to can pass it on, and never to itself;
+- not to an agent that is paused, in error or awaiting approval;
+- not back to an agent that already had the task;
+- at most three hand-offs per task. After that, or when nobody fits, the agent has to
+  ask the owner (`need_owner_input`), which puts the task in "Waiting on you".
+
+If the team board refuses to move a task, a linked task ("Handed over: …") is opened
+for the colleague and the original is left waiting on it.
+
+Agents still cannot create fresh tasks of their own; only the chat assistant and the
+owner do that. Agents on their own servers do not have this tool.
+

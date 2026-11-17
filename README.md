@@ -406,7 +406,7 @@ docs/ARCHITECTURE.md        How the layer works
 
 ## Status
 
-**v0.38.** The last clean one-command install on a fresh VM was run at v0.26 (Hermes v0.23.1, n8n 2.47.5), reached through a Cloudflare Tunnel. Changes since then are tested piece by piece but a fresh end-to-end install of this version has not been rerun yet.
+**v0.39.** The last clean one-command install on a fresh VM was run at v0.26 (Hermes v0.23.1, n8n 2.47.5), reached through a Cloudflare Tunnel. Changes since then are tested piece by piece but a fresh end-to-end install of this version has not been rerun yet.
 
 Verified live:
 
@@ -428,7 +428,7 @@ Known limitations:
 - **Not yet tested: a server reboot, and restoring a backup onto a new server.** Restore opens and checks a backup; putting one back (`--apply`) is unproven, and the team database is not reloaded automatically.
 - **"Update now", and changing or resetting the password from the dashboard, are tested against stand-ins, not yet on a live install. Reset by email has not yet sent through a real mail server. The welcome screen and the sidebar name link have not been seen on a live install.**
 - **The stuck-agent watch's scheduled run in n8n, the Appointments tile, Link my team, several sites on the Website page, the installer changes in v0.28, team chart, task replies and the Agents page editor are tested against stand-ins** (a mock board, and for the model check a local database and mock gateways), not yet confirmed on a live one.
-- **Agents can read mail and save drafts, not send.** Sending stays with the owner, from their own mail app. Bookings are still view-only: agents cannot book appointments yet. The mail tools are tested against a stand-in mailbox, not yet a real Gmail or Microsoft 365 account.
+- **Agents can read mail and save drafts, not send.** Sending stays with the owner, from their own mail app. Bookings are still view-only: agents cannot book appointments yet. The mail tools and task hand-off are tested against stand-ins, not yet a real mailbox or a live team board.
 - **Per-agent model choice does not apply to delegated tasks** (all Paperclip runs use the default Hermes profile).
 - **The dashboard has one shared login.** Two-step sign-in (Account page) adds an authenticator-app code to it; per-person sign-in comes from Cloudflare Access in front of it; per-person roles are not built. Two-step sign-in does not cover n8n or Paperclip, which have their own sign-ins.
 - **Task completion by agents and the business profile** are built but not yet verified on a live box.

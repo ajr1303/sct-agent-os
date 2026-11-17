@@ -2,6 +2,16 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.39.0] — 2026-11-16 — Agents can pass a task to a colleague
+
+- **New tool on every install: hand a task over.** An agent working a task can pass
+  it to a named colleague with the reason. The task stays open with the new agent.
+- **It cannot go round in circles.** A task cannot be handed back to an agent that
+  already had it, cannot go to an agent that is paused or in error, and can be passed
+  on at most three times. After that the agent has to ask the owner.
+- The starter templates now tell agents to use it instead of closing or guessing.
+  Agents already created keep their instructions.
+
 ## [0.38.0] — 2026-11-16 — Agents can read mail and prepare replies
 
 - **Mail tools for agents, on every install.** Agents can list unread messages, read
