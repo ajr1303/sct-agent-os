@@ -204,6 +204,13 @@ def get_db():
         )
     """)
     con.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
+    # Which tasks were split into which parts, so a part is never split again.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS task_parts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_id TEXT NOT NULL, part_id TEXT NOT NULL, at TEXT NOT NULL
+        )
+    """)
     # Who passed which task to whom, so a task cannot bounce between agents forever.
     con.execute("""
         CREATE TABLE IF NOT EXISTS task_handoffs (
@@ -2781,6 +2788,8 @@ def stuck_watch_run(dry_run=False):
                 try:
                     _pc_send("POST", "/api/issues/" + _safe_id(iid) + "/comments",
                              {"body": "Automatic check: this task %s for %d minutes. Please pick it up and continue. "
+                                      "If it is too big to finish in one run, do not try again in one go: do the "
+                                      "first part, post it, and call split_task to file the rest as smaller tasks. "
                                       "If something is blocking you, say what it is and who can unblock it." % (why, mins)},
                              what="nudge the task")
                 except Exception:
@@ -4549,7 +4558,46 @@ def _require_bundled():
                         "cannot be created from chat. Tell the owner to create the task in Paperclip.")
 
 
-def _create_issue(cid, agent, title, description, priority):
+# A run is cut off after a few minutes, and a task that tries to do everything in one
+# run ends as an error with nothing delivered. So every task says how to handle size,
+# and a job that is plainly many jobs is filed as a short planning task first.
+_TASK_SIZE_NOTE = ("--- How to work this task ---\n"
+                   "Finish in one sitting of a few minutes. If the job covers many items or will not fit, do "
+                   "not push on until you are cut off: do the first part, post what you did, then call "
+                   "split_task to file the rest as smaller tasks. Close this one with complete_task.")
+_TASK_PLAN_NOTE = ("PLAN FIRST. This job is too big for one run. In this task do only this: work out the "
+                   "parts (at most 8, each small enough to finish in a few minutes, for example 10 items "
+                   "per part), then call split_task with those parts. Do not start the work itself here.\n\n"
+                   "--- The job ---\n")
+_BIG_SCOPE = re.compile(
+    r"\b(all|every|each|entire|whole|across)\b[^.\n]{0,60}\b(workflows?|clients?|customers?|mailbox(es)?|inbox(es)?|"
+    r"agents?|servers?|hosts?|machines?|devices?|accounts?|sites?|pages?|posts?|tickets?|tasks?|issues?|files?|"
+    r"documents?|records?|contacts?|leads?|invoices?|credentials?|users?|products?|orders?|emails?)\b", re.I)
+_BIG_COUNT = re.compile(r"\b(\d{2,5})\s+(workflows?|clients?|customers?|mailboxes|agents?|servers?|hosts?|machines?|"
+                        r"devices?|accounts?|sites?|pages?|posts?|tickets?|tasks?|issues?|files?|documents?|records?|"
+                        r"contacts?|leads?|invoices?|credentials?|users?|products?|orders?|emails?)\b", re.I)
+
+
+def _looks_big(title, description):
+    """A cheap guess that a job is many jobs: it names a whole set of things, a count of
+    15 or more, or a long list. Wrong guesses only cost a short planning step."""
+    text = (title or "") + "\n" + (description or "")
+    if _BIG_SCOPE.search(text):
+        return True
+    for m in _BIG_COUNT.finditer(text):
+        if int(m.group(1)) >= 15:
+            return True
+    bullets = len(re.findall(r"(?m)^\s*(?:[-*\u2022]|\d+[.)])\s+\S", description or ""))
+    return bullets > 8 or len(description or "") > 4000
+
+
+_TASK_PART_NOTE = ("--- How to work this task ---\n"
+                   "This is one part of a bigger job. Finish it in one sitting of a few minutes. It cannot be "
+                   "split again: if you cannot finish, post what you did and close it with complete_task, "
+                   "saying exactly what is left.")
+
+
+def _create_issue(cid, agent, title, description, priority, part=False):
     with _task_lock:
         now = time.time()
         _task_times[:] = [t for t in _task_times if now - t < 3600]
@@ -4558,9 +4606,10 @@ def _create_issue(cid, agent, title, description, priority):
                             % CHAT_TASKS_PER_HOUR)
         _task_times.append(now)
     pr = priority if priority in ("low", "medium", "high", "urgent") else "medium"
+    description = description[:6000] + "\n\n" + (_TASK_PART_NOTE if part else _TASK_SIZE_NOTE)
     biz = _business_text()
     if biz:
-        description = description[:6000] + "\n\n--- About the business ---\n" + biz[:2000]
+        description = description + "\n\n--- About the business ---\n" + biz[:2000]
     body = {"title": title[:200], "description": description[:8000],
             "assigneeAgentId": agent["id"], "priority": pr}
     try:
@@ -4597,8 +4646,14 @@ def t_assign_task(a):
     if not ag:
         raise ToolError("No agent matches '%s'. Agents: %s. If none fits the work, use request_hiring_review."
                         % (a.get("agent"), ", ".join(_agent_name(x) for x in agents) or "none"))
+    big = _looks_big(title, desc) and not a.get("small_enough")
+    if big:
+        desc = _TASK_PLAN_NOTE + desc
     key = _create_issue(cid, ag, title, desc, a.get("priority"))
     note = ""
+    if big:
+        note = (" This looked too big for one run, so it was filed as a planning task: the agent will break "
+                "it into smaller tasks first. Tell the owner the work will arrive in parts.")
     if ag.get("status") == "paused":
         note = " Note: this agent is paused, so the task will wait until the owner resumes it in Orchestration."
     return "Task %s created and assigned to %s.%s The owner can follow it in the Tasks tab." % (
@@ -5108,6 +5163,70 @@ def t_draft_reply(a):
             "it is waiting for them to read and send." % (row[2], to))
 
 
+# --- Splitting a task that is too big for one run ---------------------------------------
+# The agent holding a task can file the rest of it as up to SPLIT_MAX smaller tasks and
+# close the original. A part can never be split again, so this cannot multiply.
+SPLIT_MAX = 8
+
+
+def t_split_task(a):
+    issue = _own_issue(a)
+    if issue.get("status") in ("done", "cancelled"):
+        return "That task is already closed. Stop here."
+    parts = a.get("parts")
+    if not isinstance(parts, list) or not 2 <= len(parts) <= SPLIT_MAX:
+        raise ToolError("Give between 2 and %d parts. If it needs more, make each part bigger: batches, not single items." % SPLIT_MAX)
+    with closing(get_db()) as con:
+        is_part = con.execute("SELECT 1 FROM task_parts WHERE part_id=?", (str(issue["id"]),)).fetchone()
+        was_split = con.execute("SELECT 1 FROM task_parts WHERE parent_id=?", (str(issue["id"]),)).fetchone()
+    if is_part:
+        raise ToolError("This task is already one part of a bigger job and cannot be split again. Do what fits "
+                        "in this run, post it, and close it with complete_task saying exactly what is left.")
+    if was_split:
+        raise ToolError("This task has already been split. Close it with complete_task.")
+    me = str(issue.get("assigneeAgentId"))
+    cid, agents = _tool_agents()
+    mine = next((x for x in agents if str(x.get("id")) == me), None)
+    if not mine:
+        raise ToolError("Could not find you on the team board. Use need_owner_input.")
+    key = issue.get("humanKey") or issue.get("identifier") or issue.get("key") or issue.get("id")
+    plan = []
+    for n, part in enumerate(parts, 1):
+        if not isinstance(part, dict):
+            raise ToolError("Each part needs a title and a description.")
+        title = str(part.get("title") or "").strip()
+        desc = str(part.get("description") or "").strip()
+        if len(title) < 5 or len(desc) < 30:
+            raise ToolError("Part %d needs a clear title and a description that says exactly which items it "
+                            "covers and what done looks like." % n)
+        target = mine
+        if part.get("agent"):
+            target = _find_agent(agents, part.get("agent"))
+            if not target:
+                raise ToolError("Part %d: no agent matches '%s'. Leave agent out to keep the part yourself." % (n, part.get("agent")))
+            if (target.get("status") or "") in _HANDOFF_UNAVAILABLE:
+                raise ToolError("Part %d: %s is not available right now. Leave agent out to keep the part yourself." % (n, _agent_name(target)))
+        plan.append((title, desc, target))
+    made = []
+    for n, (title, desc, target) in enumerate(plan, 1):
+        new_key = _create_issue(cid, target, ("Part %d of %d: " % (n, len(plan)) + title)[:200],
+                                "Part %d of %d of task %s (%s).\n\n%s" % (n, len(plan), key, str(issue.get("title") or "")[:150], desc[:5000]),
+                                issue.get("priority"), part=True)
+        made.append("%s (%s)" % (new_key, _agent_name(target)))
+        try:
+            new = _pc_get("/api/issues/" + _safe_id(str(new_key)))
+            if isinstance(new, dict) and new.get("id"):
+                with closing(get_db()) as con:
+                    con.execute("INSERT INTO task_parts(parent_id, part_id, at) VALUES(?,?,?)",
+                                (str(issue["id"]), str(new["id"]), datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")))
+                    con.commit()
+        except Exception:
+            pass
+    _set_issue(issue, "done", "Split into %d smaller tasks: %s." % (len(made), ", ".join(made)))
+    return ("Filed %d smaller tasks: %s. This task is closed. Stop here; each part will be picked up on its own."
+            % (len(made), ", ".join(made)))
+
+
 # --- Passing a task to a colleague ------------------------------------------------------
 # An agent working a task can hand it to another agent. Guard rails, enforced here and
 # not left to the instructions: only the current assignee can hand it over; never to
@@ -5216,11 +5335,15 @@ MCP_TOOLS = {
         "Give a piece of work that needs judgment to one agent. Creates a task the owner can follow in "
         "the Tasks tab. Only the owner's chat assistant assigns tasks; an agent working on a task must "
         "not. Write the description so the agent can act without this conversation: goal, context, "
-        "what done looks like. Do not use for work that is the same steps every time on a "
+        "what done looks like. One task is one outcome an agent can finish in a few minutes; a run is cut "
+        "off after that. For a job across many items (every workflow, all clients, a long list), assign "
+        "one task per batch of about ten, or let it be filed as a planning task that the agent splits. "
+        "Do not use for work that is the same steps every time on a "
         "schedule or trigger; that belongs in an n8n workflow.",
         _schema({"agent": {"type": "string", "description": "Agent name from list_agents"},
                  "title": _S, "description": _S,
-                 "priority": {"type": "string", "enum": ["low", "medium", "high", "urgent"]}},
+                 "priority": {"type": "string", "enum": ["low", "medium", "high", "urgent"]},
+                 "small_enough": {"type": "boolean", "description": "Set true only when the task names one specific item and will take a few minutes"}},
                 ("agent", "title", "description"))),
     "list_tasks": (t_list_tasks, "chat", "List current tasks with status and assigned agent.",
         _schema({"agent": {"type": "string", "description": "Optional agent name filter"}})),
@@ -5251,6 +5374,21 @@ MCP_TOOLS = {
         "to close?': finished routine work is closed with complete_task. Ask one clear question the owner "
         "can answer in a line. Marks the task as waiting on them.",
         _schema({"task": _S, "agent_id": _S, "question": _S}, ("task", "agent_id", "question"))),
+    "split_task": (t_split_task, "all",
+        "For an agent working on an assigned task: when the job will not fit in this run (it covers many "
+        "items, or you were told to plan first), file the rest as 2 to 8 smaller tasks and this task is "
+        "closed. Make each part small enough to finish in a few minutes and say exactly which items it "
+        "covers, for example 'workflows 1 to 10 by name'. Parts go to you unless you name another agent. "
+        "A part cannot be split again, so size them carefully. Use this instead of working until you are "
+        "cut off: a run that times out delivers nothing.",
+        _schema({"task": {"type": "string", "description": "Task id or key from your task brief"},
+                 "agent_id": {"type": "string", "description": "Your Agent ID from the runtime identity"},
+                 "parts": {"type": "array", "minItems": 2, "maxItems": 8, "items": {
+                     "type": "object",
+                     "properties": {"title": _S, "description": _S,
+                                    "agent": {"type": "string", "description": "Optional: another agent's name"}},
+                     "required": ["title", "description"]}}},
+                ("task", "agent_id", "parts"))),
     "hand_off_task": (t_hand_off_task, "all",
         "For an agent working on an assigned task: pass the task to a colleague when it is not yours to "
         "finish (outside your role, or it needs their access or skill). Give the colleague's name and a "

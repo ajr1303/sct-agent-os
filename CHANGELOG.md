@@ -2,6 +2,18 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.42.0] — 2026-11-16 — Big jobs are split into small tasks
+
+- **A job that is really many jobs no longer runs until it is cut off.** When a task
+  assigned from Chat covers a whole set of things ("all the workflows", "every
+  client", a long list), it is filed as a short planning task, and the agent breaks
+  it into smaller tasks first.
+- **New tool on every install: split a task.** An agent that finds its task too big
+  files the rest as 2 to 8 smaller tasks and closes the original. A part cannot be
+  split again, so tasks cannot multiply.
+- Every task now tells the agent what to do when the work will not fit, and the
+  stuck-agent watch's reminder says to split instead of trying the whole job again.
+
 ## [0.41.0] — 2026-11-16 — Close several tasks at once
 
 - **Tasks page: Select several.** Tick tasks (or "Select all shown") and mark them done

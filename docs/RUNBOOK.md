@@ -699,3 +699,26 @@ owner do that. Agents on their own servers do not have this tool.
   Mark done (up to 100 at a time; the list reloads with the next batch). Closed tasks
   can be reopened one at a time from the task itself.
 
+## 22. Big tasks are split, not run until they time out
+
+A run is cut off after a set time (the team board's limit for that agent). A task that
+tries to do everything in one run ends as an error with nothing delivered. Three
+things now prevent that for agents on this server:
+
+- **When a task is assigned from Chat**, a job that plainly covers many things ("all
+  the workflows", "every client", "140 records", a long list) is filed as a short
+  planning task: the agent only works out the parts and splits it. The check reads the
+  wording, so it will sometimes plan a job that was small (a short delay) and miss one
+  that was big.
+- **Every task** carries a line telling the agent to do the first part and split the
+  rest if it will not fit.
+- **`split_task`** lets the agent holding a task file the rest as 2 to 8 smaller tasks
+  (kept by itself, or given to a named colleague) and closes the original with the
+  list of parts. A part cannot be split again, so tasks cannot multiply; a part that
+  still does not fit is closed with a note saying what is left.
+- The stuck-agent watch's reminder now tells the agent to split instead of retrying
+  the whole job.
+
+New parts count toward the hourly task limit. Agents on their own servers, and tasks
+created directly in Paperclip, are not covered.
+
