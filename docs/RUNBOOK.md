@@ -843,3 +843,6 @@ piece of work together.
   otherwise, and rests when the tab is in the background. While the assistant works
   it shows how long it has been and how many steps it has taken. How long an answer
   takes is still set by the AI model and by how many tools it uses.
+- **One answer per question:** Chat shows only the last thing the assistant says in
+  each turn. What it writes while working is hidden (Operator tools on: "Show
+  working" under the answer). The full conversation is still on the Chat history page.

@@ -2,6 +2,15 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.48.0] — 2026-11-18 — One answer per question
+
+- **Chat shows one answer, not the working.** The assistant's notes to itself while
+  it uses its tools ("Let me check...") are no longer shown. You see your question, a
+  "Working on it" note with the time, then a single answer. With Operator tools on,
+  a small "Show working" link under an answer opens the hidden notes.
+- **The assistant is told to work quietly** and reply once, on every install (writing
+  rules, the writing skill and the tool instructions).
+
 ## [0.47.0] — 2026-11-18 — Chat: attachments, pictures, and a lighter page
 
 - **Attach photos and files in Chat.** Use the + button, drag and drop, or paste a

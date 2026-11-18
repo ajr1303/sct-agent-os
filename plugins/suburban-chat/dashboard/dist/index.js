@@ -146,6 +146,8 @@
       var dr0 = useState(false), dragging = dr0[0], setDragging = dr0[1];
       var tk0 = useState(0), tick = tk0[0], setTick = tk0[1];
       var er0 = useState(""), attErr = er0[0], setAttErr = er0[1];
+      var st0 = useState({}), shownSteps = st0[0], setShownSteps = st0[1];
+      function operatorOn() { try { return window.localStorage.getItem("sct-operator") === "1"; } catch (e) { return false; } }
 
       useEffect(function () {
         var hidden = [];
@@ -365,31 +367,48 @@
             body));
       }
 
-      var rows = [];
-      (messages || []).forEach(function (msg, i) {
-        var role = msg.role; if (role !== "user" && role !== "assistant") return;
-        var txt = extractText(msg.content || msg.api_content); if (!txt || !txt.trim()) return;
-        rows.push(msgRow("m" + i, role, txt, when(msg.timestamp), false));
+      // One answer per question. Between the owner's message and the final answer the
+      // assistant often writes short notes to itself ("Let me check...") while it
+      // uses its tools. Those are its working, not the answer, so only the last thing
+      // it said in each turn is shown. Operators can open the rest.
+      function textOf(m) { return extractText(m.content || m.api_content) || ""; }
+      function callsTools(m) { return !!(m && ((m.tool_calls && m.tool_calls.length) || m.function_call)); }
+      var all = messages || [], turns = [], cur = null;
+      all.forEach(function (msg, i) {
+        if (msg.role === "user") { cur = { user: msg, ui: i, said: [] }; turns.push(cur); return; }
+        if (!cur) { cur = { user: null, ui: -1, said: [] }; turns.push(cur); }
+        if (msg.role === "assistant" && textOf(msg).trim()) cur.said.push({ m: msg, i: i });
       });
-      var serverUser = (messages || []).filter(function (x) { return x.role === "user"; }).map(function (x) { return extractText(x.content).trim(); });
+      var serverUser = all.filter(function (x) { return x.role === "user"; }).map(function (x) { return extractText(x.content).trim(); });
+      var unsent = (pending || []).some(function (t) { return serverUser.indexOf(t.trim()) === -1; });
+      // The newest turn is finished when the last thing in the conversation is the
+      // assistant speaking without asking for another tool.
+      var lastMsg = all.length ? all[all.length - 1] : null;
+      var lastDone = !!(lastMsg && lastMsg.role === "assistant" && textOf(lastMsg).trim() && !callsTools(lastMsg));
+      var waiting = unsent || !!(lastMsg && !lastDone && msgFresh(lastMsg));
+      var rows = [];
+      turns.forEach(function (t, ti) {
+        if (t.user) { var ut = textOf(t.user); if (ut.trim()) rows.push(msgRow("m" + t.ui, "user", ut, when(t.user.timestamp), false)); }
+        var open = ti === turns.length - 1 && waiting && !unsent;
+        if (open || !t.said.length) return;
+        var fin = t.said[t.said.length - 1], rest = t.said.slice(0, -1);
+        if (rest.length && operatorOn() && shownSteps[fin.i]) rest.forEach(function (x) {
+          rows.push(h("div", { className: "scc-step", key: "s" + x.i }, textOf(x.m)));
+        });
+        rows.push(msgRow("m" + fin.i, "assistant", textOf(fin.m), when(fin.m.timestamp), false));
+        if (rest.length && operatorOn()) rows.push(h("button", { type: "button", className: "scc-steps-btn", key: "sb" + fin.i,
+          onClick: function () { setShownSteps(function (o) { var n = Object.assign({}, o); n[fin.i] = !n[fin.i]; return n; }); } },
+          shownSteps[fin.i] ? "Hide working" : "Show working (" + rest.length + ")"));
+      });
       (pending || []).forEach(function (t, i) { if (serverUser.indexOf(t.trim()) !== -1) return; rows.push(msgRow("p" + i, "user", t, "", true)); });
-      // Still working: the owner's message has no answer yet, or the newest thing in
-      // the conversation is a tool step rather than words from the assistant.
-      var lastMsg = messages.length ? messages[messages.length - 1] : null;
-      var waiting = (pending || []).some(function (t) { return serverUser.indexOf(t.trim()) === -1; }) ||
-        !!(lastMsg && msgFresh(lastMsg) && (lastMsg.role !== "assistant" || !extractText(lastMsg.content || lastMsg.api_content).trim()));
       waitingRef.current = !!waiting;
       if (waiting && !sinceRef.current) sinceRef.current = Date.now();
       if (!waiting) sinceRef.current = 0;
       var secs = waiting ? Math.max(0, Math.round((Date.now() - sinceRef.current) / 1000)) : 0;
-      // Steps the assistant has taken since the last message from the owner (tools it
-      // called, notes it read), so a long answer does not look stuck.
-      var steps = 0;
-      for (var mi = (messages || []).length - 1; mi >= 0 && messages[mi].role !== "user"; mi--) steps++;
       if (waiting) rows.push(h("div", { className: "scc-msg scc-assistant", key: "typing" }, avatar("assistant"),
         h("div", { className: "scc-col" }, h("div", { className: "scc-bubble scc-typing" },
           h("span", { className: "scc-dots" }, "• • •"),
-          secs >= 4 ? h("span", { className: "scc-working" }, (steps > 0 ? "Working, " + steps + (steps === 1 ? " step" : " steps") + " so far" : "Thinking") + " · " + (secs < 60 ? secs + "s" : Math.floor(secs / 60) + "m " + (secs % 60) + "s")) : null))));
+          secs >= 4 ? h("span", { className: "scc-working" }, "Working on it · " + (secs < 60 ? secs + "s" : Math.floor(secs / 60) + "m " + (secs % 60) + "s")) : null))));
 
       var connLabel = status === "ready" ? "Connected" : status === "connecting" ? "Connecting…" : status === "closed" ? "Reconnect" : status === "error" ? "Offline" : "Ready";
 

@@ -6361,7 +6361,9 @@ _ROUTING = (" Routing rule for owner requests: answer quick questions yourself; 
             "the matching agent; if it is an ongoing role no agent covers, request a hiring review. Ask "
             "the owner for missing details before building. Load the running-the-business skill for the "
             "full procedure.")
-_STYLE = (" Writing to the owner: they are a business owner, not a technician. Answer first, in plain "
+_STYLE = (" Writing to the owner: they are a business owner, not a technician. Give one answer per "
+          "question: work silently and reply once with the result, with no running commentary such as "
+          "'Let me check' before or between tool calls. Answer first, in plain "
           "words and short sentences. Name things by their name, not their ID; leave out IDs, file "
           "paths, JSON and internal tool names unless asked. Use a short list for steps, a small table "
           "only to compare a few things. Say what happened, what it means and what you need from them, "
