@@ -696,7 +696,7 @@ owner do that. Agents on their own servers reach this tool over HTTP (section 22
   (total and new), what is in progress, hand-offs, and agents in error.
 - The summary step carries an internal token in the workflow, the same one the
   stuck-agent watch uses. The address only answers inside the server.
-- **Clearing a backlog:** Tasks > Needs you > **Select several** > Select all shown >
+- **Clearing a backlog:** Tasks > With the team (or All) > **Select several** > Select all shown >
   Mark done (up to 100 at a time; the list reloads with the next batch). Closed tasks
   can be reopened one at a time from the task itself.
 
@@ -942,3 +942,53 @@ up by hand.
 For an agent on its own machine, add the key on that machine (its own Hermes), then
 change its model from the Agents page as usual. Its Hermes needs to be a version that
 includes the Meta provider.
+
+## 30. Decisions with buttons, and what "Needs you" means
+
+The owner should only see decisions. Everything else is the team's.
+
+**Tasks > Needs you** shows cards, not a list of every waiting task:
+
+| Card | Where it comes from | Buttons |
+|---|---|---|
+| Decision | An agent called `need_owner_input` (summary, question, recommendation) | Approve, Decline, Tell me more |
+| Approval | A pending approval on the team board | Approve, Decline, Ask for changes |
+| Decision / Question | A confirmation or question card an agent left on a task | Approve and Decline for yes-or-no cards; others are answered on the board |
+| Review | Finished work the board says is waiting for the owner's review | Approve (closes it), Send back, Tell me more |
+| Stuck task | A blocked task the board says needs a person, with no clear question | Hand to the lead agent, Close it, Tell me more |
+
+- **Add a note** on any card sends your words to the agent along with the button.
+- **Tell me more** sends the task back to the agent with a request for a plain,
+  short explanation; it returns as a new card when the agent asks again.
+- **With the team** is every blocked or in-review task that has no card: agents
+  waiting on each other. Nothing there needs the owner.
+- Failed runs and agent errors are **alerts**, listed under the cards, not decisions.
+- The list of what needs a person comes from Paperclip (`GET
+  /api/companies/<id>/attention`), plus the table `owner_asks`. The Overview's
+  "Waiting on you" panel shows the same count.
+
+**The lead agent sorts out stuck work first** (Account > "Send stuck work to my lead
+agent first", on by default). The lead agent is the one with the CEO role.
+
+- Each time the stuck-agent watch runs, up to 5 stuck tasks with no clear question
+  are handed to the lead agent with instructions: finish it, hand it off, split it or
+  close it, and ask the owner only about the owner-only list, through
+  `need_owner_input`. A task is handed over once.
+- A task that ignored two reminders also goes to the lead agent before the owner.
+- While the watch is running, stuck tasks that have not been through the lead agent
+  are held back from "Needs you" ("N stuck tasks are going to ... first"). If the
+  watch has not run in two hours they are shown straight away with a "Hand to" button.
+- Needs: the stuck-agent watch switched on (Automations), and an agent with the CEO
+  role that is not paused. Agents on their own machines also need the task tools in
+  their instructions (section 22a) so they can ask properly.
+
+**How agents must ask.** `need_owner_input` now requires `summary` (2 to 4 plain
+sentences), `question` (one yes-or-no question) and `recommendation`. A call without
+them is refused with instructions. Agents that park a task as blocked or in review
+for the owner without the tool produce a "Stuck task" card, which the lead agent
+picks up.
+
+**Task pages** show, in order: the decision (if one is waiting), the latest update,
+the request, earlier activity, the reply box and files. Agent text is formatted
+(headings, lists, tables, code). The working notes Agent OS adds to a task for the
+agent are hidden from this view.

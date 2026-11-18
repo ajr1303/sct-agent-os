@@ -39,21 +39,91 @@
       } catch (e) { return ""; }
     }
 
-    // Map Paperclip issue/run status -> a friendly bucket for the chip.
-    function bucket(status) {
+    // Text from agents is written as light markdown. Everything is escaped first, so
+    // nothing an agent (or a web page an agent read) wrote can run in the dashboard.
+    function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
+    var mdCache = {}, mdCount = 0;
+    function md(src) {
+      if (!src) return "";
+      var k = String(src);
+      if (Object.prototype.hasOwnProperty.call(mdCache, k)) return mdCache[k];
+      if (mdCount > 300) { mdCache = {}; mdCount = 0; }
+      mdCount++;
+      return (mdCache[k] = mdRender(k));
+    }
+    function mdRender(src) {
+      var text = String(src).replace(/\r\n?/g, "\n"), blocks = [];
+      text = text.replace(/```[a-zA-Z0-9]*\n?([\s\S]*?)```/g, function (_, code) { blocks.push(code.replace(/\n$/, "")); return "\u0000C" + (blocks.length - 1) + "\u0000"; });
+      text = esc(text);
+      text = text.replace(/`([^`\n]+)`/g, function (_, c) { return "<code>" + c + "</code>"; });
+      text = text.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+      text = text.replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, "$1<em>$2</em>");
+      text = text.replace(/\[([^\]]+)\]\(([^\s)]+)\)/g, function (_, label, raw) {
+        var url = raw.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+        try {
+          var u = new URL(url);
+          if (u.protocol !== "http:" && u.protocol !== "https:") return label;
+          return '<a href="' + esc(u.href) + '" target="_blank" rel="noopener noreferrer">' + label + "</a>";
+        } catch (e) { return label; }     // board-relative links such as /SUB/agents/x: keep the name only
+      });
+      var tables = [];
+      text = text.replace(/(^|\n)((?:[ \t]*\|[^\n]*\|[ \t]*(?:\n|$)){2,})/g, function (m, lead, block) {
+        var lines = block.replace(/\n$/, "").split("\n");
+        if (!/^[ \t]*\|[\s:|-]+\|[ \t]*$/.test(lines[1]) || lines[1].indexOf("-") < 0) return m;
+        function cells(l) { return l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(function (c) { return c.trim(); }); }
+        var head = cells(lines[0]), rows = lines.slice(2).map(cells);
+        tables.push('<div class="st-md-tw"><table class="st-md-table"><thead><tr>' + head.map(function (c) { return "<th>" + c + "</th>"; }).join("") + "</tr></thead><tbody>"
+          + rows.map(function (r) { return "<tr>" + r.map(function (c) { return "<td>" + c + "</td>"; }).join("") + "</tr>"; }).join("") + "</tbody></table></div>");
+        return lead + "\u0000T" + (tables.length - 1) + "\u0000\n";
+      });
+      var lines = text.split("\n"), out = [], para = [], list = null, m;
+      function flushPara() { if (para.length) { out.push("<p>" + para.join("<br>") + "</p>"); para = []; } }
+      function flushList() { if (list) { out.push("<" + list.tag + ">" + list.items.map(function (i) { return "<li>" + i + "</li>"; }).join("") + "</" + list.tag + ">"); list = null; } }
+      function flush() { flushPara(); flushList(); }
+      function item(tag, body) { flushPara(); if (!list || list.tag !== tag) { flushList(); list = { tag: tag, items: [] }; } list.items.push(body); }
+      for (var li = 0; li < lines.length; li++) {
+        var line = lines[li], t = line.trim();
+        if (!t) { flush(); continue; }
+        if (/^\u0000[TC]\d+\u0000$/.test(t)) { flush(); out.push(t); continue; }
+        if ((m = /^(#{1,6})\s+(.+)$/.exec(t))) { flush(); out.push('<div class="st-md-h st-md-h' + Math.min(m[1].length, 3) + '">' + m[2].replace(/\s*#+\s*$/, "") + "</div>"); continue; }
+        if (/^(-{3,}|\*{3,}|_{3,})$/.test(t)) { flush(); out.push("<hr>"); continue; }
+        if ((m = /^[-*•]\s+\[( |x|X)\]\s+(.+)$/.exec(t))) { item("ul", (m[1] === " " ? "☐ " : "☑ ") + m[2]); continue; }
+        if ((m = /^[-*•]\s+(.+)$/.exec(t))) { item("ul", m[1]); continue; }
+        if ((m = /^\d{1,3}[.)]\s+(.+)$/.exec(t))) { item("ol", m[1]); continue; }
+        if ((m = /^&gt;\s?(.*)$/.exec(t))) { flush(); out.push("<blockquote>" + m[1] + "</blockquote>"); continue; }
+        if (list && /^\s{2,}\S/.test(line)) { list.items[list.items.length - 1] += " " + t; continue; }
+        flushList(); para.push(t);
+      }
+      flush();
+      text = out.join("");
+      text = text.replace(/\u0000T(\d+)\u0000/g, function (_, i) { return tables[+i]; });
+      text = text.replace(/\u0000C(\d+)\u0000/g, function (_, i) { return "<pre>" + esc(blocks[+i]) + "</pre>"; });
+      return text;
+    }
+    function Md(src, cls) { return h("div", { className: "st-md" + (cls ? " " + cls : ""), dangerouslySetInnerHTML: { __html: md(src) } }); }
+
+    // Map a task to a friendly bucket. A blocked or in-review task only "needs you"
+    // when there is a decision for the owner; otherwise it is waiting on the team.
+    function bucket(status, waitingOn) {
       var s = (status || "").toLowerCase();
       if (/(done|closed|complete|resolved|finished|succeed|success)/.test(s)) return { k: "done", label: "Done" };
       if (/(in[_ -]?progress|working|running|active|executing|live)/.test(s)) return { k: "working", label: "Working" };
-      if (/(review|needs|blocked|attention|approval|waiting|paused|failed|error)/.test(s)) return { k: "attn", label: "Needs you" };
+      if (/(review|needs|blocked|attention|approval|waiting|paused|failed|error)/.test(s))
+        return waitingOn === "team" ? { k: "team", label: "With the team" } : { k: "attn", label: "Needs you" };
       return { k: "queued", label: s ? (s.charAt(0).toUpperCase() + s.slice(1)) : "Queued" };
     }
 
-    function chip(status, running) {
-      var b = bucket(status);
+    function chip(status, running, waitingOn) {
+      var b = bucket(status, waitingOn);
       if (running) return h("span", { className: "st-chip st-working" }, h("span", { className: "st-spin" }), "Running now");
       return h("span", { className: "st-chip st-" + b.k }, b.k === "working" ? "In progress" : b.label);
     }
+    function initials(n) { n = String(n || "?").trim(); return (n.charAt(0) || "?").toUpperCase(); }
+    // Notes the system posts on a task, as opposed to an agent's own words.
+    function isAsk(m) { return /^\*\*Decision needed from the owner\*\*/.test(String(m.text || "")); }
+    function isAuto(m) { return /^(Automatic check:|\*\*Sent to |Split into \d+ smaller|Handed to |Closed by the owner)/.test(String(m.text || "")); }
 
+    var decFirst = false;
     function Tasks() {
       var s;
       s = useState(null);  var list = s[0], setList = s[1];        // {tasks, company_slug, paperclip_up}
@@ -72,6 +142,13 @@
       s = useState({});    var picked = s[0], setPicked = s[1];    // key -> true
       s = useState(false); var bulkBusy = s[0], setBulkBusy = s[1];
       s = useState(null);  var bulkMsg = s[0], setBulkMsg = s[1];
+      s = useState(null);  var dec = s[0], setDec = s[1];          // {decisions, alerts, with_lead, lead}
+      s = useState(null);  var dBusy = s[0], setDBusy = s[1];      // "<card id>:<action>" while a button is working
+      s = useState({});    var dMsg = s[0], setDMsg = s[1];        // card id -> what happened
+      s = useState(null);  var noteFor = s[0], setNoteFor = s[1];  // card id with the note box open
+      s = useState("");    var note = s[0], setNote = s[1];
+      s = useState(false); var showAlerts = s[0], setShowAlerts = s[1];
+      s = useState(false); var askOpen = s[0], setAskOpen = s[1];  // full request shown
 
       function loadList() {
         return api("/orchestration/tasks").then(function (d) { setList(d); setErr(null); return d; })
@@ -80,6 +157,28 @@
       function loadBlocked() {
         return api("/gateway/blocked").then(function (d) { setBlocked((d && d.blocked) || []); })
           .catch(function () { /* non-fatal: banner just won't show */ });
+      }
+      function loadDec() {
+        return api("/orchestration/decisions").then(function (d) {
+          setDec(d);
+          if (!decFirst) { decFirst = true; if ((d.decisions || []).length) setFilter("attn"); }   // open on what needs an answer
+          return d;
+        }).catch(function () { /* the list still works without the cards */ });
+      }
+      function decide(card, action) {
+        if (dBusy) return;
+        setDBusy(card.id + ":" + action);
+        var body = { id: card.id, action: action, note: noteFor === card.id ? note.trim() : "" };
+        api("/orchestration/decisions/act", { method: "POST", body: JSON.stringify(body) })
+          .then(function (r) {
+            var m = {}; for (var k in dMsg) m[k] = dMsg[k]; m[card.id] = { ok: true, text: r.message || "Done." }; setDMsg(m);
+            setDBusy(null); setNoteFor(null); setNote("");
+            return Promise.all([loadDec(), loadList(), sel ? loadDetail(sel) : null]);
+          })
+          .catch(function (e) {
+            var m = {}; for (var k in dMsg) m[k] = dMsg[k]; m[card.id] = { ok: false, text: String(e.message || e) }; setDMsg(m);
+            setDBusy(null); loadDec();
+          });
       }
       function unblock(sk) {
         setUnblk(sk);
@@ -94,7 +193,7 @@
           .then(function (d) { setDLoad(false); setDetail(d); })
           .catch(function (e) { setDLoad(false); setDetail({ key: key, messages: [], deliverables: [], errors: [String(e.message || e)] }); });
       }
-      function open(key) { setSel(key); setDetail(null); setReply(""); setRErr(null); setAskCancel(false); loadDetail(key); }
+      function open(key) { setSel(key); setDetail(null); setReply(""); setRErr(null); setAskCancel(false); setAskOpen(false); loadDetail(key); }
       function isClosed(st) { return /^(done|cancelled)$/.test(String(st || "").toLowerCase()); }
       function after(p) {
         return p.then(function () { setRBusy(false); setAskCancel(false); return Promise.all([loadDetail(sel), loadList()]); })
@@ -115,8 +214,8 @@
       }
 
       useEffect(function () {
-        loadList(); loadBlocked();
-        var t = setInterval(function () { loadList(); loadBlocked(); }, 15000);
+        loadList(); loadBlocked(); loadDec();
+        var t = setInterval(function () { loadList(); loadBlocked(); loadDec(); }, 15000);
         return function () { clearInterval(t); };
       }, []);
       // Refresh the open task while it may still be working.
@@ -128,7 +227,8 @@
 
       var tasks = (list && list.tasks) ? list.tasks : [];
       var up = list ? list.paperclip_up : null;
-      function inFilter(t, f) { return f === "all" || bucket(t.status).k === f || (f === "working" && t.running); }
+      function inFilter(t, f) { return f === "all" || bucket(t.status, t.waiting_on).k === f || (f === "working" && t.running); }
+      var cards = (dec && dec.decisions) || null;
       var shown = tasks.filter(function (t) { return inFilter(t, filter); })
         .sort(function (x, y) { return (y.running ? 1 : 0) - (x.running ? 1 : 0); });   // live work first; otherwise newest first as delivered
       function countFor(f) { var n = 0; for (var i = 0; i < tasks.length; i++) if (inFilter(tasks[i], f)) n++; return n; }
@@ -143,14 +243,15 @@
         return h("div", { className: "st-top" },
           h("div", null,
             h("div", { className: "st-h1" }, "Tasks"),
-            h("div", { className: "st-sub" }, "What your agents are working on and what they've produced. Shows work in progress, what's waiting on you, and the most recent finished tasks.")));
+            h("div", { className: "st-sub" }, "What your agents are working on and what they've produced. Decisions that need you come first; everything else is handled by the team.")));
       }
 
       function filters() {
-        var opts = [["all", "All"], ["working", "Working"], ["attn", "Needs you"], ["done", "Done"]];
+        var opts = [["attn", "Needs you"], ["working", "Working"], ["team", "With the team"], ["done", "Done"], ["all", "All"]];
         return h("div", { className: "st-filters" }, opts.map(function (o) {
+          var n = o[0] === "attn" && cards ? cards.length : countFor(o[0]);
           return h("button", { key: o[0], className: "st-filt" + (filter === o[0] ? " on" : ""),
-            onClick: function () { setFilter(o[0]); } }, o[1], o[0] !== "all" && list ? h("span", { className: "st-count" }, countFor(o[0])) : null);
+            onClick: function () { setFilter(o[0]); } }, o[1], o[0] !== "all" && list ? h("span", { className: "st-count" }, n) : null);
         }));
       }
 
@@ -197,7 +298,7 @@
                 t.agentName ? h("span", { className: "st-agent" }, t.agentName) : null,
                 h("span", { className: "st-key" }, t.key),
                 t.updatedAt ? h("span", { className: "st-time" }, whenStr(t.updatedAt)) : null)),
-            chip(t.status, t.running));
+            chip(t.status, t.running, t.waiting_on));
         }
         return h("button", { key: t.key, className: "st-row" + (sel === t.key ? " sel" : ""), onClick: function () { open(t.key); } },
           h("div", { className: "st-row-main" },
@@ -206,53 +307,126 @@
               t.agentName ? h("span", { className: "st-agent" }, t.agentName) : null,
               h("span", { className: "st-key" }, t.key),
               t.updatedAt ? h("span", { className: "st-time" }, whenStr(t.updatedAt)) : null)),
-          chip(t.status, t.running));
+          chip(t.status, t.running, t.waiting_on));
+      }
+
+      // One decision: what it is about, what the agent recommends, and the buttons.
+      function card(c, inDetail) {
+        var msg = dMsg[c.id], canAct = !dec || dec.can_act !== false;
+        return h("div", { key: c.id, className: "st-card st-card-" + c.kind + (!inDetail && c.key && sel === c.key ? " sel" : "") },
+          h("div", { className: "st-card-top" },
+            h("span", { className: "st-tag st-tag-" + c.kind }, c.tag),
+            c.agent ? h("span", { className: "st-agent" }, c.agent) : null,
+            c.key ? h("span", { className: "st-key" }, c.key) : null,
+            c.at ? h("span", { className: "st-time" }, whenStr(c.at)) : null),
+          inDetail ? null : (c.key
+            ? h("button", { type: "button", className: "st-card-title st-card-open", onClick: function () { open(c.key); } }, c.title)
+            : h("div", { className: "st-card-title" }, c.title)),
+          c.summary ? Md(c.summary, "st-card-sum") : null,
+          c.question ? h("div", { className: "st-card-q" }, h("span", { className: "st-card-l" }, "Question"), Md(c.question)) : null,
+          c.recommendation ? h("div", { className: "st-card-rec" }, h("span", { className: "st-card-l" }, "Recommended"), Md(c.recommendation)) : null,
+          noteFor === c.id ? h("textarea", { className: "st-reply-in st-card-note", rows: 2, maxLength: 1500, value: note, autoFocus: true,
+            placeholder: "Add a note for the agent, then press a button (optional)", onChange: function (e) { setNote(e.target.value); } }) : null,
+          canAct ? h("div", { className: "st-card-acts" },
+            (c.buttons || []).map(function (b) {
+              var busy = dBusy === c.id + ":" + b.id;
+              return h("button", { key: b.id, type: "button", disabled: !!dBusy,
+                className: "st-btn st-dbtn" + (b.style === "primary" ? " st-primary" : "") + (b.id === "decline" || b.id === "close" ? " st-quiet" : ""),
+                onClick: function () { decide(c, b.id); } }, busy ? "Working…" : b.label);
+            }),
+            (c.buttons || []).length && noteFor !== c.id
+              ? h("button", { type: "button", className: "st-linkbtn", onClick: function () { setNoteFor(c.id); setNote(""); } }, "Add a note") : null,
+            c.open_in_board && c.key ? h("a", { className: "st-link", href: pcTaskUrl(c.key), target: "_blank", rel: "noopener" }, "Answer on the team board ↗") : null) : null,
+          msg ? h("div", { className: "st-card-msg" + (msg.ok ? "" : " st-err") }, msg.text) : null);
+      }
+      function decisionPane() {
+        var al = (dec && dec.alerts) || [];
+        var done = []; for (var k in dMsg) if (dMsg[k].ok && !cards.some(function (c) { return c.id === k; })) done.push(dMsg[k].text);
+        return h("div", null,
+          dec.with_lead ? h("div", { className: "st-lead" }, dec.with_lead + " stuck task" + (dec.with_lead === 1 ? " is" : "s are") + " going to " + (dec.lead || "your lead agent")
+            + " to sort out first. You'll only see one if it still needs you.") : null,
+          cards.length === 0
+            ? h("div", { className: "st-empty st-clear" }, h("div", { className: "st-clear-h" }, "Nothing needs you right now."),
+                done.length ? done[done.length - 1] + " " : "", "Your team is handling the rest. Anything that needs a decision shows up here with buttons.")
+            : h("div", { className: "st-cards" }, cards.map(function (c) { return card(c, false); })),
+          al.length ? h("div", { className: "st-alerts" },
+            h("button", { type: "button", className: "st-linkbtn", onClick: function () { setShowAlerts(!showAlerts); } },
+              (showAlerts ? "Hide " : "Show ") + al.length + " alert" + (al.length === 1 ? "" : "s") + " (failed runs and agent errors, not decisions)"),
+            showAlerts ? h("div", { className: "st-alert-list" }, al.map(function (a, i) {
+              return h("div", { key: i, className: "st-alert" },
+                h("span", { className: "st-tag st-tag-alert" }, a.kind), h("span", { className: "st-alert-t" }, a.title),
+                a.why ? h("span", { className: "st-alert-w" }, a.why) : null);
+            })) : null) : null);
       }
 
       function listPane() {
         return h("div", { className: "st-listpane" },
           filters(),
-          bulkBar(),
-          up === false ? h("div", { className: "st-empty" }, "Team management is starting. Tasks will appear once it's up.")
+          filter === "attn" && cards ? null : bulkBar(),
+          filter === "attn" && cards && up !== false && list && list.connected !== false ? decisionPane()
+          : up === false ? h("div", { className: "st-empty" }, "Team management is starting. Tasks will appear once it's up.")
             : list == null ? h("div", { className: "st-empty" }, err ? "Couldn't load tasks. Try again in a minute." : "Loading…")
             : list.connected === false ? h("div", { className: "st-empty" }, "Your team isn't linked yet. ",
                 h("a", { href: "/orchestration" + (location.search || "") }, "Finish setup on the Orchestration page"), ".")
-            : shown.length === 0 ? h("div", { className: "st-empty" }, tasks.length === 0 ? "No tasks yet. Create an agent, or assign one a task, and it'll show here." : "Nothing matches this filter.")
+            : shown.length === 0 ? h("div", { className: "st-empty" }, tasks.length === 0 ? "No tasks yet. Create an agent, or assign one a task, and it'll show here."
+                : filter === "team" ? "Nothing is waiting between agents right now." : "Nothing matches this filter.")
             : h("div", { className: "st-list" }, shown.map(row)));
       }
 
       function msg(m, i) {
-        var mine = m.role === "user";
+        var mine = m.role === "user", who = mine ? "You" : (m.author || "Agent");
+        if (isAsk(m)) return h("div", { className: "st-note", key: i },
+          h("span", { className: "st-note-dot" }), h("span", { className: "st-note-text" }, (m.author || "The agent") + " asked you for a decision."), m.at ? h("span", { className: "st-msg-at" }, whenStr(m.at)) : null);
+        if (isAuto(m)) return h("div", { className: "st-note", key: i },
+          h("span", { className: "st-note-dot" }), Md(m.text, "st-note-text"), m.at ? h("span", { className: "st-msg-at" }, whenStr(m.at)) : null);
         return h("div", { className: "st-msg " + (mine ? "me" : "agent"), key: i },
-          h("div", { className: "st-msg-who" }, mine ? "You" : (m.author || "Agent")),
-          h("div", { className: "st-msg-text" }, m.text || ""),
-          m.at ? h("div", { className: "st-msg-at" }, whenStr(m.at)) : null);
+          h("div", { className: "st-ava" + (mine ? " st-ava-me" : "") }, initials(who)),
+          h("div", { className: "st-msg-body" },
+            h("div", { className: "st-msg-who" }, h("b", null, who), m.at ? h("span", { className: "st-msg-at" }, whenStr(m.at)) : null),
+            Md(m.text || "", "st-msg-text")));
       }
 
       function detailPane() {
         if (!sel) return h("div", { className: "st-detail st-detail-empty" },
-          h("div", { className: "st-empty" }, "Select a task to see the agent's work."));
+          h("div", { className: "st-empty" }, filter === "attn" && cards ? "Open a decision to read the full task." : "Select a task to see the agent's work."));
         var d = detail;
         var cur = tasks.filter(function (t) { return t.key === sel; })[0] || { key: sel };
+        var title = cur.title || (d && d.title) || sel, agentName = cur.agentName || (d && d.agentName);
+        var status = (d && d.issue_status) || cur.status;
         var msgs = (d && d.messages) ? d.messages : [];
         var dels = (d && d.deliverables) ? d.deliverables : [];
+        var mine = (cards || []).filter(function (c) { return c.key && c.key === sel; })[0];
+        // The newest thing an agent actually wrote is the headline; the rest is history.
+        var latestIdx = -1;
+        for (var i = msgs.length - 1; i >= 0; i--) { if (msgs[i].role !== "user" && !isAuto(msgs[i]) && !isAsk(msgs[i]) && (msgs[i].text || "").trim()) { latestIdx = i; break; } }
+        var latest = latestIdx >= 0 ? msgs[latestIdx] : null;
+        var earlier = msgs.filter(function (_, idx) { return idx !== latestIdx; });
+        var desc = (d && d.description) || "", longAsk = desc.length > 700;
         return h("div", { className: "st-detail" },
           h("div", { className: "st-dhead" },
-            h("div", { className: "st-dtitle" }, cur.title || sel),
+            h("div", { className: "st-dtitle" }, title),
             h("div", { className: "st-dmeta" },
-              chip(cur.status || (d && d.status)),
-              cur.agentName ? h("span", { className: "st-agent" }, cur.agentName) : null,
-              h("a", { className: "st-link", href: pcTaskUrl(sel), target: "_blank", rel: "noopener" }, "View in Paperclip ↗"))),
+              chip(status, cur.running, mine ? "owner" : cur.waiting_on),
+              agentName ? h("span", { className: "st-agent" }, agentName) : null,
+              h("span", { className: "st-key" }, sel),
+              (cur.updatedAt || (d && d.updatedAt)) ? h("span", { className: "st-time" }, "Updated " + whenStr(cur.updatedAt || d.updatedAt)) : null,
+              h("a", { className: "st-link", href: pcTaskUrl(sel), target: "_blank", rel: "noopener" }, "Open on the team board ↗"))),
           dLoad && !d ? h("div", { className: "st-empty" }, "Loading…") : null,
-          d && d.description ? h("div", { className: "st-ask" },
-            h("div", { className: "st-section-h" }, "What was asked"),
-            h("div", { className: "st-ask-text" }, d.description)) : null,
-          h("div", { className: "st-section-h" }, "Conversation"),
-          msgs.length === 0
-            ? h("div", { className: "st-empty st-sm" }, dLoad ? "Loading…" : "No messages yet — the agent may still be working.")
-            : h("div", { className: "st-thread" }, msgs.map(msg)),
+          mine ? h("div", { className: "st-sec" }, h("div", { className: "st-section-h" }, "Your decision"), card(mine, true)) : null,
+          latest ? h("div", { className: "st-sec" },
+            h("div", { className: "st-section-h" }, "Latest update", h("span", { className: "st-section-r" }, (latest.author || agentName || "Agent") + (latest.at ? " · " + whenStr(latest.at) : ""))),
+            h("div", { className: "st-latest" }, Md(latest.text))) : null,
+          desc ? h("div", { className: "st-sec" },
+            h("div", { className: "st-section-h" }, "The request"),
+            h("div", { className: "st-ask" + (longAsk && !askOpen ? " st-ask-clip" : "") }, Md(desc)),
+            longAsk ? h("button", { type: "button", className: "st-linkbtn st-ask-more", onClick: function () { setAskOpen(!askOpen); } }, askOpen ? "Show less" : "Show the full request") : null) : null,
+          h("div", { className: "st-sec" },
+            h("div", { className: "st-section-h" }, latest ? "Earlier activity" : "Activity", earlier.length ? h("span", { className: "st-section-r" }, earlier.length + (earlier.length === 1 ? " entry" : " entries")) : null),
+            earlier.length === 0
+              ? h("div", { className: "st-empty st-sm" }, dLoad ? "Loading…" : latest ? "Nothing before the latest update." : "No messages yet. The agent may still be working.")
+              : h("div", { className: "st-thread" }, earlier.map(msg))),
           d && d.can_reply ? (function () {
-            var st = d.issue_status || cur.status, closed = isClosed(st), who = cur.agentName || "the agent";
+            var st = d.issue_status || cur.status, closed = isClosed(st), who = agentName || "the agent";
             return h("form", { className: "st-reply", onSubmit: function (e) { sendReply(e, closed); } },
               h("textarea", { className: "st-reply-in", value: reply, maxLength: 8000, rows: 3,
                 placeholder: closed ? "Reply to reopen this task and send " + who + " back to work…" : "Reply to " + who + "…",
@@ -262,7 +436,7 @@
               h("div", { className: "st-reply-row" },
                 h("span", { className: "st-reply-hint" }, /^backlog$/i.test(String(st || ""))
                   ? "This task is in the backlog: your reply is saved, but nobody starts on it until it is scheduled."
-                  : cur.agentName
+                  : agentName
                   ? (closed ? "Sending reopens the task and wakes " + who + "." : who + " is woken to read your reply.")
                   : "No agent is assigned, so nobody is woken by a reply."),
                 h("span", { className: "st-reply-acts" },
@@ -278,15 +452,13 @@
                   h("button", { type: "submit", className: "st-btn st-primary", disabled: rBusy || !reply.trim() },
                     rBusy ? "Sending…" : (closed ? "Reply & reopen" : "Send reply")))));
           })() : null,
-          h("div", { className: "st-section-h" }, "Deliverables"),
-          dels.length === 0
-            ? h("div", { className: "st-empty st-sm" }, "No files produced for this task.")
-            : h("div", { className: "st-dels" }, dels.map(function (w, i) {
-                return h("a", { key: i, className: "st-del", href: pcTaskUrl(sel), target: "_blank", rel: "noopener" },
-                  h("span", { className: "st-del-ic" }, "📄"),
-                  h("span", { className: "st-del-name" }, w.name),
-                  w.kind ? h("span", { className: "st-del-kind" }, String(w.kind)) : null);
-              })));
+          dels.length ? h("div", { className: "st-sec" },
+            h("div", { className: "st-section-h" }, "Files"),
+            h("div", { className: "st-dels" }, dels.map(function (w, i) {
+              return h("a", { key: i, className: "st-del", href: pcTaskUrl(sel), target: "_blank", rel: "noopener" },
+                h("span", { className: "st-del-name" }, w.name),
+                w.kind ? h("span", { className: "st-del-kind" }, String(w.kind)) : null);
+            }))) : null);
       }
 
       function blockedLabel(b) {
@@ -319,7 +491,7 @@
         err ? h("div", { className: "st-msgbar st-err" }, err) : null,
         blockedBanner(),
         h("div", { className: "st-cols" }, listPane(), detailPane()),
-        h("div", { className: "st-foot" }, "Reply, reopen, finish or cancel a task here. Approvals, the full history and file downloads still open in Paperclip."));
+        h("div", { className: "st-foot" }, "Answer decisions, reply, reopen, finish or cancel a task here. The full history and file downloads open on the team board."));
     }
 
     try { PLUGINS.register("suburban-tasks", Tasks); console.info(TAG, "registered"); }

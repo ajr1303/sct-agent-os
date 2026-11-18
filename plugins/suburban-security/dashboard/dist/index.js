@@ -103,6 +103,10 @@
             api("/account/me", { method: "PUT", body: JSON.stringify({ name: me.name || "", email: me.email || "", agents_close_routine: e.target.checked }) }).then(load).catch(function (e2) { setErr(String(e2.message || e2)); }); } }),
           h("span", null, "Let agents finish routine work without asking me. They close it themselves and it appears in the daily task summary. They still ask before anything involving money, messages to people outside the business, prices or dates, passwords or access, deleting data, or a security incident.")),
         h("label", { className: "ss-check" },
+          h("input", { type: "checkbox", checked: me.team_triage !== false, onChange: function (e) {
+            api("/account/me", { method: "PUT", body: JSON.stringify({ name: me.name || "", email: me.email || "", team_triage: e.target.checked }) }).then(load).catch(function (e2) { setErr(String(e2.message || e2)); }); } }),
+          h("span", null, "Send stuck work to my lead agent first. When a task is stuck and nobody asked a clear question, your lead agent (the one with the CEO role) sorts it out: finishes it, passes it on or closes it. It only reaches you if it needs a decision. This runs with the stuck-agent watch on the Automations page.")),
+        h("label", { className: "ss-check" },
           h("input", { type: "checkbox", checked: !!me.operator_tools, onChange: function (e) { setOp(e.target.checked); } }),
           h("span", null, "Show operator tools in the menu. These are technical pages for whoever looks after the system (files, logs, raw settings, plugins). Changes made there can stop the system working.")),
         note ? h("div", { className: "ss-ok" }, note) : null,

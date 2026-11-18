@@ -2,6 +2,27 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.52.0] — 2026-11-18
+
+- **"Needs you" now means a decision.** The Tasks page used to count every blocked
+  or in-review task as waiting on you, though most were agents waiting on each other.
+  Those are now under **With the team**. Needs you shows only what a person has to
+  decide.
+- **Decisions come as cards with buttons.** Each one has a short summary, the
+  question and the agent's recommendation, with **Approve**, **Decline** and **Tell
+  me more**. You can add a note with any button. Approvals and reviews from the team
+  board get the same buttons.
+- **Your lead agent sorts out stuck work first.** Stuck tasks with no clear question
+  go to the agent with the CEO role, who finishes, reassigns or closes them and only
+  asks you when a real decision is needed. Switch on Account; needs the stuck-agent
+  watch.
+- **Agents must ask properly.** A question for the owner has to include a plain
+  summary, one yes-or-no question and a recommendation.
+- **Cleaner task pages.** The latest update comes first, agent text is formatted
+  (headings, lists, tables), system notes are small, and the working notes added for
+  agents are hidden.
+- Failed runs and agent errors are listed as alerts, apart from decisions.
+
 ## [0.51.0] — 2026-11-18
 
 - **A card for every AI provider.** The Overview has a new "Your AI providers" row and

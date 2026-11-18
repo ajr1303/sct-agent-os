@@ -161,7 +161,17 @@
       function waitingBody() {
         if (pcOv == null) return h("div", { className: "sc-empty" }, "Checking the control plane…");
         if (!pcOv.paperclip_up) return h("div", { className: "sc-empty" }, h("span", null, "Control plane is off. ", h("a", { href: orchHref(), className: "sc-link" }, "Set it up in Orchestration →")));
-        var att = pcOv.attention;
+        var att = pcOv.attention, own = pcOv.owner;
+        // Decisions for the owner, separated from alerts and from work the team is sorting out.
+        if (own) {
+          var tasksHref = "/tasks" + (location.search || "");
+          return h("div", null,
+            h("div", { className: "sc-wait-total" }, own.decisions === 0 ? "Nothing needs you right now" : own.decisions + " decision" + (own.decisions === 1 ? "" : "s") + " waiting for you"),
+            h("div", { className: "sc-wait-rows" },
+              own.with_lead ? h("div", { className: "sc-wait-row" }, h("span", { className: "sc-wait-n" }, own.with_lead), h("span", null, "With " + (own.lead || "your lead agent") + " to sort out first")) : null,
+              own.alerts ? h("div", { className: "sc-wait-row" }, h("span", { className: "sc-wait-n" }, own.alerts), h("span", null, "Alerts (failed runs, agent errors)")) : null),
+            h("a", { href: tasksHref, className: "sc-link sc-wait-cta" }, own.decisions ? "Answer them in Tasks →" : "Open Tasks →"));
+        }
         if (!att) return h("div", { className: "sc-empty" }, h("span", null, "Connect Paperclip in ", h("a", { href: orchHref(), className: "sc-link" }, "Orchestration →"), " to see approvals here."));
         var total = att.totalCount || 0;
         if (total === 0) return h("div", { className: "sc-empty" }, "Nothing waiting. Agents ask here before they send, publish, or delete.");
@@ -371,7 +381,7 @@
 
         h("div", { className: "sc-cols" },
           h("div", { className: "sc-col" },
-            Panel("Waiting on you", "Agents ask before they send, publish or delete.", waitingBody()),
+            Panel("Waiting on you", "Only decisions. The team handles the rest.", waitingBody()),
             useManaged
               ? Panel("Your agents", managedAgents.length + " managed",
                   managedAgents.length === 0

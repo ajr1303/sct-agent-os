@@ -29,3 +29,18 @@ colleague would in a short note.
 - For anything that is not a picture, never give the owner a folder path, a file path
   on the server or a command to find a file. They cannot open those.
 - End with the next step, or stop.
+
+## Results and questions on a task
+
+The owner reads tasks as short reports, so shape them the same way every time.
+
+- **A result:** first line is the outcome in one sentence. Then, only if needed, a few
+  bullets under "What I did" and one line under "Next". No log of every step.
+- **A question for the owner:** use `need_owner_input` with a 2 to 4 sentence summary,
+  one yes-or-no question and your recommendation. They answer with a button
+  (Approve, Decline, Tell me more), so the question has to make sense on its own.
+- **Tell me more:** when the owner asks for more, answer in under 150 words: what it
+  is, what you recommend and why, what it costs or risks, and what happens if the
+  answer is no. Then ask again.
+- Do not park a task as blocked or in review for the owner any other way, and do not
+  ask them to verify or acknowledge finished work.

@@ -1203,7 +1203,8 @@ AGENT_FOOTER = (AGENT_FOOTER_MARK + "\n"
     "complete_task tool (agent_os) with the task id, your Agent ID and a one-line summary. "
     "A task is not finished until you do.\n"
     "- If you cannot finish without the owner (a decision, a login, missing information): "
-    "call need_owner_input with a clear question, then stop. Do not guess.\n"
+    "call need_owner_input with a short plain summary, one yes-or-no question and what you "
+    "recommend, then stop. The owner answers with Approve, Decline or Tell me more. Do not guess.\n"
     "- If you need the business's name, services or tone, call get_business_profile. "
     "Never write placeholders like [Company Name].\n"
     "- You work on the task you were given. Do not assign tasks to other agents.")
@@ -2283,6 +2284,7 @@ class AccountInfo(BaseModel):
     main_agent: str | None = None      # what the Chat page calls the main assistant
     operator_tools: bool | None = None  # show the operator pages in the sidebar
     agents_close_routine: bool | None = None  # agents finish routine work without asking the owner
+    team_triage: bool | None = None           # the lead agent sorts out stuck work before the owner sees it
 
 
 # --- Account: who the owner is, and the first-run welcome ------------------------------
@@ -2342,6 +2344,13 @@ def _acct_setup_done():
         pass
 
 
+def _team_triage(a=None):
+    """Owner's choice: stuck work between agents goes to the lead agent first. On unless
+    the owner switches it off."""
+    a = _acct() if a is None else a
+    return a.get("team_triage") is not False
+
+
 @app.get("/account/me")
 def account_me(_auth=Depends(require_auth)):
     a = _acct()
@@ -2352,7 +2361,7 @@ def account_me(_auth=Depends(require_auth)):
         mfa_on = False
     return {"name": a.get("name") or "", "email": a.get("email") or "", "username": _acct_username(),
             "main_agent": a.get("main_agent") or "", "operator_tools": bool(a.get("operator_tools")),
-            "agents_close_routine": _agents_close_routine(a),
+            "agents_close_routine": _agents_close_routine(a), "team_triage": _team_triage(a),
             "setup_needed": os.path.exists(_ACCT_SETUP_FLAG), "reset_code_set": bool(d.get("code_hash")),
             "reset_by_email": bool(d.get("email")), "two_step": mfa_on, "rule": _PW_RULE}
 
@@ -2371,6 +2380,8 @@ def account_save(b: AccountInfo, _auth=Depends(require_auth)):
         a["operator_tools"] = bool(b.operator_tools)
     if b.agents_close_routine is not None:
         a["agents_close_routine"] = bool(b.agents_close_routine)
+    if b.team_triage is not None:
+        a["team_triage"] = bool(b.team_triage)
     _kv_set("account", json.dumps(a))
     return {"name": name, "email": email_addr, "main_agent": a.get("main_agent") or "",
             "operator_tools": bool(a.get("operator_tools"))}
@@ -2813,7 +2824,7 @@ def _restart_gateway(entry):
 def stuck_watch_run(dry_run=False):
     """One pass. Returns what it found and did, in plain words, for the dashboard and n8n."""
     out = {"at": _now().isoformat(), "dry_run": bool(dry_run), "checked_agents": 0, "checked_tasks": 0,
-           "retried": [], "nudged": [], "restarted": [], "escalated": [], "skipped": None,
+           "retried": [], "nudged": [], "restarted": [], "escalated": [], "triaged": [], "skipped": None,
            "needs_attention": False, "summary": ""}
 
     def done(skipped=None):
@@ -2826,6 +2837,9 @@ def stuck_watch_run(dry_run=False):
         if out["nudged"]:
             parts.append("Nudged %d stuck task%s: %s." % (len(out["nudged"]), "" if len(out["nudged"]) == 1 else "s",
                          "; ".join("%s (%s)" % (n["key"], n["agent"]) for n in out["nudged"])))
+        if out["triaged"]:
+            parts.append("Sent %d stuck task%s to %s to sort out: %s." % (len(out["triaged"]), "" if len(out["triaged"]) == 1 else "s",
+                         out["triaged"][0]["to"], ", ".join(t["key"] for t in out["triaged"])))
         if out["escalated"]:
             parts.append("NEEDS YOU: " + "; ".join(e["message"] for e in out["escalated"]))
         out["needs_attention"] = bool(out["escalated"])
@@ -2867,6 +2881,9 @@ def stuck_watch_run(dry_run=False):
     usable = {aid for aid, a in by_id.items() if str(a.get("status")).lower() not in ("paused", "terminated", "pending_approval")}
     out["checked_agents"] = len(usable)
     budget = WATCH_MAX_ACTIONS_PER_RUN
+    lead = _lead_agent(agents)
+    lead_ok = bool(_team_triage() and lead and str(lead.get("id")) in usable)
+    lead_name = (lead.get("name") or "the lead agent") if lead else ""
 
     with closing(get_db()) as con:
         con.execute("DELETE FROM stuck_watch WHERE last_action_at < ?", ((now - datetime.timedelta(days=7)).isoformat(),))
@@ -2947,6 +2964,20 @@ def stuck_watch_run(dry_run=False):
             if st["last"] and now - st["last"] < idle:
                 continue   # pushed recently; give it time
             if st["attempts"] >= WATCH_MAX_PUSHES:
+                # Two reminders did not move it: the lead agent gets it before the owner does.
+                if (lead_ok and str(issue.get("assigneeAgentId") or "") != str(lead["id"])
+                        and con.execute("SELECT 1 FROM stuck_watch WHERE kind='triage' AND ref=?", (iid,)).fetchone() is None):
+                    out["triaged"].append({"key": key, "to": lead_name})
+                    if not dry_run:
+                        try:
+                            _pc_send("PATCH", "/api/issues/" + _safe_id(iid),
+                                     {"status": "todo", "assigneeAgentId": lead["id"], "comment": _triage_text(lead_name)},
+                                     what="hand the task to the lead agent")
+                        except Exception:
+                            pass
+                        bump("triage", iid); con.execute("DELETE FROM stuck_watch WHERE kind='task' AND ref=?", (iid,))
+                        _watch_log(con, "sent to lead", key, lead_name)
+                    continue
                 msg = "%s (%s, %s) %s after %d nudges." % (key, str(issue.get("title") or "")[:70], name, why, st["attempts"])
                 out["escalated"].append({"key": key, "agent": name, "message": msg})
                 if not dry_run:
@@ -2987,6 +3018,43 @@ def stuck_watch_run(dry_run=False):
                 except Exception:
                     pass
                 bump("task", iid); _watch_log(con, "nudged", key, "%s, %s, idle %d min" % (name, why, mins))
+
+        # 3. Blocked work the board says needs a person, where no agent asked a clear
+        # question: the lead agent sorts it out first. Once per task.
+        if lead_ok:
+            try:
+                feed = _pc_get("/api/companies/" + str(cid) + "/attention?all=true")
+                stuck = [i for i in _list(feed, "items") if isinstance(i, dict) and i.get("sourceKind") == "blocker_attention"]
+            except Exception:
+                stuck = []
+            asks, sent = _asks_open(), 0
+            for it in stuck:
+                iid = str((it.get("subject") or {}).get("id") or "")
+                if not iid or iid in asks or iid in live_issue or sent >= WATCH_MAX_TRIAGE_PER_RUN:
+                    continue
+                if con.execute("SELECT 1 FROM stuck_watch WHERE kind='triage' AND ref=?", (iid,)).fetchone():
+                    continue
+                try:
+                    issue = _pc_get("/api/issues/" + _safe_id(iid))
+                except Exception:
+                    continue
+                if not isinstance(issue, dict) or str(issue.get("status")) in ("done", "cancelled"):
+                    continue
+                key = issue.get("identifier") or iid[:8]
+                sent += 1
+                out["triaged"].append({"key": key, "to": lead_name})
+                if dry_run:
+                    continue
+                body = {"status": "todo", "comment": _triage_text(lead_name)}
+                if str(issue.get("assigneeAgentId") or "") != str(lead["id"]):
+                    body["assigneeAgentId"] = lead["id"]
+                try:
+                    _pc_send("PATCH", "/api/issues/" + _safe_id(iid), body, what="hand the task to the lead agent")
+                except Exception:
+                    continue
+                bump("triage", iid); _watch_log(con, "sent to lead", key, lead_name)
+            if sent and not dry_run:
+                _DEC_CACHE.clear()
         if not dry_run:
             con.commit()
     return done()
@@ -4223,6 +4291,13 @@ def orchestration_overview(_auth=Depends(require_auth)):
     try:
         att = _pc_get("/api/companies/" + str(cid) + "/attention/summary")
         out["attention"] = att
+        try:
+            dec = _decisions()
+            if dec.get("ok"):
+                out["owner"] = {"decisions": len(dec["decisions"]), "alerts": len(dec["alerts"]),
+                                "with_lead": dec["with_lead"], "lead": dec["lead"]}
+        except Exception:
+            pass
     except Exception as e:
         out["errors"].append("attention: " + str(e)[:120])
     try:
@@ -4239,6 +4314,21 @@ def orchestration_overview(_auth=Depends(require_auth)):
     except Exception as e:
         out["errors"].append("activity: " + str(e)[:120])
     return out
+
+
+_TASK_NOTE_MARKS = ("--- How to work this task ---", "--- Agent OS task tools ---", "--- About the business ---")
+
+
+def _task_display_text(text):
+    """A task's request as the owner should read it: without the working notes this
+    service adds for the agent."""
+    t = _strip_footer(str(text or ""))
+    if "--- The job ---" in t[:600]:
+        t = t.split("--- The job ---", 1)[1]
+    cut = [t.find(m) for m in _TASK_NOTE_MARKS if t.find(m) >= 0]
+    if cut:
+        t = t[:min(cut)]
+    return t.strip()
 
 
 def _norm_comment(c):
@@ -4259,6 +4349,296 @@ def _norm_comment(c):
     return {"author": c.get("authorName") or c.get("agentName"),
             "role": role, "agentId": aid, "text": text[:6000],
             "at": c.get("createdAt") or c.get("at")}
+
+
+# --- What the owner has to decide --------------------------------------------------------
+# The Tasks page used to call every blocked or in-review task "Needs you", though most
+# of them wait on another agent. Paperclip keeps its own list of what needs a person;
+# this turns that list, plus the questions agents ask through need_owner_input, into
+# short cards the owner answers with a button. Everything else is "with the team".
+_DEC_CACHE = {}
+_DEC_ALERT_KINDS = {"failed_run": "Failed run", "agent_error_alert": "Agent error", "budget_alert": "Budget",
+                    "recovery_action": "Recovery", "join_request": "Join request", "productivity_review": "Review"}
+_BTN_APPROVE = {"id": "approve", "label": "Approve", "style": "primary"}
+_BTN_DECLINE = {"id": "decline", "label": "Decline"}
+_BTN_MORE = {"id": "more", "label": "Tell me more"}
+WATCH_MAX_TRIAGE_PER_RUN = 5
+
+
+def _lead_agent(agents):
+    """The agent that sorts out stuck work for the team: the one with the CEO role."""
+    for a in agents or []:
+        if (isinstance(a, dict) and str(a.get("role") or "").lower() == "ceo"
+                and str(a.get("status") or "").lower() not in ("paused", "terminated", "pending_approval")):
+            return a
+    return None
+
+
+def _triage_text(lead_name):
+    return ("**Sent to %s to sort out.** This task is stuck and may be holding up other work. %s: read the "
+            "thread, then do one of these: finish it, pass it to the right agent with hand_off_task, break it up "
+            "with split_task, or close it with complete_task if it is no longer needed. Ask the owner only "
+            "about: %s. To ask, use need_owner_input with a short summary, one yes-or-no question and your "
+            "recommendation." % (lead_name, lead_name, _OWNER_ONLY))
+
+
+def _watch_recent():
+    """True when the stuck-agent watch has run in the last two hours."""
+    try:
+        last = json.loads(_kv_get("stuck_watch_last") or "null")
+        at = _ts(last.get("at")) if isinstance(last, dict) else None
+        return bool(at and _now() - at < datetime.timedelta(hours=2))
+    except Exception:
+        return False
+
+
+def _clip(v, n):
+    v = re.sub(r"[ \t]+", " ", str(v or "")).strip()
+    return v if len(v) <= n else v[:n - 1].rstrip() + "…"
+
+
+def _decisions(fresh=False):
+    hit = _DEC_CACHE.get("v")
+    if hit and not fresh and time.time() - hit[0] < 20:
+        return hit[1]
+    out = {"decisions": [], "alerts": [], "with_lead": 0, "lead": None, "triage": _team_triage(), "issue_ids": [], "ok": False}
+    if not _pc_key() or not _pc_up():
+        return out
+    cid = _pc_company_id()
+    if not cid:
+        return out
+    agents = [a for a in _list(_pc_get("/api/companies/" + str(cid) + "/agents"), "agents") if isinstance(a, dict)]
+    names = {str(a.get("id")): a.get("name") or "Agent" for a in agents}
+    lead = _lead_agent(agents)
+    out["lead"] = (lead.get("name") or "the lead agent") if lead else None
+    waiting = {}
+    try:
+        for i in _list(_pc_get("/api/companies/" + str(cid) + "/issues?status=in_review,blocked&sortField=updated&sortDir=desc&limit=200"), "issues"):
+            if isinstance(i, dict) and i.get("id"):
+                waiting[str(i["id"])] = i
+    except Exception:
+        pass
+    try:
+        items = [i for i in _list(_pc_get("/api/companies/" + str(cid) + "/attention?all=true"), "items") if isinstance(i, dict)]
+        out["ok"] = True
+    except Exception:
+        items = []
+    asks = _asks_open()
+    triaged = set()
+    try:
+        with closing(get_db()) as con:
+            triaged = {r[0] for r in con.execute("SELECT ref FROM stuck_watch WHERE kind = 'triage'")}
+    except Exception:
+        pass
+    hold = out["triage"] and lead is not None and _watch_recent()
+    cards, seen = [], set()
+
+    def issue_bits(iid, subj=None):
+        i = waiting.get(str(iid)) or {}
+        subj = subj or {}
+        return {"issue_id": str(iid), "key": i.get("identifier") or subj.get("identifier") or "",
+                "title": _clip(i.get("title") or subj.get("title") or "Task", 160),
+                "agent": names.get(str(i.get("assigneeAgentId") or "")) or None}
+
+    # 1. Questions agents asked through need_owner_input: the fullest cards.
+    for iid, a in asks.items():
+        if waiting and (iid not in waiting or str(waiting[iid].get("status")) != "blocked"):
+            _ask_close(iid)      # answered or closed some other way
+            continue
+        c = issue_bits(iid)
+        c.update({"id": "ask:" + iid, "kind": "decision", "tag": "Decision", "at": a.get("at"),
+                  "agent": c["agent"] or names.get(a.get("agent_id") or ""), "key": c["key"] or a.get("key") or "",
+                  "summary": a["summary"], "question": a["question"], "recommendation": a["recommendation"],
+                  "buttons": [_BTN_APPROVE, _BTN_DECLINE, _BTN_MORE], "ref": ("issue", iid, "ask")})
+        cards.append(c); seen.add(iid)
+
+    # 2. What Paperclip itself says needs a person.
+    for it in items:
+        kind = str(it.get("sourceKind") or "")
+        subj = it.get("subject") if isinstance(it.get("subject"), dict) else {}
+        rel = it.get("relatedIssue") if isinstance(it.get("relatedIssue"), dict) else {}
+        det = it.get("detail") if isinstance(it.get("detail"), dict) else {}
+        sid = str(subj.get("id") or "")
+        at = it.get("activityAt") or it.get("updatedAt")
+        if not sid:
+            continue
+        if kind in _DEC_ALERT_KINDS:
+            out["alerts"].append({"kind": _DEC_ALERT_KINDS[kind], "title": _clip(subj.get("title") or det.get("agentName") or it.get("originAgentName") or kind, 140),
+                                  "why": _clip(det.get("failureReasonExcerpt") or it.get("whyNow"), 220),
+                                  "key": subj.get("identifier") or rel.get("identifier") or "", "at": at})
+            continue
+        if kind == "approval":
+            cards.append({"id": "approval:" + sid, "kind": "approval", "tag": "Approval", "issue_id": None, "key": "",
+                          "title": _clip(subj.get("title") or "Approval request", 160), "agent": it.get("originAgentName"),
+                          "at": at, "summary": _clip(det.get("summaryExcerpt") or it.get("whyNow"), 900), "question": "",
+                          "recommendation": "", "buttons": [_BTN_APPROVE, _BTN_DECLINE, dict(_BTN_MORE, label="Ask for changes")],
+                          "ref": ("approval", sid, "")})
+            continue
+        if kind == "issue_thread_interaction":
+            riid = str(rel.get("id") or "")
+            if not riid or riid in seen:
+                continue
+            c = issue_bits(riid, rel)
+            yes_no = det.get("kind") == "confirmation"
+            c.update({"id": "interaction:" + riid + ":" + sid, "kind": "interaction", "tag": "Question" if not yes_no else "Decision",
+                      "agent": c["agent"] or it.get("originAgentName"), "at": at,
+                      "summary": _clip(det.get("promptExcerpt") or det.get("firstQuestionText") or det.get("firstTaskTitle") or it.get("whyNow"), 900),
+                      "question": "", "recommendation": "",
+                      "buttons": [_BTN_APPROVE, _BTN_DECLINE, _BTN_MORE] if yes_no else [_BTN_MORE],
+                      "open_in_board": not yes_no, "ref": ("interaction", riid, sid if yes_no else "")})
+            cards.append(c); seen.add(riid)
+            continue
+        if kind in ("blocker_attention", "review"):
+            if sid in seen:
+                continue
+            seen.add(sid)
+            c = issue_bits(sid, subj)
+            c["agent"] = c["agent"] or it.get("originAgentName")
+            if kind == "review":
+                c.update({"id": "review:" + sid, "kind": "review", "tag": "Review", "at": at,
+                          "summary": _clip(det.get("summaryExcerpt") or it.get("whyNow") or "Finished work is waiting for your review.", 900),
+                          "question": "", "recommendation": "",
+                          "buttons": [_BTN_APPROVE, dict(_BTN_DECLINE, label="Send back"), _BTN_MORE], "ref": ("issue", sid, "review")})
+                cards.append(c)
+                continue
+            # A stuck task with no clear question. With triage on, the lead agent gets it
+            # first, and the owner only sees it if it is still stuck after that.
+            if hold and sid not in triaged:
+                out["with_lead"] += 1
+                continue
+            mine = lead is not None and str((waiting.get(sid) or {}).get("assigneeAgentId") or "") == str(lead.get("id"))
+            btns = []
+            if lead is not None and not mine and sid not in triaged:
+                btns.append({"id": "lead", "label": "Hand to " + (lead.get("name") or "lead"), "style": "primary"})
+            btns += [{"id": "close", "label": "Close it"}, _BTN_MORE]
+            blk = det.get("blockingIssue") if isinstance(det.get("blockingIssue"), dict) else {}
+            c.update({"id": "stuck:" + sid, "kind": "stuck", "tag": "Stuck task", "at": at,
+                      "summary": _clip((it.get("whyNow") or "This task is stuck.") + (" Waiting on %s." % _clip(blk.get("title"), 90) if blk.get("title") else ""), 600),
+                      "question": "", "recommendation": "", "buttons": btns, "ref": ("issue", sid, "stuck")})
+            cards.append(c)
+            continue
+        if kind == "decision":
+            riid = str(rel.get("id") or "")
+            c = issue_bits(riid, rel) if riid else {"issue_id": None, "key": "", "title": "", "agent": None}
+            c.update({"id": "pcdecision:" + sid, "kind": "interaction", "tag": "Question",
+                      "title": _clip(subj.get("title") or c.get("title") or "A decision is waiting", 160),
+                      "agent": c.get("agent") or it.get("originAgentName"), "at": at,
+                      "summary": _clip(det.get("summaryExcerpt") or it.get("whyNow"), 900), "question": "", "recommendation": "",
+                      "buttons": [_BTN_MORE] if riid else [], "open_in_board": True, "ref": ("interaction", riid, "")})
+            cards.append(c)
+    cards.sort(key=lambda c: ({"decision": 0, "approval": 0, "interaction": 1, "review": 2, "stuck": 3}.get(c["kind"], 4), -(_ts(c.get("at")) or _now()).timestamp()))
+    out["decisions"] = cards[:120]
+    out["alerts"] = out["alerts"][:60]
+    out["issue_ids"] = [c["issue_id"] for c in cards if c.get("issue_id")]
+    _DEC_CACHE["v"] = (time.time(), out)
+    return out
+
+
+def _dec_public(d):
+    return {"decisions": [{k: v for k, v in c.items() if k != "ref"} for c in d["decisions"]], "alerts": d["alerts"],
+            "with_lead": d["with_lead"], "lead": d["lead"], "triage": d["triage"], "can_act": _pc_mode() != "external"}
+
+
+@app.get("/orchestration/decisions")
+def decisions_get(_auth=Depends(require_auth)):
+    if not _pc_key():
+        return {"decisions": [], "alerts": [], "with_lead": 0, "lead": None, "triage": _team_triage(), "can_act": False}
+    try:
+        return _dec_public(_decisions())
+    except PermissionError:
+        raise HTTPException(status_code=400, detail="Connect Paperclip first (board API key).")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Could not read what is waiting: " + _scrub_secrets(str(e))[:140])
+
+
+class DecisionAct(BaseModel):
+    id: str
+    action: str
+    note: str = ""
+
+
+@app.post("/orchestration/decisions/act")
+def decisions_act(b: DecisionAct, _auth=Depends(require_auth)):
+    """The owner pressed a button on a decision card."""
+    _task_writable()
+    data = _decisions(fresh=True)
+    card = next((c for c in data["decisions"] if c["id"] == b.id), None)
+    if not card:
+        raise HTTPException(status_code=404, detail="That item is no longer waiting. It may already be answered.")
+    act = (b.action or "").strip().lower()
+    if act not in [x["id"] for x in card["buttons"]]:
+        raise HTTPException(status_code=400, detail="That choice is not available for this item.")
+    note = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", b.note or "").strip()[:1500]
+    extra = ("\n\nNote from the owner: " + note) if note else ""
+    typ, rid, sub = card["ref"]
+    said = ""
+    if typ == "approval":
+        path = {"approve": "approve", "decline": "reject", "more": "request-revision"}[act]
+        body = {"decisionNote": note or ({"more": "Please explain this in plain language: what it is, what you recommend "
+                                          "and why, what it costs or risks, and what happens if the answer is no."}.get(act))}
+        _pc_send("POST", "/api/approvals/" + _safe_id(rid) + "/" + path, body, what="record your decision")
+        said = {"approve": "Approved.", "decline": "Declined.", "more": "Sent back for more detail."}[act]
+    elif typ == "interaction" and sub and act in ("approve", "decline"):
+        if act == "approve":
+            _pc_send("POST", "/api/issues/%s/interactions/%s/accept" % (_safe_id(rid), _safe_id(sub)), {}, what="record your decision")
+        else:
+            _pc_send("POST", "/api/issues/%s/interactions/%s/reject" % (_safe_id(rid), _safe_id(sub)),
+                     {"reason": note or "Declined by the owner."}, what="record your decision")
+        said = "Approved." if act == "approve" else "Declined."
+    else:
+        if not rid:
+            raise HTTPException(status_code=400, detail="Open this one on the team board to answer it.")
+        more = ("**The owner wants to know more before deciding.**\n\nReply on this task in plain language, in under "
+                "150 words: what this is about, what you recommend and why, what it costs or risks, and what happens "
+                "if the answer is no. Then ask again with need_owner_input (summary, question, recommendation)." + extra)
+        patch = {"status": "todo"}
+        if act == "more":
+            if typ == "interaction":      # the card stays open on the board; just ask on the thread
+                _pc_send("POST", "/api/issues/" + _safe_id(rid) + "/comments", {"body": more}, what="ask for more detail")
+                _DEC_CACHE.clear()
+                return {"ok": True, "message": "Asked for more detail. The answer will appear on the task."}
+            patch["comment"] = more
+            said = "Asked for more detail. It comes back here once the agent has answered."
+        elif act == "approve":
+            if sub == "review":
+                patch = {"status": "done", "comment": "**Owner review: Approved.**" + extra}
+            else:
+                patch["comment"] = ("**Owner decision: Approved.**" + extra + "\n\nGo ahead as you recommended. When it "
+                                    "is finished, close the task with complete_task.")
+            said = "Approved."
+        elif act == "decline":
+            if sub == "review":
+                patch["comment"] = "**Owner review: Sent back.**" + (extra or "\n\nThis needs more work before it is finished.")
+                said = "Sent back."
+            else:
+                patch["comment"] = ("**Owner decision: Declined.**" + extra + "\n\nDo not go ahead with this. If the rest of "
+                                    "the task can be finished without it, finish it. Otherwise close the task with "
+                                    "complete_task and say it was declined.")
+                said = "Declined."
+        elif act == "close":
+            patch = {"status": "done", "comment": "Closed by the owner." + extra}
+            said = "Closed."
+        elif act == "lead":
+            agents = [a for a in _list(_pc_get("/api/companies/" + str(_pc_company_id()) + "/agents"), "agents") if isinstance(a, dict)]
+            lead = _lead_agent(agents)
+            if not lead:
+                raise HTTPException(status_code=400, detail="There is no lead agent (CEO role) to hand this to.")
+            patch = {"status": "todo", "assigneeAgentId": lead["id"], "comment": _triage_text(lead.get("name") or "Lead") + extra}
+            said = "Handed to %s." % (lead.get("name") or "the lead agent")
+            try:
+                with closing(get_db()) as con:
+                    con.execute("INSERT INTO stuck_watch(kind, ref, attempts, last_action_at, escalated) VALUES('triage',?,1,?,0) "
+                                "ON CONFLICT(kind, ref) DO UPDATE SET attempts = attempts + 1, last_action_at = excluded.last_action_at",
+                                (rid, _now().isoformat()))
+                    con.commit()
+            except Exception:
+                pass
+        _pc_send("PATCH", "/api/issues/" + _safe_id(rid), patch, what="record your decision")
+        _ask_close(rid)
+    _DEC_CACHE.clear()
+    return {"ok": True, "message": said}
 
 
 @app.get("/orchestration/tasks")
@@ -4341,7 +4721,19 @@ def list_tasks(agent: str = "", _auth=Depends(require_auth)):
                 slug = c.get("slug") or c.get("key") or c.get("shortName")
     except Exception:
         pass
-    return {"paperclip_up": True, "company_id": cid, "company_slug": slug, "tasks": tasks}
+    # Who each waiting task waits on: the owner (a decision card exists) or the team.
+    need = None
+    try:
+        dec = _decisions()
+        if dec.get("ok"):
+            need = set(dec["issue_ids"])
+    except Exception:
+        need = None
+    for t in tasks:
+        if str(t.get("status") or "").lower() in ("blocked", "in_review"):
+            t["waiting_on"] = "owner" if (need is None or t["id"] in need) else "team"
+    return {"paperclip_up": True, "company_id": cid, "company_slug": slug, "tasks": tasks,
+            "sorted": need is not None}
 
 
 @app.get("/orchestration/tasks/{key}")
@@ -4355,8 +4747,12 @@ def task_detail(key: str, _auth=Depends(require_auth)):
     try:
         iss = _pc_get("/api/issues/" + key)
         if isinstance(iss, dict):
-            out["description"] = _strip_footer(str(iss.get("description") or ""))[:6000] or None
+            out["description"] = _task_display_text(iss.get("description"))[:6000] or None
             out["issue_status"] = iss.get("status")
+            out["title"] = iss.get("title")
+            out["key"] = iss.get("identifier") or key
+            out["updatedAt"] = iss.get("updatedAt")
+            out["agentId"] = iss.get("assigneeAgentId")
     except Exception as e:
         out["errors"].append("task: " + str(e)[:100])
     try:
@@ -4365,6 +4761,15 @@ def task_detail(key: str, _auth=Depends(require_auth)):
         for c in (comments or []):
             out["messages"].append(_norm_comment(c))
         out["messages"].reverse()  # recent-comments is newest-first; show oldest-first
+        try:
+            cid = _pc_company_id()
+            nm = {str(a.get("id")): a.get("name") for a in _list(_pc_get("/api/companies/" + str(cid) + "/agents"), "agents") if isinstance(a, dict)}
+            out["agentName"] = nm.get(str(out.get("agentId") or ""))
+            for m in out["messages"]:
+                if not m.get("author") and m.get("agentId"):
+                    m["author"] = nm.get(str(m["agentId"]))
+        except Exception:
+            pass
     except Exception as e:
         out["errors"].append("comments: " + str(e)[:100])
     try:
@@ -5186,10 +5591,44 @@ _REAL_DECISION = re.compile(
     r"security|breach|phish|malware|incident|hire|legal|compliance|deadline|\bdate\b|which|should (i|we)|\bor\b)", re.I)
 
 
+def _asks_db():
+    con = get_db()
+    con.execute("CREATE TABLE IF NOT EXISTS owner_asks (issue_id TEXT PRIMARY KEY, key TEXT, agent_id TEXT, summary TEXT, "
+                "question TEXT, recommendation TEXT, asked_at TEXT NOT NULL, open INTEGER NOT NULL DEFAULT 1)")
+    return con
+
+
+def _asks_open():
+    try:
+        with closing(_asks_db()) as con:
+            return {r[0]: {"key": r[1], "agent_id": r[2], "summary": r[3] or "", "question": r[4] or "",
+                           "recommendation": r[5] or "", "at": r[6]}
+                    for r in con.execute("SELECT issue_id, key, agent_id, summary, question, recommendation, asked_at "
+                                         "FROM owner_asks WHERE open = 1 ORDER BY asked_at DESC LIMIT 300")}
+    except Exception:
+        return {}
+
+
+def _ask_close(issue_id):
+    try:
+        with closing(_asks_db()) as con:
+            con.execute("UPDATE owner_asks SET open = 0 WHERE issue_id = ?", (str(issue_id),))
+            con.commit()
+    except Exception:
+        pass
+
+
 def t_need_owner_input(a):
     q = (a.get("question") or "").strip()
+    summary = (a.get("summary") or "").strip()
+    rec = (a.get("recommendation") or "").strip()
     if len(q) < 10:
         raise ToolError("Ask a clear, specific question the owner can answer.")
+    if len(summary) < 30 or len(rec) < 10:
+        raise ToolError("The owner decides from a short card with Approve, Decline and Tell me more buttons, so "
+                        "give all three: summary (2 to 4 plain sentences: what this is about and what you found), "
+                        "question (one question they can answer yes or no), and recommendation (what you would "
+                        "do and why, in a sentence). No jargon, ids or file paths.")
     if _agents_close_routine() and _ROUTINE_ASK.search(q) and not _REAL_DECISION.search(q):
         raise ToolError("That is a routine confirmation, and the owner has asked agents to finish routine work "
                         "without asking. If the work is done, post your result on the task and call "
@@ -5198,8 +5637,23 @@ def t_need_owner_input(a):
     issue = _own_issue(a)
     if issue.get("status") in ("done", "cancelled"):
         return "That task is already closed. Stop here."
-    _set_issue(issue, "blocked", "Waiting on the owner: " + q)
-    return "The task is now waiting on the owner. Stop here; you will be woken when they reply."
+    summary, q, rec = summary[:1200], q[:600], rec[:600]
+    _set_issue(issue, "blocked", "**Decision needed from the owner**\n\n**Summary:** %s\n\n**Question:** %s\n\n"
+                                 "**Recommendation:** %s" % (summary, q, rec))
+    try:
+        with closing(_asks_db()) as con:
+            con.execute("INSERT INTO owner_asks(issue_id, key, agent_id, summary, question, recommendation, asked_at, open) "
+                        "VALUES(?,?,?,?,?,?,?,1) ON CONFLICT(issue_id) DO UPDATE SET key=excluded.key, agent_id=excluded.agent_id, "
+                        "summary=excluded.summary, question=excluded.question, recommendation=excluded.recommendation, "
+                        "asked_at=excluded.asked_at, open=1",
+                        (str(issue["id"]), str(issue.get("identifier") or ""), str(a.get("agent_id") or ""), summary, q, rec,
+                         _now().isoformat()))
+            con.commit()
+    except Exception:
+        pass
+    _DEC_CACHE.clear()
+    return ("The task is now waiting on the owner, who sees your summary with Approve, Decline and Tell me more "
+            "buttons. Stop here; you will be woken when they answer.")
 
 
 # --- Mail tools for agents ------------------------------------------------------------
@@ -6645,9 +7099,14 @@ MCP_TOOLS = {
     "need_owner_input": (t_need_owner_input, "all",
         "For an agent working on an assigned task: call this only when you cannot go on without the "
         "owner. That means: " + _OWNER_ONLY + ". It is not for 'please verify', 'please confirm' or 'ok "
-        "to close?': finished routine work is closed with complete_task. Ask one clear question the owner "
-        "can answer in a line. Marks the task as waiting on them.",
-        _schema({"task": _S, "agent_id": _S, "question": _S}, ("task", "agent_id", "question"))),
+        "to close?': finished routine work is closed with complete_task. The owner decides from a short "
+        "card with Approve, Decline and Tell me more buttons, so give a plain summary, one yes-or-no "
+        "question and what you recommend. Marks the task as waiting on them.",
+        _schema({"task": _S, "agent_id": _S,
+                 "summary": {"type": "string", "description": "2 to 4 plain sentences: what this is about and what you found. No jargon, ids or paths."},
+                 "question": {"type": "string", "description": "One question the owner can answer yes or no."},
+                 "recommendation": {"type": "string", "description": "What you would do and why, in a sentence."}},
+                ("task", "agent_id", "summary", "question", "recommendation"))),
     "split_task": (t_split_task, "all",
         "For an agent working on an assigned task: when the job will not fit in this run (it covers many "
         "items, or you were told to plan first), file the rest as 2 to 8 smaller tasks and this task is "
@@ -6973,7 +7432,9 @@ def _remote_note(base=""):
             "- Not yours to finish: POST " + base + "/api/agent-os/call/hand_off_task with {\"task\": "
             "\"<task key>\", \"to\": \"<colleague name>\", \"reason\": \"...\"}.\n"
             "- Only the owner can decide: POST " + base + "/api/agent-os/call/need_owner_input with "
-            "{\"task\": \"<task key>\", \"question\": \"...\"}.\n"
+            "{\"task\": \"<task key>\", \"summary\": \"2 to 4 plain sentences\", \"question\": \"one yes-or-no "
+            "question\", \"recommendation\": \"what you would do and why\"}. The owner answers with Approve, Decline "
+            "or Tell me more. Do not park a task as blocked or in review for the owner any other way.\n"
             "- GET " + base + "/api/agent-os/ lists the tools and their exact fields. The same tools are "
             "an MCP server at " + base + "/api/agent-os/mcp.\n"
             "Do not guess at other board endpoints to split a task.")
