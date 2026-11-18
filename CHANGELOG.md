@@ -2,6 +2,12 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.49.4] — 2026-11-18
+
+- **Pictures show in Chat wherever the assistant saved them.** Edited photos and other
+  pictures it stored outside its usual image folder still came back as a server path.
+  Any picture path in an answer is now shown as the picture.
+
 ## [0.49.3] — 2026-11-18
 
 - **Attaching a file over 1 MB works with two-step sign-in on.** Uploads in Chat and

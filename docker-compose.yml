@@ -162,8 +162,10 @@ services:
       # Files attached in Chat and images made there, where the assistant can open
       # them (it sees this folder as /opt/data/chat-files).
       - ${HERMES_HOME_DIR:-./data/hermes}/chat-files:/chat-files
-      # Pictures made by the assistant's own image tool, read-only, to show in Chat.
-      - ${HERMES_HOME_DIR:-./data/hermes}/cache/generated/images:/hermes-images:ro
+      # The assistant's own files, read-only. Used for one thing: showing a picture
+      # it made or edited in Chat, wherever it saved it. Only real image files are
+      # ever served from here (see /chat/image in connectors/app.py).
+      - ${HERMES_HOME_DIR:-./data/hermes}:/hermes-home:ro
     expose:
       - "8000"
     mem_limit: 256M

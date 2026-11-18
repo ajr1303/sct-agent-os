@@ -53,9 +53,10 @@
     }
     var FILE_PATH = "/api/connectors/chat/files/";
     // A picture in an answer, with what the owner can do with it underneath.
-    function picHtml(url, alt) {
+    function picHtml(url, alt, join) {
+      join = join || "?";
       return '<div class="scc-picwrap"><a class="scc-piclink" href="' + url + '" target="_blank" rel="noopener" title="Open full size"><img class="scc-pic" loading="lazy" alt="' + alt + '" src="' + url + '"></a>'
-        + '<div class="scc-picacts"><a class="scc-picbtn" href="' + url + '?download=1" download>Download</a>'
+        + '<div class="scc-picacts"><a class="scc-picbtn" href="' + url + join + 'download=1" download>Download</a>'
         + '<button type="button" class="scc-picbtn" data-scc-say="Please make a different version of that image.">Try another version</button>'
         + '<button type="button" class="scc-picbtn" data-scc-fill="Change that image: ">Change something</button></div></div>';
     }
@@ -63,16 +64,16 @@
       var text = String(src), blocks = [], pics = [];
       text = text.replace(/```[a-zA-Z0-9]*\n?([\s\S]*?)```/g, function (_, code) { blocks.push(code.replace(/\n$/, "")); return "\u0000C" + (blocks.length - 1) + "\u0000"; });
       text = esc(text);
-      // A picture the assistant saved with its own image tool: it tells the owner a
-      // folder path, which they cannot open. Show the picture in its place.
-      text = text.replace(/(?:(?:Image|Picture|File)?\s*saved (?:at|to):?\s*)?(?:MEDIA:)?`?\/opt\/data\/cache\/generated\/images\/([A-Za-z0-9][A-Za-z0-9._-]{0,180}\.(?:png|jpe?g|webp|gif))`?/gi, function (_, name) {
-        var u = "/api/connectors/chat/generated/" + encodeURIComponent(name);
-        pics.push(picHtml(u, "Generated image"));
-        return "\n\u0000P" + (pics.length - 1) + "\u0000\n";
-      });
       // The same for a file kept in the chat-files folder.
       text = text.replace(/(?:(?:Image|Picture)?\s*saved (?:at|to):?\s*)?`?\/opt\/data\/chat-files\/(\d{1,12})-[A-Za-z0-9._-]+\.(?:png|jpe?g|webp|gif)`?/gi, function (_, id) {
         pics.push(picHtml(FILE_PATH + id, "Image"));
+        return "\n\u0000P" + (pics.length - 1) + "\u0000\n";
+      });
+      // A picture the assistant made or edited and saved in its own files: it reports
+      // a path on the server, which the owner cannot open. Show the picture in its
+      // place. The server only ever returns real image files for these.
+      text = text.replace(/(?:(?:Image|Picture|File)?\s*saved (?:at|to|as):?\s*)?(?:MEDIA:)?`?(\/opt\/data\/[A-Za-z0-9][A-Za-z0-9._\/-]{0,300}\.(?:png|jpe?g|webp|gif))`?/gi, function (_, path) {
+        pics.push(picHtml("/api/connectors/chat/image?path=" + encodeURIComponent(path), "Image", "&amp;"));
         return "\n\u0000P" + (pics.length - 1) + "\u0000\n";
       });
       // Pictures the assistant made or was given. Only this install's own chat-file

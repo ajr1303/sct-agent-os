@@ -6286,18 +6286,22 @@ def chat_file(fid: int, download: int = 0, _auth=Depends(require_auth)):
     return Response(content=f["data"], media_type="application/octet-stream", headers=head)
 
 
-HERMES_IMAGES_DIR = os.environ.get("HERMES_IMAGES_DIR") or "/hermes-images"
+HERMES_HOME_RO = os.environ.get("HERMES_HOME_RO") or "/hermes-home"
+HERMES_HOME_AGENT = (os.environ.get("HERMES_HOME_AGENT") or "/opt/data").rstrip("/")
+_PIC_PATH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,300}\.(png|jpe?g|webp|gif)$", re.I)
 
 
-@app.get("/chat/generated/{name}")
-def chat_generated(name: str, download: int = 0, _auth=Depends(require_auth)):
-    """A picture the assistant made with its own image tool, straight from its folder.
-    Plain file names only, pictures only."""
-    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,180}\.(png|jpe?g|webp|gif)$", name) or ".." in name:
+def _agent_picture(rel, download):
+    """A picture the assistant saved somewhere in its own files. `rel` is the path
+    under its home folder. Served only if it is a real image file that sits inside
+    that folder (links pointing elsewhere are refused); nothing else can be read here."""
+    rel = (rel or "").lstrip("/")
+    if not _PIC_PATH_RE.match(rel) or ".." in rel.split("/") or any(part.startswith(".") for part in rel.split("/")):
         raise HTTPException(status_code=404, detail="Not found.")
-    path = os.path.join(HERMES_IMAGES_DIR, name)
+    root = os.path.realpath(HERMES_HOME_RO)
+    path = os.path.realpath(os.path.join(root, rel))
     try:
-        if os.path.islink(path) or not os.path.isfile(path) or os.path.getsize(path) > 40 * 1024 * 1024:
+        if not path.startswith(root + os.sep) or not os.path.isfile(path) or os.path.getsize(path) > 40 * 1024 * 1024:
             raise OSError()
         with open(path, "rb") as fh:
             data = fh.read()
@@ -6307,10 +6311,25 @@ def chat_generated(name: str, download: int = 0, _auth=Depends(require_auth)):
     if not kind:
         raise HTTPException(status_code=404, detail="Not found.")
     head = {"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox; default-src 'none'",
-            "Cache-Control": "private, max-age=86400"}
+            "Cache-Control": "private, max-age=3600"}
     if download:
-        head["Content-Disposition"] = "attachment; filename*=UTF-8''" + quote(name, safe="")
+        head["Content-Disposition"] = "attachment; filename*=UTF-8''" + quote(os.path.basename(rel), safe="")
     return Response(content=data, media_type="image/" + kind, headers=head)
+
+
+@app.get("/chat/image")
+def chat_image(path: str = "", download: int = 0, _auth=Depends(require_auth)):
+    """`path` is the path the assistant reported, for example /opt/data/cache/x/pic.png."""
+    if not path.startswith(HERMES_HOME_AGENT + "/"):
+        raise HTTPException(status_code=404, detail="Not found.")
+    return _agent_picture(path[len(HERMES_HOME_AGENT) + 1:], download)
+
+
+@app.get("/chat/generated/{name}")
+def chat_generated(name: str, download: int = 0, _auth=Depends(require_auth)):
+    if "/" in name:
+        raise HTTPException(status_code=404, detail="Not found.")
+    return _agent_picture("cache/generated/images/" + name, download)
 
 
 def _img_settings():
