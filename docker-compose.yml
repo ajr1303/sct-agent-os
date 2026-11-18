@@ -162,6 +162,8 @@ services:
       # Files attached in Chat and images made there, where the assistant can open
       # them (it sees this folder as /opt/data/chat-files).
       - ${HERMES_HOME_DIR:-./data/hermes}/chat-files:/chat-files
+      # Pictures made by the assistant's own image tool, read-only, to show in Chat.
+      - ${HERMES_HOME_DIR:-./data/hermes}/cache/generated/images:/hermes-images:ro
     expose:
       - "8000"
     mem_limit: 256M

@@ -2,6 +2,12 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.49.2] — 2026-11-18
+
+- **Generated pictures show in the chat.** When the assistant made an image with its
+  own built-in image tool it replied with a folder path on the server. The picture now
+  appears in the answer in place of that path, and clicking it downloads it.
+
 ## [0.49.1] — 2026-11-18
 
 - **Updates show up sooner.** The server now looks for a new version every hour

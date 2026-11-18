@@ -363,6 +363,12 @@ main() {
     else chown --reference=data/hermes data/hermes/honcho.json; fi
     chmod 600 data/hermes/honcho.json
   fi
+  # The folder the assistant's image tool writes to, created now and owned like the
+  # rest of its files, so the dashboard can show those pictures in Chat.
+  img_ref=data/hermes/config.yaml; [ -f "$img_ref" ] || img_ref=data/hermes
+  for d in data/hermes/cache data/hermes/cache/generated data/hermes/cache/generated/images; do
+    if [ ! -d "$d" ]; then mkdir -p "$d" && chown --reference="$img_ref" "$d" 2>/dev/null || true; fi
+  done
   start_stack
   enable_plugins
   install_cron

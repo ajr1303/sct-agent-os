@@ -6286,6 +6286,33 @@ def chat_file(fid: int, download: int = 0, _auth=Depends(require_auth)):
     return Response(content=f["data"], media_type="application/octet-stream", headers=head)
 
 
+HERMES_IMAGES_DIR = os.environ.get("HERMES_IMAGES_DIR") or "/hermes-images"
+
+
+@app.get("/chat/generated/{name}")
+def chat_generated(name: str, download: int = 0, _auth=Depends(require_auth)):
+    """A picture the assistant made with its own image tool, straight from its folder.
+    Plain file names only, pictures only."""
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,180}\.(png|jpe?g|webp|gif)$", name) or ".." in name:
+        raise HTTPException(status_code=404, detail="Not found.")
+    path = os.path.join(HERMES_IMAGES_DIR, name)
+    try:
+        if os.path.islink(path) or not os.path.isfile(path) or os.path.getsize(path) > 40 * 1024 * 1024:
+            raise OSError()
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        raise HTTPException(status_code=404, detail="That picture is no longer kept.")
+    kind = _img_kind(data)
+    if not kind:
+        raise HTTPException(status_code=404, detail="Not found.")
+    head = {"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox; default-src 'none'",
+            "Cache-Control": "private, max-age=86400"}
+    if download:
+        head["Content-Disposition"] = "attachment; filename*=UTF-8''" + quote(name, safe="")
+    return Response(content=data, media_type="image/" + kind, headers=head)
+
+
 def _img_settings():
     try:
         d = json.loads(_kv_get("image_gen") or "{}")

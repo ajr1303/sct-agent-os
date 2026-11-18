@@ -97,6 +97,18 @@ fix_memory_owner() {
   chmod 600 "$f"
 }
 fix_memory_owner
+# Pictures the assistant makes with its own image tool land in this folder. The
+# dashboard reads them from there to show them in Chat, so the folder has to exist
+# before the containers start, owned by whoever owns the rest of the agent's files.
+ensure_image_dir() {
+  local base=data/hermes ref=data/hermes/config.yaml d
+  [ -d "$base" ] || return 0
+  [ -f "$ref" ] || ref=$base
+  for d in "$base/cache" "$base/cache/generated" "$base/cache/generated/images"; do
+    if [ ! -d "$d" ]; then mkdir -p "$d" && chown --reference="$ref" "$d" 2>/dev/null || true; fi
+  done
+}
+ensure_image_dir
 # Prefer prebuilt images for this release; fall back to a local build if unavailable.
 docker compose pull -q --ignore-pull-failures 2>/dev/null || true
 docker compose build connectors

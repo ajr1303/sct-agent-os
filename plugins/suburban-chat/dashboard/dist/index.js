@@ -56,6 +56,18 @@
       var text = String(src), blocks = [], pics = [];
       text = text.replace(/```[a-zA-Z0-9]*\n?([\s\S]*?)```/g, function (_, code) { blocks.push(code.replace(/\n$/, "")); return "\u0000C" + (blocks.length - 1) + "\u0000"; });
       text = esc(text);
+      // A picture the assistant saved with its own image tool: it tells the owner a
+      // folder path, which they cannot open. Show the picture in its place.
+      text = text.replace(/(?:(?:Image|Picture|File)?\s*saved (?:at|to):?\s*)?(?:MEDIA:)?`?\/opt\/data\/cache\/generated\/images\/([A-Za-z0-9][A-Za-z0-9._-]{0,180}\.(?:png|jpe?g|webp|gif))`?/gi, function (_, name) {
+        var u = "/api/connectors/chat/generated/" + encodeURIComponent(name);
+        pics.push('<a class="scc-piclink" href="' + u + '?download=1" title="Download"><img class="scc-pic" loading="lazy" alt="Generated image" src="' + u + '"></a>');
+        return "\n\u0000P" + (pics.length - 1) + "\u0000\n";
+      });
+      // The same for a file kept in the chat-files folder.
+      text = text.replace(/(?:(?:Image|Picture)?\s*saved (?:at|to):?\s*)?`?\/opt\/data\/chat-files\/(\d{1,12})-[A-Za-z0-9._-]+\.(?:png|jpe?g|webp|gif)`?/gi, function (_, id) {
+        pics.push('<a class="scc-piclink" href="' + FILE_PATH + id + '?download=1" title="Download"><img class="scc-pic" loading="lazy" alt="Image" src="' + FILE_PATH + id + '"></a>');
+        return "\n\u0000P" + (pics.length - 1) + "\u0000\n";
+      });
       // Pictures the assistant made or was given. Only this install's own chat-file
       // address is ever drawn as an image; any host written in front of it is dropped.
       text = text.replace(/!?\[([^\]]*)\]\((?:https?:\/\/[^\s)\/]+)?\/api\/connectors\/chat\/files\/(\d{1,12})(?:\?[^\s)]*)?\)/g, function (_, alt, id) {
