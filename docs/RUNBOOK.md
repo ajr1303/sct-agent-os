@@ -346,7 +346,8 @@ Cloudflare Access so each person signs in as themselves.
   Account > **Get a reset code** (asks for the current password). Have the client
   store it away from the server, next to the two-step recovery codes.
 - **Forgot it:** the sign-in page has **Forgot password?**. Enter the reset code and a
-  new password. Five wrong codes lock the page for 15 minutes, then longer. With
+  new password. A wrong code is simply refused (the page is never locked, so nobody else can lock
+  the owner out). With
   two-step sign-in on, the code from the phone is asked for first.
 - **Reset by email (optional):** Account > Password > **Set up reset by email**. Enter
   the address that should receive the link and an outgoing mail account for the server

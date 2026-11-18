@@ -259,8 +259,10 @@ denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
   current-password check, and handed over through the result call (kept encrypted for
   ten minutes so a reload can still show it).
 - Forgot password: `brand/reset.html` (linked from the sign-in page by `brand/login.js`)
-  calls `POST /account/reset {code, new}` with no session. Five wrong codes lock it for
-  15 minutes, doubling to a day. When two-step sign-in is on, the proxy gate applies
+  calls `POST /account/reset {code, new}` with no session. There is no lock-out:
+  the code is 120 random bits and a link token 256, so guessing is not a risk, and a
+  lock-out would let a stranger block the owner's own reset. Wrong tries are slowed
+  instead, and up to three unexpired emailed links stay valid until one is used. When two-step sign-in is on, the proxy gate applies
   to this call as to every other.
 - Reset by email: `POST /security/password-email` (current password checked by the
   host as above) stores recipient, SMTP host, port, user and the encrypted SMTP

@@ -166,6 +166,10 @@ def get_db():
             decided_at    TEXT
         )
     """)
+    # A fingerprint of the workflow as it was when approval was asked for, so a workflow
+    # changed afterwards cannot be switched on under the old approval.
+    if "fingerprint" not in [c[1] for c in con.execute("PRAGMA table_info(workflow_requests)").fetchall()]:
+        con.execute("ALTER TABLE workflow_requests ADD COLUMN fingerprint TEXT")
     # Free-form facts about the business every agent can read (name, services, tone).
     con.execute("""
         CREATE TABLE IF NOT EXISTS business_profile (
@@ -2327,6 +2331,7 @@ def password_email_off(_auth=Depends(require_auth)):
         d = _pw_state()
         d.pop("email", None)
         d.pop("link", None)
+        d.pop("links", None)
         _pw_save(d)
     return {"ok": True}
 
@@ -2357,7 +2362,12 @@ def account_reset_link():
         if problem:
             _pw_save(d)
             return JSONResponse(status_code=502, content={"error": "The email could not be sent. Use your reset code, or ask whoever looks after this server."})
-        d["link"] = {"hash": _pw_hash(token), "exp": now + _PW_LINK_SECONDS}
+        # Keep the links that are still good, so asking again (by the owner, or by a
+        # stranger pressing the button) never cancels a link already in the inbox.
+        links = [x for x in (d.get("links") or []) if isinstance(x, dict) and now < float(x.get("exp") or 0)][-2:]
+        links.append({"hash": _pw_hash(token), "exp": now + _PW_LINK_SECONDS})
+        d["links"] = links
+        d.pop("link", None)
         _pw_save(d)
         return {"sent": True}
 
@@ -2400,41 +2410,40 @@ def password_change(b: PasswordChange, _auth=Depends(require_auth)):
 def account_reset_info():
     """For the reset page (no sign-in): only whether a reset is possible right now."""
     d = _pw_state()
-    wait = max(0, int(float(d.get("locked_until") or 0) - time.time()))
-    return {"available": bool(d.get("code_hash")), "email": bool(d.get("email")), "locked_seconds": wait, "rule": _PW_RULE}
+    return {"available": bool(d.get("code_hash")), "email": bool(d.get("email")), "locked_seconds": 0, "rule": _PW_RULE}
 
 
 @app.post("/account/reset")
 def account_reset(b: PasswordReset):
-    """Forgotten password. No sign-in: the saved reset code is the proof. Five wrong
-    codes lock this for 15 minutes, then longer."""
+    """Forgotten password. No sign-in: the saved reset code, or an emailed link, is the
+    proof. Both are long random values (120 and 256 bits), far beyond guessing, so there
+    is deliberately no lock-out: a lock-out would only let a stranger shut the owner out
+    of their own reset. Wrong tries are slowed down instead."""
     with _pw_lock:
         d = _pw_state()
-        wait = max(0, int(float(d.get("locked_until") or 0) - time.time()))
-        if wait:
-            return JSONResponse(status_code=429, content={"error": "Too many wrong codes. Try again in %d minutes." % ((wait + 59) // 60)})
         code = _pw_norm_code(b.code)
-        link = d.get("link") or {}
+        now = time.time()
+        links = [x for x in (d.get("links") or []) if isinstance(x, dict) and now < float(x.get("exp") or 0)]
         if b.token:
-            proven = bool(link) and re.match(r"^[A-Za-z0-9_-]{30,80}$", b.token) is not None \
-                and time.time() < float(link.get("exp") or 0) and hmac.compare_digest(_pw_hash(b.token), str(link.get("hash")))
+            th = _pw_hash(b.token) if re.match(r"^[A-Za-z0-9_-]{30,80}$", b.token) else ""
+            proven = bool(th) and any(hmac.compare_digest(th, str(x.get("hash"))) for x in links)
             wrong = "That link has expired or has already been used. Ask for a new one."
         else:
             proven = bool(d.get("code_hash")) and len(code) == 24 and hmac.compare_digest(_pw_hash(code), str(d.get("code_hash")))
             wrong = "That reset code is not right."
-        if not proven:
-            d["fails"] = int(d.get("fails") or 0) + 1
-            if d["fails"] >= 5:
-                d["locked_until"] = time.time() + min(86400, 900 * (2 ** (d["fails"] - 5)))
-            _pw_save(d)
-            return JSONResponse(status_code=400, content={"error": wrong})
+    if not proven:
+        time.sleep(0.6)
+        return JSONResponse(status_code=400, content={"error": wrong})
+    with _pw_lock:
+        d = _pw_state()
         if not _PW_ALLOWED.match(b.new or ""):
             return JSONResponse(status_code=400, content={"error": "That password cannot be used. " + _PW_RULE})
         if _pw_pending(d):
             return JSONResponse(status_code=409, content={"error": "A password request is already being handled. Try again in a few minutes."})
-        d["fails"] = 0
-        d["locked_until"] = 0
-        d.pop("link", None)            # an emailed link works once
+        d.pop("fails", None)
+        d.pop("locked_until", None)
+        d.pop("link", None)
+        d.pop("links", None)           # a reset uses up every emailed link
         return {"id": _pw_submit(d, "reset", "", b.new)}
 
 
@@ -4775,6 +4784,10 @@ def t_get_workflow(a):
     w = _n8n_send("GET", "/api/v1/workflows/" + _wf_id(a))
     slim = {"id": w.get("id"), "name": w.get("name"), "active": bool(w.get("active")),
             "nodes": w.get("nodes"), "connections": w.get("connections"), "settings": w.get("settings")}
+    try:
+        slim = _wf_redact(slim, _watch_token())
+    except Exception:
+        pass
     text = json.dumps(slim, default=str)
     return text if len(text) <= 60000 else text[:60000] + "\n...(truncated)"
 
@@ -4792,11 +4805,54 @@ def t_failed_run_detail(a):
     return json.dumps(out, default=str)
 
 
+def _wf_fingerprint(w):
+    """What a workflow does, reduced to a hash: its steps, how they connect, its settings."""
+    blob = json.dumps({"nodes": w.get("nodes"), "connections": w.get("connections"),
+                       "settings": w.get("settings")}, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode()).hexdigest()
+
+
+# Workflows the platform installs itself. Agents may not create, change, copy the name
+# of, or ask to switch on a workflow in this namespace.
+_RESERVED_WF_PREFIX = "agent os:"
+
+
+def _wf_reserved(name="", wid=None):
+    if (name or "").strip().lower().startswith(_RESERVED_WF_PREFIX):
+        return True
+    if wid is not None:
+        for k in ("stuck_watch_workflow_id", "task_summary_workflow_id"):
+            try:
+                if str(_kv_get(k) or "") == str(wid):
+                    return True
+            except Exception:
+                pass
+    return False
+
+
+_WF_RESERVED_MSG = ("Workflows named 'Agent OS: ...' are built into the platform. You cannot create, change or "
+                    "switch on one, or make your own version of one. If a built-in workflow looks wrong, tell "
+                    "the owner with need_owner_input.")
+
+
+def _wf_redact(obj, secret):
+    """Hide the platform's internal token wherever it appears in a workflow shown to an agent."""
+    if isinstance(obj, dict):
+        return {k: _wf_redact(v, secret) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_wf_redact(v, secret) for v in obj]
+    if isinstance(obj, str) and secret and secret in obj:
+        return obj.replace(secret, "(hidden)")
+    return obj
+
+
 def _wf_body(a):
     name = (a.get("name") or "").strip()
     nodes, conns = a.get("nodes"), a.get("connections")
     if not name:
         raise ToolError("name is required.")
+    if _wf_reserved(name):
+        raise ToolError(_WF_RESERVED_MSG)
     if not isinstance(nodes, list) or not nodes or not all(isinstance(n, dict) for n in nodes):
         raise ToolError("nodes must be a non-empty list of n8n node objects.")
     if len(nodes) > 60:
@@ -4820,12 +4876,22 @@ def t_create_workflow(a):
 def t_update_workflow(a):
     wid = _wf_id(a)
     cur = _n8n_send("GET", "/api/v1/workflows/" + wid)
+    if _wf_reserved(cur.get("name"), wid):
+        raise ToolError(_WF_RESERVED_MSG)
     if cur.get("active"):
         raise ToolError("That workflow is live, and live workflows cannot be changed from here. Build the "
                         "fix as a new workflow with create_workflow, then call request_activation and "
                         "explain that it replaces workflow %s." % wid)
     w = _n8n_send("PUT", "/api/v1/workflows/" + wid, _wf_body(a))
-    return "Workflow %s updated. It is still inactive." % (w.get("id") or wid)
+    # An approval the owner has not given yet was for the old version. Withdraw it.
+    withdrawn = 0
+    with closing(get_db()) as con:
+        withdrawn = con.execute("UPDATE workflow_requests SET status='withdrawn', decided_at=? "
+                                "WHERE workflow_id=? AND status='pending'", (_now().isoformat(), wid)).rowcount
+        con.commit()
+    return ("Workflow %s updated. It is still inactive.%s" % (w.get("id") or wid,
+            " The activation request for it was withdrawn because the workflow changed; call "
+            "request_activation again with an up-to-date summary." if withdrawn else ""))
 
 
 def t_request_activation(a):
@@ -4834,19 +4900,22 @@ def t_request_activation(a):
     if len(summary) < 20:
         raise ToolError("Give a plain-English summary: what it does, what triggers it, what it sends or changes.")
     w = _n8n_send("GET", "/api/v1/workflows/" + wid)
+    if _wf_reserved(w.get("name"), wid):
+        raise ToolError(_WF_RESERVED_MSG)
     if w.get("active"):
         return "That workflow is already active."
+    fp = _wf_fingerprint(w)
     with closing(get_db()) as con:
         row = con.execute("SELECT id FROM workflow_requests WHERE workflow_id=? AND status='pending'",
                           (wid,)).fetchone()
         if row:
-            con.execute("UPDATE workflow_requests SET summary=?, workflow_name=? WHERE id=?",
-                        (summary[:2000], w.get("name"), row[0]))
+            con.execute("UPDATE workflow_requests SET summary=?, workflow_name=?, fingerprint=? WHERE id=?",
+                        (summary[:2000], w.get("name"), fp, row[0]))
         else:
             con.execute("INSERT INTO workflow_requests(workflow_id, workflow_name, summary, requested_by, "
-                        "status, created_at) VALUES(?,?,?,?,?,?)",
+                        "status, created_at, fingerprint) VALUES(?,?,?,?,?,?,?)",
                         (wid, w.get("name"), summary[:2000], (a.get("requested_by") or "")[:80],
-                         "pending", _now().isoformat()))
+                         "pending", _now().isoformat(), fp))
         con.commit()
     return ("Activation of '%s' is now waiting for the owner. Tell them: open the Automations tab and "
             "approve or decline it under Waiting for your approval. You cannot activate it yourself."
@@ -5594,7 +5663,7 @@ def workflow_requests(_auth=Depends(require_auth)):
 
 def _decide_request(rid, approve):
     with closing(get_db()) as con:
-        row = con.execute("SELECT workflow_id, status FROM workflow_requests WHERE id=?", (rid,)).fetchone()
+        row = con.execute("SELECT workflow_id, status, fingerprint FROM workflow_requests WHERE id=?", (rid,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Request not found.")
     if row[1] != "pending":
@@ -5602,6 +5671,21 @@ def _decide_request(rid, approve):
     if approve:
         if not re.match(r"^[A-Za-z0-9_-]{1,64}$", str(row[0])):
             raise HTTPException(status_code=400, detail="Bad workflow id.")
+        # Approve only what was asked for: if the workflow changed since the request, the
+        # summary the owner read no longer describes it.
+        if row[2]:
+            try:
+                now_w = _n8n_send("GET", "/api/v1/workflows/" + str(row[0]))
+            except ToolError as e:
+                raise HTTPException(status_code=400, detail="Could not read the workflow from n8n: " + str(e))
+            if _wf_fingerprint(now_w) != row[2]:
+                with closing(get_db()) as con:
+                    con.execute("UPDATE workflow_requests SET status='withdrawn', decided_at=? WHERE id=?",
+                                (_now().isoformat(), rid))
+                    con.commit()
+                raise HTTPException(status_code=409, detail="This workflow was changed after approval was asked for, "
+                                    "so the request was withdrawn. Ask the agent to request activation again and "
+                                    "read the new summary before approving.")
         try:
             _n8n_send("POST", "/api/v1/workflows/" + str(row[0]) + "/activate", {})
         except ToolError as e:

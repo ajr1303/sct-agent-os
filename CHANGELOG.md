@@ -2,6 +2,24 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.45.0] — 2026-11-17 — Security sweep
+
+- **Updated libraries.** The web framework and encryption library the connectors
+  service is built on had published security advisories. Both are updated; the audit
+  now reports no known vulnerabilities.
+- **Nobody can lock the owner out of "Forgot password?".** Five wrong reset codes
+  used to lock the page, and that lock also blocked the emailed link, so a stranger
+  could keep the owner out. The lock is gone (the code and link are far too long to
+  guess; wrong tries are slowed instead). Asking for a new emailed link no longer
+  cancels one already in the inbox.
+- **Built-in workflows are off limits to agents.** Agents can no longer create, change
+  or ask to switch on a workflow named "Agent OS: ...", which stops look-alike copies
+  of the built-in ones. The internal token inside those workflows is hidden when an
+  agent reads one.
+- **You approve exactly what you were shown.** If a workflow is changed after an agent
+  asked for approval, the request is withdrawn and has to be asked for again, so a
+  workflow cannot be altered between the request and your click.
+
 ## [0.44.0] — 2026-11-17 — The dashboard on a phone
 
 - **One title per page.** On a phone the page title was shown twice, with the first one
