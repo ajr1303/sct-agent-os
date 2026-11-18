@@ -43,6 +43,14 @@ services:
       - ./data/hermes/brand:/srv/brand:ro
       # Two-step sign-in switch: empty unless the owner turns it on (see nginx.conf).
       - ./data/proxy:/etc/nginx/aos:ro
+    networks:
+      default: {}
+      # The tunnel's network. Here the names "paperclip" and "n8n" point at this
+      # proxy (ports 3100 and 5678 in nginx.conf), so tunnel routes written as
+      # http://paperclip:3100 and http://n8n:5678 pass the dashboard sign-in gate
+      # without any change in Cloudflare.
+      edge:
+        aliases: [paperclip, n8n]
     mem_limit: 128M
 
   # Optional outbound tunnel (Cloudflare). Enabled by the installer's "Cloudflare
@@ -61,6 +69,8 @@ services:
     restart: unless-stopped
     depends_on: [proxy]
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    # Only the proxy is reachable from the tunnel. Every public route goes through it.
+    networks: [edge]
     mem_limit: 128M
 
   # Dedicated TLS terminator for the Hermes gateway runs API (the Paperclip -> Hermes
@@ -129,6 +139,12 @@ services:
       RUN_MAX_ATTEMPTS: "${RUN_MAX_ATTEMPTS:-6}"
       # Bearer token Hermes uses to call the chat tools (MCP) endpoint. Empty = off.
       CHAT_TOOLS_TOKEN: "${CHAT_TOOLS_TOKEN:-}"
+      # Sign-in gate for the public Team and Automations addresses (see nginx.conf).
+      # SERVICE_GATE=off in .env switches it off.
+      SERVICE_GATE: "${SERVICE_GATE:-on}"
+      DASHBOARD_PUBLIC_HOST: "${DASHBOARD_PUBLIC_HOST:-}"
+      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-}"
+      N8N_PUBLIC_URL: "${N8N_PUBLIC_URL:-}"
       CHAT_TASKS_PER_HOUR: "${CHAT_TASKS_PER_HOUR:-20}"
       N8N_TOOLS_PROFILES: "${N8N_TOOLS_PROFILES:-}"
       # Optional second key that can open this install's backups (public half only).
@@ -217,6 +233,9 @@ services:
       PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
       PAPERCLIP_BIND: "lan"
       PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
+      # New accounts. Open on a fresh install (the owner has to create theirs), closed
+      # automatically once the team is linked. PAPERCLIP_DISABLE_SIGNUP=false reopens it.
+      PAPERCLIP_AUTH_DISABLE_SIGN_UP: "${PAPERCLIP_DISABLE_SIGNUP:-false}"
       # The URL you reach the Paperclip UI at in a browser (used for auth cookies).
       # Set to your LAN URL in .env, e.g. http://192.0.2.10:3100.
       PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://paperclip:3100}"
@@ -315,6 +334,9 @@ services:
       - path: honcho.env
         required: false
     mem_limit: 1G
+
+networks:
+  edge: {}
 
 volumes:
   honcho-pgdata:

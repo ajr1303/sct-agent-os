@@ -7,3 +7,4 @@ python-dateutil==2.9.0.post0
 icalendar==6.1.0
 PyYAML==6.0.2
 segno==1.6.1
+pypdf==7.1.0

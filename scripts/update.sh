@@ -35,6 +35,15 @@ trap 'echo; echo "x  The update stopped partway. The services that were running 
 # Phase 2 (running from the freshly-pulled script).
 # Backfill secrets introduced after the original install, so compose won't error
 # on a now-required variable that the existing .env predates.
+# A linked team already has its owner account: close new sign-ups in Paperclip.
+if [ -f .env ] && ! grep -q '^PAPERCLIP_DISABLE_SIGNUP=' .env; then
+  linked=$(docker compose exec -T connectors python -c 'import sqlite3,os
+print(sqlite3.connect(os.environ.get("CONNECTORS_DB","/data/connectors.db")).execute("SELECT count(*) FROM orchestration").fetchone()[0])' 2>/dev/null | tr -cd '0-9' || true)
+  if [ "${linked:-0}" -gt 0 ] 2>/dev/null || grep -Eq '^PAPERCLIP_API_KEY=.+' .env; then
+    echo "PAPERCLIP_DISABLE_SIGNUP=true" >> .env
+    echo "Closed new account sign-up in Paperclip (the team is already linked)"
+  fi
+fi
 if [ -f .env ] && ! grep -q '^CONNECTORS_KEY=' .env; then
   echo "CONNECTORS_KEY=$(openssl rand -base64 32 | tr '+/' '-_')" >> .env
   echo "Added CONNECTORS_KEY to .env"

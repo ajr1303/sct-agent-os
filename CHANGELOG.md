@@ -2,6 +2,22 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.46.0] — 2026-11-18 — Projects, and a sign-in gate for Team and Automations
+
+- **Projects.** A new page under Chat. Create a project for a client or a job, upload
+  its documents, write standing notes, and see its tasks. The assistant and the agents
+  read a project before working on it, can search its files, and can save notes back.
+  PDF, Word, PowerPoint, Excel and text files are readable; images are stored only.
+  Projects are part of every backup.
+- **Team and Automations addresses are no longer open to the internet.** On installs
+  that use the tunnel, opening the Paperclip or n8n address now goes through the
+  dashboard sign-in (and two-step code) first. Nothing changes in Cloudflare.
+  Webhooks, forms and calls that carry an API key keep working.
+- **Heads-up:** the tunnel can now only reach the proxy. A tunnel route that points
+  at any other container stops working (see RUNBOOK section 25).
+- **New Paperclip accounts are closed once your team is linked**, so nobody else can
+  sign up on your board.
+
 ## [0.45.0] — 2026-11-17 — Security sweep
 
 - **Updated libraries.** The web framework and encryption library the connectors

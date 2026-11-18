@@ -372,6 +372,7 @@ plugins/
   suburban-usage/           AI plan usage and what is left
   suburban-backups/         Backups: recovery kit, storage, status
   suburban-website/         Website visitors from Google Analytics
+  suburban-projects/        Projects: documents, notes and tasks for one piece of work
   suburban-security/        Two-step sign-in with an authenticator app
   suburban-tasks/           Delegated tasks, halted-task release
   suburban-automations/     n8n status, workflow approvals

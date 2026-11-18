@@ -758,3 +758,61 @@ name stays filed under it. If the note is still there after an update, read
 - Results vary with the model. If answers are still dense, try a stronger model for
   the main assistant on the AI models page.
 
+
+## 25. Team and Automations addresses sit behind the dashboard sign-in
+
+When an install uses the Cloudflare tunnel, the Team (Paperclip) and Automations
+(n8n) addresses no longer face the internet with only their own login pages.
+
+- **What the owner sees:** opening either address from a browser that has not been
+  let in goes to the dashboard sign-in (and the two-step code if it is on), then
+  straight back. After that the app's own login still applies. It lasts 24 hours per
+  browser.
+- **How it works:** the tunnel container is on its own network (`edge`) where the
+  names `paperclip` and `n8n` point at the proxy. The existing Cloudflare routes
+  (`http://paperclip:3100`, `http://n8n:5678`) keep working unchanged, but now pass
+  through `templates/nginx.conf`, which asks the connectors service (`/gate/check`).
+- **Not affected:** n8n webhooks, forms and MCP triggers (`/webhook/`, `/form/`,
+  `/mcp/` and their test/waiting variants); Paperclip API calls that carry a Bearer
+  key (agents on other machines); n8n public API calls that carry `X-N8N-API-KEY`;
+  everything inside the server; LAN installs, which reach the apps directly.
+- **Tunnel routes must point at `proxy`, `paperclip` or `n8n`.** The tunnel can no
+  longer reach any other container. A route to something else (for example
+  `http://hermes:8642`) stops working after this update; route it through the proxy
+  or remove it.
+- **New Paperclip accounts are closed once the team is linked**
+  (`PAPERCLIP_DISABLE_SIGNUP=true` in `.env`, added by the update or by "Link my
+  team"; takes effect when the team service next restarts). Set it to `false` to
+  reopen sign-up.
+- **Switch the gate off:** `SERVICE_GATE=off` in `.env`, then `sudo ./scripts/update.sh`.
+- **If the connectors service is down,** both addresses answer with an error until it
+  is back. Webhooks keep working.
+- **Check from outside:** `curl -sI https://<n8n address>/rest/settings` should show a
+  redirect to the dashboard address, not `200`.
+- A tunnel that runs outside this compose file (cloudflared installed on the host)
+  is not covered: point its routes at `http://localhost:9119` only, or add a
+  Cloudflare Access policy.
+
+## 26. Projects
+
+**Projects** (in the menu under Chat) keeps the documents, notes and tasks for one
+piece of work together.
+
+- **Create** a project, write **standing notes** (what the assistant and agents should
+  always know or do for it), and **upload files** by button or drag and drop.
+- **What can be read:** PDF, Word, PowerPoint, Excel (text cells), text, CSV, Markdown,
+  HTML and similar. Images and other types are stored and can be downloaded, but the
+  assistant cannot read them. Scanned PDFs with no text layer count as images.
+- **Limits:** 20 MB a file, 300 files a project, 1 GB in total (`PROJECT_FILE_MAX_MB`,
+  `PROJECT_STORE_MAX_MB` in `.env`).
+- **In Chat:** "Ask about this project" starts a question for it. The assistant reads
+  the project before answering. Asking for work "for the X project" files the task
+  under the project, and the agent is told to read the project first.
+- **Agents can save notes** into a project (findings, decisions, drafts). They cannot
+  upload, delete or download files. Common password and key shapes are stripped from
+  notes they save.
+- **File content is treated as reference material.** The assistant is told not to
+  follow instructions written inside a file.
+- **Backups:** projects and their files live in the connectors database, so every
+  backup includes them. Large files make backups larger.
+- Uploaded files are only ever sent back as downloads, never shown as a page.

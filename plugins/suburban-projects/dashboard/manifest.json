@@ -1,0 +1,10 @@
+{
+  "name": "suburban-projects",
+  "label": "Projects",
+  "description": "Keep the documents, notes and tasks for each piece of work in one place",
+  "icon": "Folder",
+  "version": "0.1.0",
+  "tab": { "path": "/projects" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css"
+}

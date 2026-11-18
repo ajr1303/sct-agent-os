@@ -79,6 +79,9 @@ if [ -n "$email" ]; then out=$(./scripts/paperclip-connect.sh "$email" 2>&1); el
 rc=$?
 if [ $rc = 0 ]; then
   msg="Linked."
+  # The owner account exists now, so nobody else needs to be able to create one.
+  # Takes effect the next time the team service restarts (the next update).
+  grep -q '^PAPERCLIP_DISABLE_SIGNUP=' .env 2>/dev/null || echo "PAPERCLIP_DISABLE_SIGNUP=true" >> .env
 elif printf '%s' "$out" | grep -q "More than one Paperclip account"; then
   msg="More than one account exists in Paperclip. Enter the owner's email address and try again."
 elif printf '%s' "$out" | grep -qi "no .*account\|no user\|not found"; then

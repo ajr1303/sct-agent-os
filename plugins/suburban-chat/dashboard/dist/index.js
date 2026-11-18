@@ -100,6 +100,13 @@
       var a0 = useState(null), activeSid = a0[0], setActiveSid = a0[1];
       var st0 = useState("idle"), status = st0[0], setStatus = st0[1];
       var i0 = useState(""), input = i0[0], setInput = i0[1];
+      // A page such as Projects can hand over the start of a question.
+      useEffect(function () {
+        try {
+          var pre = window.sessionStorage.getItem("sct-chat-prefill");
+          if (pre) { window.sessionStorage.removeItem("sct-chat-prefill"); setInput(String(pre).slice(0, 400)); }
+        } catch (e) {}
+      }, []);
       var p0 = useState([]), pending = p0[0], setPending = p0[1];
       var an0 = useState("Agent"), agentName = an0[0], setAgentName = an0[1];
       var ed0 = useState(null), editingId = ed0[0], setEditingId = ed0[1];

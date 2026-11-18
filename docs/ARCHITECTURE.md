@@ -199,6 +199,22 @@ denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
   appointment in the next 7 days across connected calendars (cached 5 minutes); the
   browser counts the ones on the viewer's own calendar day.
 - **Website visitors:** `GET /website` (plugin `suburban-website`, tab `/website`).
+- **Projects:** plugin `suburban-projects`, tab `/projects`. Tables `projects`,
+  `project_files` (metadata + extracted text), `project_blobs` (the bytes),
+  `project_tasks`. Routes `GET/POST /projects`, `GET/PATCH/DELETE /projects/{id}`,
+  `POST /projects/{id}/files?name=` (raw body, 25 MB proxy limit on this route only),
+  `POST /projects/{id}/notes`, `GET /projects/{id}/files/{fid}` (always an attachment)
+  and `/text`. Text is extracted at upload (`pypdf` for PDF, zip/XML for Office
+  files). Tools for both scopes: `list_projects`, `get_project`, `read_project_file`,
+  `search_project`, `save_project_note`; `assign_task` takes an optional `project`.
+- **Service gate:** nginx listens on 3100 and 5678 for the tunnel (network `edge`,
+  where `paperclip` and `n8n` are aliases of the proxy) and asks `GET /gate/check`.
+  Not let in: `/gate/begin` redirects a page load to
+  `https://<dashboard>/api/connectors/gate/start`, which (dashboard session and
+  two-step cookie required) returns a 60-second signed pass for that host;
+  `/_aos/enter` on the service host swaps it for the `aos_gate` cookie (24 h, HMAC
+  bound to the host). Passes are only issued for the configured public hosts or the
+  dashboard's `-paperclip`/`-n8n` siblings.
   The connectors service signs a short-lived token request with the stored Google
   service-account key and calls the Google Analytics Data API `runReport` for the
   property: totals for the last 7 full days and the 7 before, top pages and channels.
