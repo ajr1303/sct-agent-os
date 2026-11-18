@@ -2,6 +2,13 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.49.0] — 2026-11-18 — A model of its own for any agent
+
+- **Change model works for agents on this server.** Open the agent on the Agents page
+  and pick a provider and model. Only that agent changes; the others stay on the
+  server's default, nothing restarts, and it applies to the agent's next task. "Use
+  server default" puts it back. Providers appear once their key is under Settings, Keys.
+
 ## [0.48.0] — 2026-11-18 — One answer per question
 
 - **Chat shows one answer, not the working.** The assistant's notes to itself while

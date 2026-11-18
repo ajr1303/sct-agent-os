@@ -66,7 +66,7 @@
         return api("/orchestration/team/" + encodeURIComponent(id) + "/model").then(function (m) { setMi(m); return m; })
           .catch(function () { setMi({ can_change: false, why_not: null, options: [] }); });
       }
-      function pollModel(id) {
+      function pollModel(id, wait) {
         setTimeout(function () {
           loadModel(id).then(function (m) {
             if (m && m.job && m.job.state === "running") { pollModel(id); return; }
@@ -75,14 +75,20 @@
             }).catch(function () {});
             load();
           });
-        }, 5000);
+        }, wait || 5000);
       }
       function changeModel() {
         var id = sel, pick = mSel;
         setMAsk(false);
         api("/orchestration/team/" + encodeURIComponent(id) + "/model", { method: "POST", body: JSON.stringify(pick) })
-          .then(function (r) { setMi(function (old) { return Object.assign({}, old || {}, { job: r.job }); }); setMSel(null); pollModel(id); })
+          .then(function (r) { setMi(function (old) { return Object.assign({}, old || {}, { job: r.job }); }); setMSel(null); pollModel(id, r.job && r.job.state === "done" ? 300 : 5000); })
           .catch(function (e) { setMi(function (old) { return Object.assign({}, old || {}, { job: { state: "failed", message: String(e.message || e) } }); }); });
+      }
+      function resetModel() {
+        var id = det.id; setErr(null);
+        api("/orchestration/team/" + encodeURIComponent(id) + "/model", { method: "DELETE" })
+          .then(function (r) { setMi(function (old) { return Object.assign({}, old || {}, { job: r.job }); }); setMSel(null); pollModel(id, 300); })
+          .catch(function (e) { setErr(String(e.message || e)); });
       }
       function modelPanel() {
         if (!mi) return null;
@@ -107,12 +113,18 @@
               prov.models.map(function (m) { return h("option", { key: m, value: m }, m); })),
             mAsk
               ? h("span", { className: "sg-dacts" },
-                  h("button", { type: "button", className: "sg-btn sg-primary", onClick: changeModel }, "Yes, switch and restart"),
+                  h("button", { type: "button", className: "sg-btn sg-primary", onClick: changeModel }, mi.local ? "Yes, switch" : "Yes, switch and restart"),
                   h("button", { type: "button", className: "sg-btn", onClick: function () { setMAsk(false); } }, "Cancel"))
               : h("button", { type: "button", className: "sg-btn", disabled: running || !changed || mi.busy,
-                  onClick: function () { setMSel({ provider: prov.slug, model: curM }); setMAsk(true); } }, running ? "Switching…" : "Change model")),
+                  onClick: function () { setMSel({ provider: prov.slug, model: curM }); setMAsk(true); } }, running ? "Switching…" : "Change model"),
+            mi.local && mi.own_model && !mAsk ? h("button", { type: "button", className: "sg-btn", disabled: mi.busy, onClick: resetModel }, "Use server default") : null),
           jobLine,
-          h("div", { className: "sg-hint" }, mAsk
+          h("div", { className: "sg-hint" }, mi.local
+            ? (mAsk ? det.name + " will use this model for the next task it starts. Other agents on this server are not changed, and nothing restarts."
+              : mi.busy ? det.name + " is working on a task right now. Change its model when it is idle."
+              : mi.own_model ? det.name + " has its own model. Other agents on this server use the server's default."
+              : "This agent uses this server's default model. Pick another to give it its own. Only providers with a key under Settings, Keys are listed.")
+            : mAsk
             ? "This restarts " + det.name + "'s gateway on its own machine, which takes about a minute. If the new model doesn't come up, the previous one is restored."
             : mi.busy ? det.name + " is working on a task right now. Change its model when it is idle."
             : "Only providers that machine already has a key for are listed. To use another provider, add its key on the machine first."));

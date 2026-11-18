@@ -258,8 +258,50 @@ def _agent_models():
                                "FROM agent_models").fetchall()
     except Exception:
         return {}
-    return {r[0]: {"model": r[1], "provider": r[2], "hermes_version": r[3], "model_ok": bool(r[4]),
-                   "model_error": r[5], "model_checked_at": r[6]} for r in rows}
+    out = {r[0]: {"model": r[1], "provider": r[2], "hermes_version": r[3], "model_ok": bool(r[4]),
+                  "model_error": r[5], "model_checked_at": r[6]} for r in rows}
+    # An agent on this server that was given its own model: its gateway still reports
+    # the server's default, so show the model its runs actually use.
+    for aid, o in _local_models().items():
+        row = out.setdefault(aid, {"model": None, "provider": None, "hermes_version": None, "model_ok": True,
+                                   "model_error": None, "model_checked_at": None})
+        row.update({"model": o["model"], "provider": o["provider"], "model_ok": True, "model_error": None, "own_model": True})
+    return out
+
+
+# --- A model of its own for an agent that runs on this server -------------------------
+# Agents on this server share one Hermes, which has one default model. Hermes accepts a
+# provider and model on each run it is asked to start, so an agent can still have its
+# own: its gateway address gets a short tag (/m/<tag>), the TLS gateway sends that
+# agent's "start a run" calls through /gateway/run/<tag>, and the model is added there.
+# Everything else about the run (status, events, stop) goes to Hermes as before, and
+# agents without a tag are not touched at all.
+def _local_models_db():
+    con = get_db()
+    con.execute("CREATE TABLE IF NOT EXISTS agent_local_model (agent_id TEXT PRIMARY KEY, tag TEXT NOT NULL UNIQUE, "
+                "provider TEXT NOT NULL, model TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    return con
+
+
+def _local_models():
+    try:
+        with closing(_local_models_db()) as con:
+            return {r[0]: {"tag": r[1], "provider": r[2], "model": r[3]}
+                    for r in con.execute("SELECT agent_id, tag, provider, model FROM agent_local_model")}
+    except Exception:
+        return {}
+
+
+def _local_model_by_tag(tag):
+    try:
+        with closing(_local_models_db()) as con:
+            r = con.execute("SELECT provider, model FROM agent_local_model WHERE tag=?", (tag,)).fetchone()
+        return {"provider": r[0], "model": r[1]} if r else None
+    except Exception:
+        return None
+
+
+_GW_TAG_RE = re.compile(r"^/m/[A-Za-z0-9_-]{16,64}(?=/|$)")
 
 
 def _agent_model_options(aid):
@@ -1692,7 +1734,12 @@ def team_model_info(aid: str, _auth=Depends(require_auth)):
     if _pc_mode() == "external":
         why = "This dashboard is connected to an external Paperclip in read-only mode."
     elif local:
-        why = "This agent runs on this server. Change its model under Advanced, Local models."
+        opts = _agent_model_options(aid)
+        own = _local_models().get(aid)
+        why = None if opts else ("This server's Hermes has not reported which models it can use yet. It is checked "
+                                 "every few minutes; if this stays, run sudo ./scripts/agent-models.sh on the server.")
+        return {"can_change": why is None, "why_not": why, "options": opts, "job": _model_job(aid), "local": True,
+                "own_model": bool(own), "busy": str(d.get("status") or "").lower() == "running"}
     elif not entry:
         why = "This server has no SSH access to " + (host or "that machine") + " yet. On this server run: sudo ./scripts/agent-ssh.sh add <user>@" + (host or "<host>")
     elif not entry.get("can_set"):
@@ -1718,6 +1765,9 @@ def team_model_set(aid: str, m: ModelChange, _auth=Depends(require_auth)):
     d = _pc_send("GET", "/api/agents/" + aid, what="read the agent")
     ac = d.get("adapterConfig") if isinstance(d.get("adapterConfig"), dict) else {}
     _, entry = _agent_ssh(ac)
+    _, is_local = _agent_host(ac)
+    if is_local:
+        return _local_model_set(aid, d, m)
     if not entry or not entry.get("can_set") or not entry.get("can_restart"):
         raise HTTPException(status_code=400, detail="This server cannot change the model on that agent's machine yet.")
     if str(d.get("status") or "").lower() == "running":
@@ -1743,6 +1793,85 @@ def team_model_set(aid: str, m: ModelChange, _auth=Depends(require_auth)):
     threading.Thread(target=_run_model_change, args=(aid, entry, provider if provider != (cur.get("provider") or "") else "", model),
                      daemon=True).start()
     return {"ok": True, "job": _model_job(aid)}
+
+
+def _local_model_set(aid, d, m):
+    """Give an on-server agent its own model. No restart: it applies to its next task."""
+    if _pc_mode() == "external":
+        raise HTTPException(status_code=400, detail="This dashboard is connected to an external Paperclip in read-only mode.")
+    if str(d.get("status") or "").lower() == "running":
+        raise HTTPException(status_code=409, detail="This agent is working on a task. Change its model when it is idle, "
+                            "or pause it first.")
+    model, provider = (m.model or "").strip(), (m.provider or "").strip()
+    if not _MODEL_RE.match(model) or not provider or not _MODEL_RE.match(provider):
+        raise HTTPException(status_code=400, detail="Choose a provider and a model.")
+    if not [o for o in _agent_model_options(aid) if o.get("slug") == provider and model in o.get("models", [])]:
+        raise HTTPException(status_code=400, detail="This server did not list that model for that provider. Pick one of "
+                            "the choices shown, or add the provider's key under Settings, Keys first.")
+    cur = _local_models().get(aid)
+    tag = (cur or {}).get("tag") or base64.urlsafe_b64encode(os.urandom(18)).decode().rstrip("=")
+    _pc_send("PATCH", "/api/agents/" + aid, {"adapterConfig": {"apiBaseUrl": HERMES_GATEWAY_URL + "/m/" + tag}},
+             what="point the agent at its own model")
+    with closing(_local_models_db()) as con:
+        con.execute("INSERT INTO agent_local_model(agent_id, tag, provider, model, updated_at) VALUES(?,?,?,?,?) "
+                    "ON CONFLICT(agent_id) DO UPDATE SET provider=excluded.provider, model=excluded.model, "
+                    "updated_at=excluded.updated_at", (aid, tag, provider, model, _now().isoformat()))
+        con.commit()
+    job = {"state": "done", "message": "Now using " + model + " on " + provider + ". It applies to the next task this agent starts.",
+           "at": datetime.datetime.utcnow().isoformat() + "Z"}
+    with _MODEL_JOBS_LOCK:
+        _MODEL_JOBS[aid] = job
+    return {"ok": True, "job": dict(job)}
+
+
+@app.delete("/orchestration/team/{aid}/model")
+def team_model_reset(aid: str, _auth=Depends(require_auth)):
+    """Back to the server's default model for an on-server agent."""
+    _task_writable()
+    aid = _safe_id(aid)
+    if aid not in _local_models():
+        return {"ok": True, "job": _model_job(aid)}
+    d = _pc_send("GET", "/api/agents/" + aid, what="read the agent")
+    if str(d.get("status") or "").lower() == "running":
+        raise HTTPException(status_code=409, detail="This agent is working on a task. Try again when it is idle.")
+    _pc_send("PATCH", "/api/agents/" + aid, {"adapterConfig": {"apiBaseUrl": HERMES_GATEWAY_URL}},
+             what="point the agent back at the server's model")
+    with closing(_local_models_db()) as con:
+        con.execute("DELETE FROM agent_local_model WHERE agent_id=?", (aid,))
+        con.commit()
+    job = {"state": "done", "message": "Back on this server's default model.", "at": datetime.datetime.utcnow().isoformat() + "Z"}
+    with _MODEL_JOBS_LOCK:
+        _MODEL_JOBS[aid] = job
+    return {"ok": True, "job": dict(job)}
+
+
+@app.post("/gateway/run/{tag}")
+async def gateway_run(tag: str, request: Request):
+    """Start-a-run calls from an agent that has its own model. Adds the provider and
+    model, then hands the call to Hermes unchanged. Hermes checks the caller's key, as
+    it does for every run; this route is only reachable from the internal TLS gateway.
+    Anything unexpected is passed through untouched, so a problem here can only mean
+    the agent runs on the server's default model, never that it cannot run."""
+    raw = await request.body()
+    own = _local_model_by_tag(tag) if re.match(r"^[A-Za-z0-9_-]{16,64}$", tag) else None
+    out = raw
+    if own:
+        try:
+            body = json.loads(raw)
+            if isinstance(body, dict):
+                body["provider"], body["model"] = own["provider"], own["model"]
+                out = json.dumps(body).encode()
+        except Exception:
+            out = raw
+    skip = {"host", "content-length", "connection", "transfer-encoding", "accept-encoding"}
+    headers = {k: v for k, v in request.headers.items() if k.lower() not in skip}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
+            r = await client.post(HERMES_API_URL + "/v1/runs", content=out, headers=headers)
+    except Exception:
+        return JSONResponse(status_code=502, content={"error": "The assistant service did not answer."})
+    return Response(content=r.content, status_code=r.status_code,
+                    media_type=(r.headers.get("content-type") or "application/json"))
 
 
 # --- AI plan usage ------------------------------------------------------------
@@ -4407,7 +4536,7 @@ def gateway_authorize(request: Request):
     method = (request.headers.get("X-Gw-Method") or request.method or "").upper()
     uri = request.headers.get("X-Gw-Uri") or ""
     skey = (request.headers.get("X-Hermes-Session-Key") or "").strip()
-    path = uri.split("?", 1)[0].rstrip("/")
+    path = _GW_TAG_RE.sub("", uri.split("?", 1)[0]).rstrip("/")
 
     # Only count run-creation. Status/events/stop and anything else pass through.
     if not (method == "POST" and path == "/v1/runs"):

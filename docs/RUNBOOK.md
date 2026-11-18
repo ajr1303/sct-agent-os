@@ -846,3 +846,25 @@ piece of work together.
 - **One answer per question:** Chat shows only the last thing the assistant says in
   each turn. What it writes while working is hidden (Operator tools on: "Show
   working" under the answer). The full conversation is still on the Chat history page.
+
+## 28. Giving one agent its own model
+
+Agents page > open the agent > **Change model**.
+
+- **Agent on its own machine:** the change is made on that machine over SSH and its
+  gateway restarts (about a minute).
+- **Agent on this server:** all on-server agents share one Hermes with one default
+  model (Settings > AI models). Choosing a model here gives that one agent its own.
+  Nothing restarts; it applies to the next task the agent starts. **Use server
+  default** removes it.
+- Only providers this server has a key for are listed (Settings > Keys). The list
+  refreshes every few minutes; `sudo ./scripts/agent-models.sh` refreshes it now.
+- How it works: the agent's gateway address gets a tag
+  (`https://hermes-gateway:8443/m/<tag>`). The TLS gateway sends that agent's
+  `POST /v1/runs` through connectors `/gateway/run/<tag>`, which adds `provider` and
+  `model` to the request; all other calls go to Hermes unchanged. Table
+  `agent_local_model`.
+- If an agent with its own model fails every task right after a change, the provider
+  key is missing or the model name is not accepted: press **Use server default** and
+  check Settings > Keys. A task that was already part-way done on the old model may
+  need to be restarted.
