@@ -110,6 +110,58 @@
     }
 
     // Password: change it, and keep a reset code for the day it is forgotten.
+    // Pictures in Chat: which service makes them, and its key. The key is stored
+    // encrypted and is never shown again.
+    function ImageCard() {
+      var s;
+      s = useState(null);  var d = s[0], setD = s[1];
+      s = useState(false); var open = s[0], setOpen = s[1];
+      s = useState({ provider: "openai", key: "", model: "" }); var f = s[0], setF = s[1];
+      s = useState("");    var busy = s[0], setBusy = s[1];
+      s = useState(null);  var err = s[0], setErr = s[1];
+      useEffect(function () { api("/chat/images/settings").then(setD).catch(function () {}); }, []);
+      if (!d) return null;
+      var provs = d.providers || [];
+      function label(id) { for (var i = 0; i < provs.length; i++) if (provs[i].id === id) return provs[i].label; return id; }
+      function start() { setF({ provider: d.provider || "openai", key: "", model: d.ready ? d.model : "" }); setErr(null); setOpen(true); }
+      function save() {
+        setBusy("save"); setErr(null);
+        api("/chat/images/settings", { method: "POST", body: JSON.stringify(f) })
+          .then(function (x) { setBusy(""); setD(x); setOpen(false); })
+          .catch(function (e) { setBusy(""); setErr(String(e.message || e)); });
+      }
+      function off() {
+        if (!window.confirm("Turn off image generation and remove the saved key?")) return;
+        setBusy("off");
+        api("/chat/images/settings", { method: "DELETE" }).then(function (x) { setBusy(""); setD(x); }).catch(function (e) { setBusy(""); setErr(String(e.message || e)); });
+      }
+      return h("div", { className: "ss-card" },
+        h("div", { className: "ss-head" },
+          h("div", { className: "ss-name" }, "Image generation"),
+          h("span", { className: "ss-state" + (d.ready ? " ss-on" : "") }, d.ready ? "On" : "Off")),
+        h("div", { className: "ss-p" }, d.ready
+          ? "Your assistant and agents can make pictures in Chat using " + label(d.provider) + " (" + d.model + "). Each picture is billed to that account. At most " + d.per_hour + " an hour."
+          : "Let your assistant make pictures when you ask, for example for social media posts. It needs an account with an image service and that account's API key. Each picture is billed by that service."),
+        open ? h("div", { className: "ss-ask" },
+          provs.map(function (p) {
+            return h("label", { className: "ss-check", key: p.id },
+              h("input", { type: "radio", name: "ss-imgprov", checked: f.provider === p.id, onChange: function () { setF(Object.assign({}, f, { provider: p.id, model: "" })); } }),
+              h("span", null, p.label));
+          }),
+          h("label", { className: "ss-field" }, h("span", null, "API key" + (d.ready && d.provider === f.provider ? " (leave empty to keep the saved one)" : "")),
+            h("input", { className: "ss-in", type: "password", autoComplete: "off", value: f.key, onChange: function (e) { setF(Object.assign({}, f, { key: e.target.value })); } })),
+          h("label", { className: "ss-field" }, h("span", null, "Model (optional)"),
+            h("input", { className: "ss-in", value: f.model, placeholder: (provs.filter(function (p) { return p.id === f.provider; })[0] || {}).model || "", onChange: function (e) { setF(Object.assign({}, f, { model: e.target.value })); } })),
+          err ? h("div", { className: "ss-msg" }, err) : null,
+          h("div", { className: "ss-acts ss-left" },
+            h("button", { type: "button", className: "ss-btn ss-primary", disabled: busy === "save", onClick: save }, busy === "save" ? "Saving…" : "Save"),
+            h("button", { type: "button", className: "ss-btn", onClick: function () { setOpen(false); } }, "Cancel")))
+        : h("div", { className: "ss-acts ss-left" },
+            h("button", { type: "button", className: "ss-btn" + (d.ready ? "" : " ss-primary"), onClick: start }, d.ready ? "Change" : "Set up"),
+            d.ready ? h("button", { type: "button", className: "ss-btn", disabled: busy === "off", onClick: off }, "Turn off") : null),
+        !open && err ? h("div", { className: "ss-msg" }, err) : null);
+    }
+
     function PasswordCard() {
       var s;
       s = useState(null);  var info = s[0], setInfo = s[1];
@@ -336,7 +388,8 @@
         h("div", { className: "ss-sub" }, "Your details, your password and extra protection for signing in to this dashboard."),
         h(AccountCard),
         h(PasswordCard),
-        body);
+        body,
+        h(ImageCard));
     }
     try { PLUGINS.register("suburban-security", Security); console.info(TAG, "registered"); }
     catch (e) { try { console.error(TAG, "register failed", e); } catch (e2) {} }

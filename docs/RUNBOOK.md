@@ -816,3 +816,30 @@ piece of work together.
 - **Backups:** projects and their files live in the connectors database, so every
   backup includes them. Large files make backups larger.
 - Uploaded files are only ever sent back as downloads, never shown as a page.
+
+## 27. Chat: attachments, pictures and speed
+
+- **Attach photos and files in Chat:** the **+** button, drag and drop, or paste a
+  screenshot. Up to 6 files a message, 20 MB each. Documents (PDF, Word, PowerPoint,
+  Excel, text) are read as text. Photos are opened with the assistant's vision tool.
+- **Whether the assistant can see a photo depends on its AI model.** A model with
+  vision sees it directly; otherwise Hermes uses its helper vision model if one is
+  configured. If neither is available the assistant is told to say so instead of
+  guessing. Test with one photo after updating.
+- **How it works:** the file is stored in the connectors database (`chat_files`,
+  `chat_blobs`) and copied to `data/hermes/chat-files/`, which the assistant sees as
+  `/opt/data/chat-files/`. The message carries a short note
+  (`[attached image #N "name" saved at ...]`) that the chat page shows as a thumbnail.
+  Chat files are capped at 500 MB in total; the oldest are dropped when it is full
+  (`CHAT_STORE_MAX_MB`). To keep one, ask the assistant to save it to a project.
+- **Image generation:** Account > **Image generation** > Set up. Choose OpenAI or
+  MiniMax and paste that account's API key (stored encrypted, never shown again). Then
+  ask in Chat, for example "make a square image for a post about our backup service".
+  The picture appears in the answer; click it to download. Agents (for example the
+  social media manager) can use it too. Limit: 20 images an hour (`IMAGES_PER_HOUR`).
+  Each image is billed by the chosen service. Nothing is posted anywhere by this.
+- **Speed:** the chat page converts each answer once instead of on every keystroke,
+  checks for new messages faster while an answer is on its way (0.7 s) and less often
+  otherwise, and rests when the tab is in the background. While the assistant works
+  it shows how long it has been and how many steps it has taken. How long an answer
+  takes is still set by the AI model and by how many tools it uses.

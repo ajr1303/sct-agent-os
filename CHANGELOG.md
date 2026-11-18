@@ -2,6 +2,19 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.47.0] — 2026-11-18 — Chat: attachments, pictures, and a lighter page
+
+- **Attach photos and files in Chat.** Use the + button, drag and drop, or paste a
+  screenshot. Documents are read as text; photos are opened with the assistant's
+  vision tool (this depends on the AI model in use).
+- **Ask for pictures.** After a one-time setup on the Account page (OpenAI or MiniMax
+  key), the assistant and agents can make images, for example for social media. The
+  picture shows in the chat and can be downloaded or kept in a project.
+- **A lighter chat page.** Typing no longer redraws every answer, the page checks for
+  new messages faster while one is on its way and rests otherwise, and it shows how
+  long the assistant has been working and how many steps it has taken. You can also
+  send a follow-up while an answer is in progress.
+
 ## [0.46.0] — 2026-11-18 — Projects, and a sign-in gate for Team and Automations
 
 - **Projects.** A new page under Chat. Create a project for a client or a job, upload

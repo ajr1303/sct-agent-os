@@ -159,6 +159,9 @@ services:
       # connection, public keys). scripts/backup.sh fills /backups/.stage.
       - ./backups:/backups
       - ./data/backup:/backup-config
+      # Files attached in Chat and images made there, where the assistant can open
+      # them (it sees this folder as /opt/data/chat-files).
+      - ${HERMES_HOME_DIR:-./data/hermes}/chat-files:/chat-files
     expose:
       - "8000"
     mem_limit: 256M

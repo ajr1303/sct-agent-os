@@ -207,6 +207,14 @@ denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
   and `/text`. Text is extracted at upload (`pypdf` for PDF, zip/XML for Office
   files). Tools for both scopes: `list_projects`, `get_project`, `read_project_file`,
   `search_project`, `save_project_note`; `assign_task` takes an optional `project`.
+- **Chat files and images:** `POST /chat/files?name=` (raw body), `GET /chat/files/{id}`
+  (inline only for PNG/JPEG/GIF/WebP by magic bytes, otherwise an attachment; CSP
+  sandbox, nosniff). Copies are written to `/chat-files` (host `data/hermes/chat-files`,
+  `/opt/data/chat-files` inside Hermes). Image settings in kv `image_gen` (provider,
+  model, Fernet-encrypted key): `GET/POST/DELETE /chat/images/settings`. Tools:
+  `read_chat_file`, `generate_image` (OpenAI `/v1/images/generations` or MiniMax
+  `/v1/image_generation`, hourly cap), `save_chat_file_to_project` (chat only). The
+  chat renderer draws `![..](/api/connectors/chat/files/N)` as an image and nothing else.
 - **Service gate:** nginx listens on 3100 and 5678 for the tunnel (network `edge`,
   where `paperclip` and `n8n` are aliases of the proxy) and asks `GET /gate/check`.
   Not let in: `/gate/begin` redirects a page load to
