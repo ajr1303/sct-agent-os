@@ -2,6 +2,12 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.49.1] — 2026-11-18
+
+- **Updates show up sooner.** The server now looks for a new version every hour
+  instead of every six, and the Overview has a **Check for updates** link that looks
+  right away (it answers within about a minute).
+
 ## [0.49.0] — 2026-11-18 — A model of its own for any agent
 
 - **Change model works for agents on this server.** Open the agent on the Agents page

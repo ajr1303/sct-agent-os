@@ -2160,6 +2160,16 @@ def system_update_request(_auth=Depends(require_auth)):
     return {"requested": True}
 
 
+@app.post("/system/update/check")
+def system_update_check(_auth=Depends(require_auth)):
+    """Ask the server to look for a new version now (it otherwise looks once an hour)."""
+    req = os.path.join(os.path.dirname(_UPD_REQ), "update-check-request")
+    os.makedirs(os.path.dirname(req), exist_ok=True)
+    with open(req, "w", encoding="utf-8") as f:
+        f.write(datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ") + "\n")
+    return {"requested": True}
+
+
 # --- Dashboard password: change, and reset with a saved code --------------------------
 # The password is DASHBOARD_PASSWORD in the host's .env, which this service cannot see
 # or write. A change is left as a request for the host's every-minute job

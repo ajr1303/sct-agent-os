@@ -69,6 +69,7 @@
       var sg = useState(null), site = sg[0], setSite = sg[1];              // website visitors (Google Analytics)
       var sg = useState(null), upd = sg[0], setUpd = sg[1];
       var sh = useState(0), updBump = sh[0], setUpdBump = sh[1];
+      var ck = useState(""), chk = ck[0], setChk = ck[1];
       var sj = useState(null), updRun = sj[0], setUpdRun = sj[1];      // {pending, waiting_seconds, state} from the server
       var sj2 = useState(""), updMsg = sj2[0], setUpdMsg = sj2[1];
       var sj3 = useState(false), updBusy = sj3[0], setUpdBusy = sj3[1];
@@ -239,6 +240,30 @@
             updWatching(true); updPoll();
           }).catch(function () { setUpdBusy(false); setUpdMsg("The update could not be started. Try again in a minute."); });
       }
+      // "Check for updates": the server looks once an hour by itself. This asks it to
+      // look now, then waits for its answer (its jobs run once a minute).
+      function checkUpd() {
+        var before = upd && upd.checked_at, tries = 0;
+        setChk("Checking…");
+        try { localStorage.removeItem("sc-upd-dismissed"); } catch (e) {}
+        fetch("/api/connectors/system/update/check", { method: "POST", credentials: "same-origin" })
+          .then(function (r) { if (!r.ok) throw new Error(); })
+          .then(function wait() {
+            setTimeout(function () {
+              fetch("/sct-brand/update-status.json", { cache: "no-store" })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (v) {
+                  if (v && v.checked_at && v.checked_at !== before) {
+                    setUpd(v); setUpdBump(function (n) { return n + 1; });
+                    setChk(v.update_available ? "" : "You are up to date (v" + (v.current || "?") + ").");
+                    return;
+                  }
+                  if (++tries < 18) return wait();
+                  setChk("The server did not answer. Try again in a few minutes.");
+                }).catch(function () { if (++tries < 18) wait(); else setChk("Could not check. Try again in a few minutes."); });
+            }, 5000);
+          }).catch(function () { setChk("Could not check. Try again in a few minutes."); });
+      }
       function updBanner() {
         var st = updRun && updRun.state ? updRun.state : null;
         var pending = !!(updRun && updRun.pending), running = !!(st && st.state === "running");
@@ -275,8 +300,11 @@
           h("div", null,
             h("div", { className: "sc-date" }, today),
             h("div", { className: "sc-h1" }, (bizName ? "Today at " + bizName : "Today"))),
-          h("div", { className: "sc-chip" }, up == null ? "connecting…" :
-            h("span", null, h("span", { className: "sc-dot " + (up ? "sc-ok" : "sc-bad") }), up ? "Gateway running" : "Gateway down"))),
+          h("div", { className: "sc-topr" },
+            h("div", { className: "sc-chip" }, up == null ? "connecting…" :
+              h("span", null, h("span", { className: "sc-dot " + (up ? "sc-ok" : "sc-bad") }), up ? "Gateway running" : "Gateway down")),
+            chk && chk !== "Checking…" ? h("span", { className: "sc-chk" }, chk)
+              : h("button", { type: "button", className: "sc-chk sc-chk-btn", disabled: chk === "Checking…", onClick: checkUpd }, chk || "Check for updates"))),
 
         h("div", { className: "sc-stats" },
           Stat(agentTileLabel, agentTileVal, agentTileSub, true),

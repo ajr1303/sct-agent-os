@@ -847,6 +847,12 @@ piece of work together.
   each turn. What it writes while working is hidden (Operator tools on: "Show
   working" under the answer). The full conversation is still on the Chat history page.
 
+## 28a. When the update banner appears
+
+The server looks for a new version once an hour (17 minutes past). **Check for
+updates** at the top right of the Overview asks it to look now; the answer arrives
+within about a minute, and it also brings back a banner hidden with "Later".
+
 ## 28. Giving one agent its own model
 
 Agents page > open the agent > **Change model**.

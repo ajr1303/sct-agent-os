@@ -59,6 +59,12 @@ update_requested() {
 }
 update_requested
 
+# --- "Check for updates" on the Overview ------------------------------------------------
+if [ -f data/backup/update-check-request ]; then
+  rm -f data/backup/update-check-request
+  [ -x scripts/check-updates.sh ] && ./scripts/check-updates.sh >/dev/null 2>&1 || true
+fi
+
 # --- Sign-in name, for the Account page to show (not a secret) -------------------------
 if [ -f .env ] && [ -d data/backup ]; then
   signin=$(grep -m1 '^DASHBOARD_USER=' .env | cut -d= -f2-); [ -n "$signin" ] || signin="admin"

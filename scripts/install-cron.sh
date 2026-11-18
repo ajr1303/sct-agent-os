@@ -15,5 +15,5 @@ fi
   echo "30 3 * * * $here/scripts/backup.sh >/dev/null 2>&1 # agent-os-managed"
   echo "*/5 * * * * $here/scripts/backup.sh --if-requested >/dev/null 2>&1 # agent-os-managed"
   echo "* * * * * $here/scripts/host-requests.sh >/dev/null 2>&1 # agent-os-managed"
-  echo "17 */6 * * * $here/scripts/check-updates.sh # agent-os-managed"
+  echo "17 * * * * $here/scripts/check-updates.sh # agent-os-managed"
   echo "*/30 * * * * $here/scripts/agent-models.sh >/dev/null 2>&1 # agent-os-managed"; } | crontab -
