@@ -2,6 +2,15 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.49.3] — 2026-11-18
+
+- **Attaching a file over 1 MB works with two-step sign-in on.** Uploads in Chat and
+  Projects failed with "Could not attach that file" on any install that had two-step
+  sign-in switched on.
+- **Buttons under every picture in Chat:** Download, Try another version, and Change
+  something (which starts your next message for you). Clicking the picture now opens
+  it full size.
+
 ## [0.49.2] — 2026-11-18
 
 - **Generated pictures show in the chat.** When the assistant made an image with its

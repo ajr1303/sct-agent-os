@@ -52,6 +52,13 @@
       return (mdCache[k] = mdRender(k));
     }
     var FILE_PATH = "/api/connectors/chat/files/";
+    // A picture in an answer, with what the owner can do with it underneath.
+    function picHtml(url, alt) {
+      return '<div class="scc-picwrap"><a class="scc-piclink" href="' + url + '" target="_blank" rel="noopener" title="Open full size"><img class="scc-pic" loading="lazy" alt="' + alt + '" src="' + url + '"></a>'
+        + '<div class="scc-picacts"><a class="scc-picbtn" href="' + url + '?download=1" download>Download</a>'
+        + '<button type="button" class="scc-picbtn" data-scc-say="Please make a different version of that image.">Try another version</button>'
+        + '<button type="button" class="scc-picbtn" data-scc-fill="Change that image: ">Change something</button></div></div>';
+    }
     function mdRender(src) {
       var text = String(src), blocks = [], pics = [];
       text = text.replace(/```[a-zA-Z0-9]*\n?([\s\S]*?)```/g, function (_, code) { blocks.push(code.replace(/\n$/, "")); return "\u0000C" + (blocks.length - 1) + "\u0000"; });
@@ -60,18 +67,18 @@
       // folder path, which they cannot open. Show the picture in its place.
       text = text.replace(/(?:(?:Image|Picture|File)?\s*saved (?:at|to):?\s*)?(?:MEDIA:)?`?\/opt\/data\/cache\/generated\/images\/([A-Za-z0-9][A-Za-z0-9._-]{0,180}\.(?:png|jpe?g|webp|gif))`?/gi, function (_, name) {
         var u = "/api/connectors/chat/generated/" + encodeURIComponent(name);
-        pics.push('<a class="scc-piclink" href="' + u + '?download=1" title="Download"><img class="scc-pic" loading="lazy" alt="Generated image" src="' + u + '"></a>');
+        pics.push(picHtml(u, "Generated image"));
         return "\n\u0000P" + (pics.length - 1) + "\u0000\n";
       });
       // The same for a file kept in the chat-files folder.
       text = text.replace(/(?:(?:Image|Picture)?\s*saved (?:at|to):?\s*)?`?\/opt\/data\/chat-files\/(\d{1,12})-[A-Za-z0-9._-]+\.(?:png|jpe?g|webp|gif)`?/gi, function (_, id) {
-        pics.push('<a class="scc-piclink" href="' + FILE_PATH + id + '?download=1" title="Download"><img class="scc-pic" loading="lazy" alt="Image" src="' + FILE_PATH + id + '"></a>');
+        pics.push(picHtml(FILE_PATH + id, "Image"));
         return "\n\u0000P" + (pics.length - 1) + "\u0000\n";
       });
       // Pictures the assistant made or was given. Only this install's own chat-file
       // address is ever drawn as an image; any host written in front of it is dropped.
       text = text.replace(/!?\[([^\]]*)\]\((?:https?:\/\/[^\s)\/]+)?\/api\/connectors\/chat\/files\/(\d{1,12})(?:\?[^\s)]*)?\)/g, function (_, alt, id) {
-        pics.push('<a class="scc-piclink" href="' + FILE_PATH + id + '?download=1" title="Download"><img class="scc-pic" loading="lazy" alt="' + alt + '" src="' + FILE_PATH + id + '"></a>');
+        pics.push(picHtml(FILE_PATH + id, alt));
         return "\n\u0000P" + (pics.length - 1) + "\u0000\n";
       });
       text = text.replace(/`([^`\n]+)`/g, function (_, c) { return "<code>" + c + "</code>"; });
@@ -298,7 +305,7 @@
           setAtts(function (list) { return list.concat([{ key: key, name: name, state: "up" }]); });
           fetch(FILE_PATH.replace(/\/$/, "") + "?name=" + encodeURIComponent(name), { method: "POST", credentials: "same-origin", body: file,
             headers: { "Content-Type": file.type || "application/octet-stream" } })
-            .then(function (r) { return r.text().then(function (t) { var j = {}; try { j = JSON.parse(t); } catch (e) {} if (!r.ok) throw new Error(j.error || j.detail || (r.status === 413 ? "That file is too big." : "Could not attach that file.")); return j; }); })
+            .then(function (r) { return r.text().then(function (t) { var j = {}; try { j = JSON.parse(t); } catch (e) {} if (!r.ok) throw new Error(j.error || j.detail || (r.status === 413 ? "That file is too big (20 MB limit)." : r.status === 401 ? "Your sign-in has expired. Reload the page and try again." : "Could not attach that file (error " + r.status + ").")); return j; }); })
             .then(function (j) { patchAtt(key, { state: "ok", id: j.id, image: !!j.image, path: j.path, name: j.name || name }); })
             .catch(function (e) { setAtts(function (list) { return list.filter(function (x) { return x.key !== key; }); }); setAttErr(name + ": " + String(e.message || e)); });
         });
@@ -313,18 +320,30 @@
       var uploading = atts.some(function (x) { return x.state === "up"; });
       var ready = atts.filter(function (x) { return x.state === "ok"; });
 
-      function send() {
+      function send(say) {
         if (uploading) return;
-        var text = (input || "").trim();
+        var own = typeof say === "string";
+        var text = (own ? say : (input || "")).trim();
         if (!text && !ready.length) return;
         if (!text) text = ready.some(function (x) { return x.image; }) ? "Please look at this." : "Please read this.";
         if (ready.length) text += " " + ready.map(marker).join(" ");
         var ws = wsRef.current;
         if (ws && ws.readyState === 1) { try { ws.send(text + "\r"); } catch (e) {} }
         else { openPty(activeRef.current); setTimeout(function () { try { wsRef.current && wsRef.current.readyState === 1 && wsRef.current.send(text + "\r"); } catch (e) {} }, 900); }
-        setPending(function (p) { return p.concat([text]); }); setInput(""); setAtts([]); setAttErr(""); atBottomRef.current = true; setAtBottom(true);
+        setPending(function (p) { return p.concat([text]); }); if (!own) setInput(""); setAtts([]); setAttErr(""); atBottomRef.current = true; setAtBottom(true);
         sinceRef.current = Date.now(); waitingRef.current = true;
         if (pollNowRef.current) setTimeout(pollNowRef.current, 250);
+      }
+      // Buttons drawn inside an answer (under a picture).
+      function onAnswerClick(e) {
+        var t = e.target;
+        if (!t || !t.getAttribute) return;
+        var say = t.getAttribute("data-scc-say"), fill = t.getAttribute("data-scc-fill");
+        if (say) { e.preventDefault(); send(say); }
+        else if (fill) {
+          e.preventDefault(); setInput(fill);
+          try { var box = document.querySelector(".scc-input"); if (box) { box.focus(); } } catch (x) {}
+        }
       }
       function stop() { try { var ws = wsRef.current; if (ws && ws.readyState === 1) ws.send("\x03"); } catch (e) {} }
       function onKey(e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }
@@ -464,7 +483,7 @@
               h("span", { className: "scc-agentname" }, agentName)),
             h("span", { className: "scc-conn scc-" + status }, connLabel)),
           h("div", { className: "scc-scrollwrap" },
-            h("div", { className: "scc-scroll", ref: scrollRef, onScroll: onScroll },
+            h("div", { className: "scc-scroll", ref: scrollRef, onScroll: onScroll, onClick: onAnswerClick },
               h("div", { className: "scc-inner" },
                 rows.length === 0
                   ? h("div", { className: "scc-empty" },
