@@ -1560,6 +1560,9 @@ def team_get(aid: str, _auth=Depends(require_auth)):
     row = _agent_row(d if isinstance(d, dict) else {})
     row["instructions"] = _agent_instructions(aid, d.get("adapterConfig") if isinstance(d, dict) else {})
     row["can_edit"] = _pc_mode() != "external"
+    hl = _agent_health().get(str(row["id"]))
+    if hl and str(row.get("status") or "").lower() == "error":
+        row["problem"] = {"why": hl.get("why"), "state": hl.get("state"), "attempts": hl.get("attempts"), "fix": hl.get("fix"), "detail": hl.get("detail")}
     row["task_tools_note"] = "" if (row.get("local") or _pc_mode() == "external") else _remote_note(_pc_public_base())
     row.update(_agent_models().get(str(row["id"])) or {"model": None, "provider": None, "hermes_version": None,
                                                          "model_ok": False, "model_error": None, "model_checked_at": None})
@@ -2749,7 +2752,8 @@ def _watch_settings():
         d = {}
     idle = d.get("idle_minutes")
     return {"idle_minutes": idle if isinstance(idle, int) and 15 <= idle <= 720 else 45,
-            "restart_gateways": bool(d.get("restart_gateways"))}
+            "restart_gateways": bool(d.get("restart_gateways")),
+            "clear_errors": d.get("clear_errors") is not False}
 
 
 def _watch_token():
@@ -2821,15 +2825,80 @@ def _restart_gateway(entry):
         return False
 
 
+# --- Agents in error: work out why, clear it, try again -----------------------------------
+# Paperclip marks an agent "error" whenever its last run failed, and it stays that way
+# until a run succeeds or someone clears it. Most failures pass on their own (a busy
+# provider, a job that ran out of time), so the watch clears those and retries with a
+# growing wait. Only what a person has to fix (a rejected key, no credit) reaches the owner.
+ERR_MAX_CLEARS = 3
+ERR_WAIT_MIN = (0, 20, 60)     # minutes before the 1st, 2nd and 3rd automatic retry
+_ERR_CAUSES = (
+    ("credit", r"insufficient|out of (credit|credits|quota|balance)|payment required|\b402\b|billing|exceeded your current quota",
+     "its AI plan or credit has run out",
+     "Top up with the provider, or move the agent to another provider under Agents > Change model.", True),
+    ("auth", r"\b401\b|unauthori[sz]ed|invalid[ _-]?(api[ _-]?)?key|incorrect api key|authentication|token (has )?expired|\b403\b|forbidden",
+     "its AI provider key was rejected",
+     "Check that provider's key under Settings > Keys (or on the agent's own machine).", True),
+    ("budget", r"(monthly|spend|spending|cost) (budget|limit)|budget (exceeded|hard|limit|incident)|over budget",
+     "it reached its spending limit",
+     "Raise the agent's budget on the team board, or leave it until the limit resets.", True),
+    ("limit", r"\b429\b|rate.?limit|too many requests|overloaded|\b529\b|capacity|throttl|usage limit|quota",
+     "the AI provider was busy or rate-limited", "", False),
+    ("connect", r"econnrefused|enotfound|eai_again|connection (refused|reset|closed|error)|connect timeout|fetch failed|socket hang up|"
+                r"\b50[234]\b|bad gateway|unreachable|certificate|\btls\b|\bssl\b|network error",
+     "its gateway could not be reached", "", False),
+    ("timeout", r"timed?[ _-]?out|timeout|deadline|max(imum)?[ _-]?(iterations|turns|steps)|iteration (limit|budget)|out of (tool )?iterations|"
+                r"context (length|window)|too (long|large)",
+     "it ran out of time on a job that was too big", "", False),
+)
+_ERR_FIX_REPEAT = {"limit": "Its AI plan may be used up: check Usage, or move it to another provider under Agents > Change model.",
+                   "connect": "Check that its machine is on and its gateway is running, then press Retry now.",
+                   "timeout": "The task is probably too big for one run: open it in Tasks and split it, or cancel it.",
+                   "unknown": "Open the agent on the Agents page to see the failed run, or pause it."}
+
+
+def _err_diagnose(agent, cid):
+    """Why an agent is in error, in plain words, from its error reason and last failed run."""
+    text, issue_id = str(agent.get("errorReason") or ""), None
+    try:
+        runs = _list(_pc_get("/api/companies/%s/heartbeat-runs?agentId=%s&limit=5&summary=true" % (cid, _safe_id(str(agent.get("id"))))), "runs")
+        run = next((r for r in runs if isinstance(r, dict) and str(r.get("status")) in ("failed", "timed_out")), None)
+        if run:
+            text += " " + str(run.get("error") or "") + " " + str(run.get("errorCode") or "")
+            if str(run.get("status")) == "timed_out":
+                text += " timed out"
+            issue_id = run.get("issueId")
+    except Exception:
+        pass
+    low = text.lower()
+    for cause, rx, plain, fix, owner in _ERR_CAUSES:
+        if re.search(rx, low):
+            return {"id": cause, "plain": plain, "fix": fix, "owner": owner, "detail": _clip(_scrub_secrets(text), 220), "issue_id": issue_id}
+    return {"id": "unknown", "plain": "its last run failed", "fix": "", "owner": False,
+            "detail": _clip(_scrub_secrets(text), 220), "issue_id": issue_id}
+
+
+def _agent_health():
+    try:
+        d = json.loads(_kv_get("agent_health") or "{}")
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
 def stuck_watch_run(dry_run=False):
     """One pass. Returns what it found and did, in plain words, for the dashboard and n8n."""
     out = {"at": _now().isoformat(), "dry_run": bool(dry_run), "checked_agents": 0, "checked_tasks": 0,
-           "retried": [], "nudged": [], "restarted": [], "escalated": [], "triaged": [], "skipped": None,
+           "retried": [], "nudged": [], "restarted": [], "escalated": [], "triaged": [], "recovered": [], "waiting": [], "skipped": None,
            "needs_attention": False, "summary": ""}
 
     def done(skipped=None):
         out["skipped"] = skipped
         parts = []
+        if out["recovered"]:
+            parts.append("Cleared an error and restarted: " + ", ".join("%s (%s)" % (r["agent"], r["why"]) for r in out["recovered"]) + ".")
+        if out["waiting"]:
+            parts.append("Waiting before retrying: " + ", ".join(out["waiting"]) + ".")
         if out["retried"]:
             parts.append("Retried the connection for: " + ", ".join(out["retried"]) + ".")
         if out["restarted"]:
@@ -2922,6 +2991,73 @@ def stuck_watch_run(dry_run=False):
                 except Exception:
                     pass
                 bump("agent", aid); _watch_log(con, "retried", name, "connection check")
+
+        # 1b. Agents in error because their last run failed: find out why, clear, retry.
+        health = {}
+        if s["clear_errors"]:
+            for aid in sorted(usable):
+                a = by_id[aid]
+                st = state("agenterr", aid)
+                if str(a.get("status") or "").lower() != "error":
+                    # Healthy for two hours: start counting from zero next time.
+                    if st["last"] and now - st["last"] > datetime.timedelta(hours=2):
+                        con.execute("DELETE FROM stuck_watch WHERE kind='agenterr' AND ref=?", (aid,))
+                    continue
+                if aid in live_agent:
+                    continue
+                name = a.get("name") or "agent"
+                d = _err_diagnose(a, cid)
+                rec = {"name": name, "cause": d["id"], "why": d["plain"], "detail": d["detail"], "at": now.isoformat(),
+                       "attempts": st["attempts"], "fix": d["fix"] or _ERR_FIX_REPEAT.get(d["id"], _ERR_FIX_REPEAT["unknown"])}
+                health[aid] = rec
+                if d["owner"] or st["attempts"] >= ERR_MAX_CLEARS:
+                    rec["state"] = "needs_owner"
+                    if not st["escalated"]:
+                        tried = "" if d["owner"] else " and %d automatic retries did not fix it" % st["attempts"]
+                        out["escalated"].append({"agent": name, "message": "%s stopped because %s%s. %s" % (name, d["plain"], tried, rec["fix"])})
+                        if not dry_run:
+                            con.execute("INSERT INTO stuck_watch(kind, ref, attempts, last_action_at, escalated) VALUES('agenterr',?,0,?,1) "
+                                        "ON CONFLICT(kind, ref) DO UPDATE SET escalated = 1", (aid, now.isoformat()))
+                            _watch_log(con, "needs you", name, d["plain"])
+                    continue
+                since = st["last"] if st["attempts"] else _ts(a.get("updatedAt"))
+                wait = ERR_WAIT_MIN[min(st["attempts"], len(ERR_WAIT_MIN) - 1)]
+                if st["attempts"] == 0 and d["id"] in ("limit", "connect"):
+                    wait = 10     # give a busy provider or a restarting gateway a moment first
+                if (since and now - since < datetime.timedelta(minutes=wait)) or budget <= 0:
+                    rec["state"] = "waiting"
+                    out["waiting"].append(name)
+                    continue
+                budget -= 1
+                rec["state"] = "retrying"; rec["attempts"] = st["attempts"] + 1
+                out["recovered"].append({"agent": name, "why": d["plain"]})
+                if dry_run:
+                    continue
+                bump("agenterr", aid)
+                try:
+                    _pc_send("POST", "/api/agents/" + _safe_id(aid) + "/clear-error", {}, what="clear the agent's error")
+                except Exception as e:
+                    _watch_log(con, "could not clear", name, str(getattr(e, "detail", e))[:120])
+                    continue
+                if d["id"] == "timeout" and d["issue_id"]:
+                    try:
+                        _pc_send("POST", "/api/issues/" + _safe_id(str(d["issue_id"])) + "/comments",
+                                 {"body": "Automatic check: your last run on this task ran out of time. Do not start over. Do the "
+                                          "next small piece, post it, then call split_task to file the rest as smaller tasks."},
+                                 what="comment")
+                    except Exception:
+                        pass
+                try:
+                    _pc_send("POST", "/api/agents/" + _safe_id(aid) + "/wakeup",
+                             {"source": "automation", "triggerDetail": "system",
+                              "reason": "Agent OS cleared an error (%s) and is retrying." % d["plain"]}, what="wake the agent")
+                except Exception:
+                    pass
+                _watch_log(con, "cleared error", name, "%s (try %d of %d)" % (d["plain"], rec["attempts"], ERR_MAX_CLEARS))
+            if not dry_run:
+                # Same connection: a second one would be locked out by this open transaction.
+                con.execute("INSERT INTO kv(k, v) VALUES('agent_health', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", (json.dumps(health),))
+                _DEC_CACHE.clear()
 
         # 2. Tasks that stopped moving. Oldest activity first; one per agent per pass.
         def rows(q):
@@ -3311,6 +3447,7 @@ def _watch_status():
 class WatchSettings(BaseModel):
     idle_minutes: int | None = None
     restart_gateways: bool | None = None
+    clear_errors: bool | None = None
 
 
 class WatchRun(BaseModel):
@@ -3331,6 +3468,8 @@ def stuck_watch_settings(b: WatchSettings, _auth=Depends(require_auth)):
         s["idle_minutes"] = int(b.idle_minutes)
     if b.restart_gateways is not None:
         s["restart_gateways"] = bool(b.restart_gateways)
+    if b.clear_errors is not None:
+        s["clear_errors"] = bool(b.clear_errors)
     _kv_set("stuck_watch_settings", json.dumps(s))
     return _watch_status()
 
@@ -4431,6 +4570,7 @@ def _decisions(fresh=False):
     except Exception:
         pass
     hold = out["triage"] and lead is not None and _watch_recent()
+    health = _agent_health()
     cards, seen = [], set()
 
     def issue_bits(iid, subj=None):
@@ -4462,6 +4602,25 @@ def _decisions(fresh=False):
         at = it.get("activityAt") or it.get("updatedAt")
         if not sid:
             continue
+        if kind == "agent_error_alert":
+            hl = health.get(sid)
+            if hl and hl.get("state") == "needs_owner":
+                cards.append({"id": "agent:" + sid, "kind": "problem", "tag": "Agent stopped", "issue_id": None, "key": "",
+                              "title": _clip("%s stopped: %s" % (hl.get("name") or subj.get("title") or "An agent", hl.get("why") or "its last run failed"), 160),
+                              "agent": hl.get("name") or subj.get("title"), "at": hl.get("at") or at,
+                              "summary": _clip((("Agent OS cleared it and restarted the agent %d time%s, and it kept failing. "
+                                                 % (hl["attempts"], "" if hl["attempts"] == 1 else "s")) if hl.get("attempts") else "")
+                                               + (hl.get("fix") or ""), 600),
+                              "question": "", "recommendation": "",
+                              "buttons": [{"id": "retry", "label": "Retry now", "style": "primary"}, {"id": "pause", "label": "Pause this agent"}],
+                              "ref": ("agent", sid, "")})
+                continue
+            if hl:
+                out["alerts"].append({"kind": "Agent error", "title": _clip(hl.get("name") or subj.get("title") or "Agent", 140),
+                                      "why": _clip("Stopped because %s. %s" % (hl.get("why"), "Waiting a few minutes, then Agent OS retries it."
+                                                   if hl.get("state") == "waiting" else "Agent OS cleared it and restarted the agent (try %s of %d)."
+                                                   % (hl.get("attempts"), ERR_MAX_CLEARS)), 220), "key": "", "at": hl.get("at") or at})
+                continue
         if kind in _DEC_ALERT_KINDS:
             out["alerts"].append({"kind": _DEC_ALERT_KINDS[kind], "title": _clip(subj.get("title") or det.get("agentName") or it.get("originAgentName") or kind, 140),
                                   "why": _clip(det.get("failureReasonExcerpt") or it.get("whyNow"), 220),
@@ -4526,7 +4685,7 @@ def _decisions(fresh=False):
                       "summary": _clip(det.get("summaryExcerpt") or it.get("whyNow"), 900), "question": "", "recommendation": "",
                       "buttons": [_BTN_MORE] if riid else [], "open_in_board": True, "ref": ("interaction", riid, "")})
             cards.append(c)
-    cards.sort(key=lambda c: ({"decision": 0, "approval": 0, "interaction": 1, "review": 2, "stuck": 3}.get(c["kind"], 4), -(_ts(c.get("at")) or _now()).timestamp()))
+    cards.sort(key=lambda c: ({"decision": 0, "approval": 0, "interaction": 1, "review": 2, "problem": 2, "stuck": 3}.get(c["kind"], 4), -(_ts(c.get("at")) or _now()).timestamp()))
     out["decisions"] = cards[:120]
     out["alerts"] = out["alerts"][:60]
     out["issue_ids"] = [c["issue_id"] for c in cards if c.get("issue_id")]
@@ -4574,6 +4733,27 @@ def decisions_act(b: DecisionAct, _auth=Depends(require_auth)):
     extra = ("\n\nNote from the owner: " + note) if note else ""
     typ, rid, sub = card["ref"]
     said = ""
+    if typ == "agent":
+        if act == "pause":
+            _pc_send("POST", "/api/agents/" + _safe_id(rid) + "/pause", {}, what="pause the agent")
+            said = "Paused. Resume it from the Agents page when it is fixed."
+        else:
+            _pc_send("POST", "/api/agents/" + _safe_id(rid) + "/clear-error", {}, what="clear the agent's error")
+            try:
+                _pc_send("POST", "/api/agents/" + _safe_id(rid) + "/wakeup",
+                         {"source": "on_demand", "triggerDetail": "manual", "reason": "The owner asked for a retry."}, what="wake the agent")
+            except Exception:
+                pass
+            said = "Cleared and restarted. If it fails again it comes back here."
+        try:
+            with closing(get_db()) as con:      # start the automatic retries from zero
+                con.execute("DELETE FROM stuck_watch WHERE kind='agenterr' AND ref=?", (rid,))
+                con.commit()
+            hl = _agent_health(); hl.pop(rid, None); _kv_set("agent_health", json.dumps(hl))
+        except Exception:
+            pass
+        _DEC_CACHE.clear()
+        return {"ok": True, "message": said}
     if typ == "approval":
         path = {"approve": "approve", "decline": "reject", "more": "request-revision"}[act]
         body = {"decisionNote": note or ({"more": "Please explain this in plain language: what it is, what you recommend "

@@ -277,6 +277,11 @@
               placeholder: "How this agent should work: its job, its limits, how it hands work over.", onChange: set("instructions") }),
             ins.other_files ? "This agent has " + ins.other_files + " more instruction file" + (ins.other_files === 1 ? "" : "s") + " in Paperclip. Only the main one is edited here." : null),
           taskTools(ro),
+          det.problem ? h("div", { className: "sg-note" },
+            h("div", null, h("b", null, "Why it stopped: "), det.problem.why + "."),
+            h("div", null, det.problem.state === "needs_owner" ? (det.problem.fix || "") + " Then answer the card under Tasks > Needs you."
+              : det.problem.state === "waiting" ? "Agent OS is waiting a few minutes and will then clear the error and restart it."
+              : "Agent OS cleared the error and restarted it (try " + det.problem.attempts + " of 3).")) : null,
           msg ? h("div", { className: "sg-msg " + (msg.ok ? "sg-msg-ok" : "sg-msg-err") }, msg.text) : null,
           canEdit ? h("div", { className: "sg-save" },
             h("span", { className: "sg-hint" }, "Gateway address, keys, budgets and run history are managed in Paperclip."),

@@ -2,6 +2,17 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.53.0] — 2026-11-18
+
+- **Agents in error are cleared and restarted automatically.** The stuck-agent watch
+  now reads why an agent stopped (provider busy, gateway unreachable, job too big,
+  key rejected, no credit), clears the error and restarts the agent, up to three
+  times with a longer wait each time. A job that ran out of time is told to split.
+- **You are only told when you have to act.** A rejected key, no credit, or three
+  failed retries becomes an "Agent stopped" card under Tasks > Needs you, with the
+  cause in plain words and **Retry now** / **Pause this agent** buttons.
+- The Agents page shows why an agent stopped and what is being done about it.
+
 ## [0.52.0] — 2026-11-18
 
 - **"Needs you" now means a decision.** The Tasks page used to count every blocked

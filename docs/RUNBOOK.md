@@ -992,3 +992,35 @@ picks up.
 the request, earlier activity, the reply box and files. Agent text is formatted
 (headings, lists, tables, code). The working notes Agent OS adds to a task for the
 agent are hidden from this view.
+
+## 31. Agents that stop with an error
+
+Paperclip marks an agent **error** whenever its last run failed, and leaves it that
+way until a run succeeds or someone clears it. The stuck-agent watch (every 10
+minutes, Automations page) now deals with these itself.
+
+For each agent in error it reads the error and the last failed run, names the cause,
+and acts:
+
+| Cause | What the watch does |
+|---|---|
+| Provider busy or rate-limited | Waits 10 minutes, clears the error, restarts the agent |
+| Gateway could not be reached | Waits 10 minutes, clears, restarts |
+| Ran out of time on a big job | Clears, restarts, and tells the agent on the task to split it |
+| Unknown failure | Clears and restarts |
+| Key rejected, no credit left, spending limit | Leaves it and tells the owner what to fix |
+
+- Up to **3 automatic tries** per agent, waiting 0, 20 and 60 minutes. After the
+  third it becomes a card under **Tasks > Needs you** ("Agent stopped") with the cause
+  in plain words and two buttons: **Retry now** and **Pause this agent**.
+- The count starts over once the agent has been healthy for two hours, or when the
+  owner presses Retry now.
+- Agents handled automatically appear only in the alerts list under the cards, with
+  what was done. The Agents page shows "Why it stopped" on an agent in error.
+- Switch: Automations > stuck-agent watch > "When an agent stops with an error...".
+  On by default. The watch itself has to be switched on.
+- Paperclip calls used: `POST /api/agents/<id>/clear-error`, `POST
+  /api/agents/<id>/wakeup`, `GET /api/companies/<id>/heartbeat-runs?agentId=`.
+- The cause is matched from the error text, so an unusual message lands in
+  "unknown" and is simply retried. The watch log on the Automations page shows each
+  action.

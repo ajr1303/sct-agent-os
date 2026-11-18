@@ -181,3 +181,5 @@
 .st-md-table th{background:rgba(255,255,255,.05);font-weight:600}
 .st-card-q .st-md,.st-card-rec .st-md,.st-card-sum.st-md{font-size:13.5px}
 .st-card-q .st-md p,.st-card-rec .st-md p{margin:0}
+.st-card-problem{border-left-color:var(--color-destructive,#ff7a73)}
+.st-tag-problem{border-color:var(--color-destructive,#ff7a73);color:var(--color-destructive,#ff7a73)}

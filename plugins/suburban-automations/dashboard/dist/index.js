@@ -164,6 +164,10 @@
                   onChange: function (e) { swCall("set", "/automations/stuck-watch", { method: "PUT", body: JSON.stringify({ idle_minutes: Number(e.target.value) }) }); } },
                   [30, 45, 60, 90, 120, 240].concat([st.idle_minutes]).filter(function (v, i, a) { return v && a.indexOf(v) === i; }).sort(function (a, b) { return a - b; })
                     .map(function (m) { return h("option", { key: m, value: String(m) }, m < 120 ? m + " minutes quiet" : (m / 60) + " hours quiet"); }))),
+              h("label", { className: "sa-watch-check" },
+                h("input", { type: "checkbox", checked: st.clear_errors !== false, disabled: swBusy === "set",
+                  onChange: function (e) { swCall("set", "/automations/stuck-watch", { method: "PUT", body: JSON.stringify({ clear_errors: e.target.checked }) }); } }),
+                h("span", null, "When an agent stops with an error, work out why, clear it and restart the agent (up to 3 tries, with a longer wait each time). You are only told when it needs you, such as a rejected key or no credit left.")),
               sw.restart_capable ? h("label", { className: "sa-watch-check" },
                 h("input", { type: "checkbox", checked: !!st.restart_gateways, disabled: swBusy === "set",
                   onChange: function (e) { swCall("set", "/automations/stuck-watch", { method: "PUT", body: JSON.stringify({ restart_gateways: e.target.checked }) }); } }),
