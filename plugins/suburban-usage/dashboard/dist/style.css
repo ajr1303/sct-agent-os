@@ -36,3 +36,7 @@
 .su-agents{font-size:12px;line-height:1.6;opacity:.85}
 .su-agents-l{opacity:.65}
 .su-dim{opacity:.55}
+.su-nums{display:flex;flex-wrap:wrap;gap:10px 34px;margin-bottom:10px}
+.su-nums>div{display:flex;flex-direction:column}
+.su-nums b{font-size:24px;font-weight:600;line-height:1.2}
+.su-nums span{font-size:12px;opacity:.6}

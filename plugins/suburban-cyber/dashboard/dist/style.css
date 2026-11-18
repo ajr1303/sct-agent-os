@@ -13,6 +13,10 @@
 .sc-stat-val{font-size:30px;font-weight:600;line-height:1.15;margin:4px 0}
 .sc-stat-val.sc-accent{color:var(--color-primary,#25c9ee)}
 .sc-stat-note{font-size:12px;opacity:.55}
+.sc-llm{display:flex;flex-direction:column;gap:10px}
+.sc-llm-h{display:flex;align-items:baseline;justify-content:space-between;gap:12px;font-size:11px;letter-spacing:.07em;text-transform:uppercase}
+.sc-llm-h>span{opacity:.6}
+.sc-llm-h .sc-link{text-transform:none;letter-spacing:0;font-size:12px}
 /* columns */
 .sc-cols{display:grid;grid-template-columns:1.3fr 1fr;gap:16px}
 @media (max-width:900px){.sc-cols{grid-template-columns:1fr}}

@@ -46,6 +46,27 @@
         h("div", { className: "sc-stat-val" + (accent ? " sc-accent" : "") }, value),
         h("div", { className: "sc-stat-note" }, note));
     }
+    // Tokens and estimated spend per provider, from Hermes's own 14-day record on this server.
+    function provFam(slug) {
+      var s = String(slug || "").trim().toLowerCase(), F = ["minimax", "openai", "anthropic", "meta", "kimi", "alibaba", "tencent", "copilot", "xai"];
+      for (var i = 0; i < F.length; i++) if (s === F[i] || s.indexOf(F[i] + "-") === 0) return F[i];
+      return s;
+    }
+    function provStats(res) {
+      var out = {}, rows = (res && res.models) || [];
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i], k = provFam(r.provider); if (!k) continue;
+        var o = out[k] || (out[k] = { tokens: 0, cost: 0, calls: 0 });
+        o.tokens += (+r.input_tokens || 0) + (+r.output_tokens || 0);
+        o.cost += (+r.estimated_cost || 0); o.calls += (+r.api_calls || 0);
+      }
+      return out;
+    }
+    function provLabel(k) {
+      var L = { minimax: "MiniMax", anthropic: "Anthropic", openai: "OpenAI", openrouter: "OpenRouter", meta: "Meta", gemini: "Google Gemini", google: "Google Gemini", xai: "xAI", deepseek: "DeepSeek", nous: "Nous Portal" };
+      return L[k] || (k.charAt(0).toUpperCase() + k.slice(1)).replace(/-/g, " ");
+    }
+
     function Panel(title, right, children) {
       return h("div", { className: "sc-panel" },
         h("div", { className: "sc-panel-h" },
@@ -61,6 +82,7 @@
       var sd = useState(null), agents = sd[0], setAgents = sd[1];
       var se = useState(null), pcOv = se[0], setPcOv = se[1];
       var su = useState(null), planUse = su[0], setPlanUse = su[1];
+      var su2 = useState(null), byProv = su2[0], setByProv = su2[1];   // provider family -> {tokens, cost, calls}, 14 days
       var sk = useState(null), bk = sk[0], setBk = sk[1];
       var sz = useState(""), bizName = sz[0], setBizName = sz[1];
       var sa = useState(null), autos = sa[0], setAutos = sa[1];      // {count, active} once Automations is connected
@@ -79,6 +101,7 @@
           var p1 = call("getStatus"); if (p1) p1.then(setStatus).catch(function () {});
           var p2 = call("getSessions"); if (p2) p2.then(function (v) { setSessions(toList(v)); }).catch(function () {});
           var p3 = call("getAnalytics", 14); if (p3) p3.then(setAnalytics).catch(function () {});
+          var p3b = call("getModelsAnalytics", 14); if (p3b) p3b.then(function (v) { setByProv(provStats(v)); }).catch(function () {});
           var p4 = call("getProfiles"); if (p4) p4.then(function (v) { setAgents(toList(v)); }).catch(function () {});
           try {
             fetch("/api/connectors/usage", { credentials: "same-origin" }).then(function (r) { return r.ok ? r.json() : null; })
@@ -183,15 +206,33 @@
         var note = c == null ? "No earlier week to compare with" : c === 0 ? "Same as the week before" : (c > 0 ? "Up " : "Down ") + Math.abs(c) + "% on the week before";
         return Stat("Website visitors, 7 days", fmtNum(site.visitors || 0), note);
       }
-      function planTile() {
-        var ps = (planUse && planUse.providers) || [];
-        for (var i = 0; i < ps.length; i++) {
-          var u = ps[i].usage; if (!u || !u.ok || !u.groups || !u.groups[0] || !u.groups[0].weekly) continue;
-          var w = u.groups[0].weekly, hrs = Math.round((w.resets_in_seconds || 0) / 3600);
-          var note = w.on_pace_to_run_out ? "On pace to run out before it resets" : ("Resets in " + (hrs >= 48 ? Math.round(hrs / 24) + " days" : hrs + " h"));
-          return Stat(ps[i].label + " plan, this week", w.remaining_percent + "% left", note, w.on_pace_to_run_out || w.remaining_percent <= 25);
-        }
-        return null;
+      // One tile for every AI provider that has a key, an agent on it, or use in the last 14 days.
+      function llmTiles() {
+        var ps = ((planUse && planUse.providers) || []).slice(), st = byProv || {}, seen = {}, k;
+        for (var i = 0; i < ps.length; i++) seen[ps[i].id] = 1;
+        var extra = []; for (k in st) if (!seen[k] && st[k].tokens > 0) extra.push({ id: k, label: provLabel(k), agents: [] });
+        extra.sort(function (a, b) { return st[b.id].tokens - st[a.id].tokens; });
+        ps = ps.concat(extra).slice(0, 10);
+        return ps.map(function (p) {
+          var u = p.usage, w = u && u.ok && u.groups && u.groups[0] && u.groups[0].weekly;
+          if (w) {
+            var hrs = Math.round((w.resets_in_seconds || 0) / 3600);
+            var note = w.on_pace_to_run_out ? "On pace to run out before it resets" : ("Resets in " + (hrs >= 48 ? Math.round(hrs / 24) + " days" : hrs + " h"));
+            return h("div", { key: p.id, style: { display: "contents" } }, Stat(p.label + " plan, this week", w.remaining_percent + "% left", note, w.on_pace_to_run_out || w.remaining_percent <= 25));
+          }
+          var ag = p.agents || [], n = ag.length, away = ag.filter(function (a) { return !a.local; }).length;
+          var who = n ? n + (n === 1 ? " agent" : " agents") : "", s14 = st[p.id], tile;
+          if (s14 && s14.tokens > 0) {
+            var paid = s14.cost >= 0.005;
+            tile = Stat(p.label + ", 14 days", paid ? fmtCost(s14.cost) : fmtNum(s14.tokens),
+              (paid ? fmtNum(s14.tokens) + " tokens" : "Tokens") + " on this server" + (who ? " · " + who : ""));
+          } else if (n) {
+            tile = Stat(p.label, who, away === n ? "On their own machines · use isn't counted here" : "No use on this server in 14 days");
+          } else {
+            tile = Stat(p.label, "Ready", "Key added · no agent uses it yet");
+          }
+          return h("div", { key: p.id, style: { display: "contents" } }, tile);
+        });
       }
       var agentTileLabel = useManaged ? "Agents" : "Active agents";
       var agentTileVal = useManaged ? String(managedAgents.length) : (status ? String(activeAgents != null ? activeAgents : 0) : "—");
@@ -316,10 +357,17 @@
             autos.count + " workflow" + (autos.count === 1 ? "" : "s") + " in total" + (watch && watch.active ? " · stuck-agent watch on" : ""), autos.active > 0) : null,
           bookTile(),
           siteTile(),
-          planTile(),
           Stat("Chat sessions, 14 days", analytics ? String(tot.total_sessions || 0) : "—", useManaged ? "On this server only" : "Conversations and automations"),
           Stat("Tokens, 14 days", analytics ? fmtNum(tokens) : "—", useManaged ? "This server only · input + output" : "Input + output"),
           Stat("AI spend, 14 days", analytics ? fmtCost(tot.total_estimated_cost) : "—", useManaged ? "This server only · estimated" : "Estimated from usage")),
+
+        (function () {
+          var tiles = llmTiles();
+          return tiles.length ? h("div", { className: "sc-llm" },
+            h("div", { className: "sc-llm-h" }, h("span", null, "Your AI providers"),
+              h("a", { className: "sc-link", href: "/usage" + (location.search || "") }, "Details in Usage →")),
+            h("div", { className: "sc-stats" }, tiles)) : null;
+        })(),
 
         h("div", { className: "sc-cols" },
           h("div", { className: "sc-col" },

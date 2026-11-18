@@ -2,6 +2,18 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.51.0] — 2026-11-18
+
+- **A card for every AI provider.** The Overview has a new "Your AI providers" row and
+  the Usage page shows one card for each provider you have a key for. Plans that
+  report it show percent left; the rest show tokens, estimated spend and requests for
+  the last 14 days as counted on this server.
+- **Meta (Muse) models.** Meta is labelled properly on the cards and in the model
+  list. Add the key under Settings > Keys ("Meta Model API"), then pick a Muse model
+  under Agents > Change model.
+- **Refresh the list.** After adding a provider key, the Change model panel can
+  re-read the available models in about a minute instead of waiting half an hour.
+
 ## [0.50.0] — 2026-11-18
 
 - **Agents on their own servers can split, finish and pass on tasks.** Until now only

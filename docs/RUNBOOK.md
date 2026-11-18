@@ -900,7 +900,8 @@ Agents page > open the agent > **Change model**.
   Nothing restarts; it applies to the next task the agent starts. **Use server
   default** removes it.
 - Only providers this server has a key for are listed (Settings > Keys). The list
-  refreshes every few minutes; `sudo ./scripts/agent-models.sh` refreshes it now.
+  refreshes every half hour; **Refresh the list** under the dropdowns re-reads it
+  within about a minute (`sudo ./scripts/agent-models.sh` does the same).
 - How it works: the agent's gateway address gets a tag
   (`https://hermes-gateway:8443/m/<tag>`). The TLS gateway sends that agent's
   `POST /v1/runs` through connectors `/gateway/run/<tag>`, which adds `provider` and
@@ -910,3 +911,34 @@ Agents page > open the agent > **Change model**.
   key is missing or the model name is not accepted: press **Use server default** and
   check Settings > Keys. A task that was already part-way done on the old model may
   need to be restarted.
+
+## 29. A card for every AI provider, and connecting Meta (Muse)
+
+**Cards.** The Overview has a **Your AI providers** row and the Usage page has one
+card per provider. A provider gets a card when any agent's machine holds a key for
+it, an agent runs on it, or this server used it in the last 14 days. Nothing is set
+up by hand.
+
+- A plan whose provider reports it (MiniMax today) shows percent left and the reset.
+- Every other provider shows tokens, estimated spend and requests for the last 14
+  days, **as counted by this server's own Hermes**. Agents on their own machines are
+  listed on the card but their use is not in the figures.
+- "Ready" means a key is set up and no agent uses the provider yet.
+- Where the figures come from: Hermes `GET /api/analytics/models?days=14` (read in the
+  browser) and connectors `GET /usage` (which providers, which agents). New keys show
+  up at the next half-hourly model check.
+
+**Meta (Muse models).** The pinned Hermes includes Meta's Model API as a provider
+(`meta-ai`), so no extra install is needed.
+
+1. Get an API key from Meta's developer site for the Model API.
+2. Dashboard > Settings > **Keys** > find **Meta Model API** > paste the key > save.
+3. Agents > pick an agent on this server > **Change model** > **Refresh the list** >
+   choose Meta and a Muse model. To make it the default for every on-server agent,
+   use Settings > AI models instead.
+4. If Meta does not appear after a refresh, press **Restart Gateway** in the left
+   menu and refresh again.
+
+For an agent on its own machine, add the key on that machine (its own Hermes), then
+change its model from the Agents page as usual. Its Hermes needs to be a version that
+includes the Meta provider.

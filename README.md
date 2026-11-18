@@ -341,7 +341,7 @@ The updater takes a backup first, and if a step fails it stops and leaves the ru
 
 ### Update notifications and "Update now"
 
-Each install checks for updates on a schedule (`scripts/check-updates.sh`, every 6 hours) and, when a newer release is published, shows an **"Update available" banner on the dashboard Overview** with the current and latest version and a "what's changed" link.
+Each install checks for updates on a schedule (`scripts/check-updates.sh`, every hour) and, when a newer release is published, shows an **"Update available" banner on the dashboard Overview** with the current and latest version and a "what's changed" link.
 
 **Update now** on that banner runs the update from the dashboard, with no terminal: a backup is taken first, then the same `update.sh` runs on the server. The dashboard restarts and can be unavailable for a few minutes; the page reloads by itself when it is done. **Later** hides the banner for that release. **Nothing updates on its own**: it only happens when someone signed in to the dashboard presses the button, or when `update.sh` is run on the server. If an update does not finish, the banner says so and the services that were running keep running; the output is in `data/backup/update.log`.
 

@@ -51,3 +51,5 @@
 .sg-model{display:flex;flex-direction:column;gap:7px;border:1px solid var(--color-border,rgba(255,255,255,.1));padding:11px 13px}
 .sg-model-row{display:grid;grid-template-columns:minmax(120px,200px) minmax(160px,1fr) auto;gap:10px;align-items:center}
 @media (max-width:700px){.sg-model-row{grid-template-columns:minmax(0,1fr)}}
+.sg-linkbtn{background:none;border:0;padding:0;font:inherit;color:var(--color-primary,#25c9ee);cursor:pointer;text-decoration:underline}
+.sg-linkbtn:hover{opacity:.85}

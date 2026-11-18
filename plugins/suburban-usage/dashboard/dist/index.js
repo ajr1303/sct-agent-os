@@ -31,8 +31,31 @@
     function when(iso) { try { return new Date(iso).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" }); } catch (e) { return ""; } }
     function money(n) { return "$" + (n < 10 ? n.toFixed(2) : n.toFixed(0)); }
 
+    // Tokens and estimated spend per provider, from Hermes's own 14-day record on this server.
+    function provFam(slug) {
+      var s = String(slug || "").trim().toLowerCase(), F = ["minimax", "openai", "anthropic", "meta", "kimi", "alibaba", "tencent", "copilot", "xai"];
+      for (var i = 0; i < F.length; i++) if (s === F[i] || s.indexOf(F[i] + "-") === 0) return F[i];
+      return s;
+    }
+    function provStats(res) {
+      var out = {}, rows = (res && res.models) || [];
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i], k = provFam(r.provider); if (!k) continue;
+        var o = out[k] || (out[k] = { tokens: 0, cost: 0, calls: 0 });
+        o.tokens += (+r.input_tokens || 0) + (+r.output_tokens || 0);
+        o.cost += (+r.estimated_cost || 0); o.calls += (+r.api_calls || 0);
+      }
+      return out;
+    }
+    function provLabel(k) {
+      var L = { minimax: "MiniMax", anthropic: "Anthropic", openai: "OpenAI", openrouter: "OpenRouter", meta: "Meta", gemini: "Google Gemini", google: "Google Gemini", xai: "xAI", deepseek: "DeepSeek", nous: "Nous Portal" };
+      return L[k] || (k.charAt(0).toUpperCase() + k.slice(1)).replace(/-/g, " ");
+    }
+    function fmtN(n) { n = +n || 0; if (n >= 1e6) return (n / 1e6).toFixed(1) + "M"; if (n >= 1e3) return (n / 1e3).toFixed(1) + "k"; return String(n); }
+
     function Usage() {
       var s;
+      s = useState(null);  var byProv = s[0], setByProv = s[1];  // provider -> {tokens, cost, calls} on this server, 14 days
       s = useState(null);  var data = s[0], setData = s[1];
       s = useState(null);  var err = s[0], setErr = s[1];
       s = useState(null);  var edit = s[0], setEdit = s[1];      // provider id being set up
@@ -41,7 +64,13 @@
       s = useState(null);  var ferr = s[0], setFerr = s[1];
 
       function load() { return api("/usage").then(function (d) { setData(d); setErr(null); }).catch(function (e) { setErr(String(e.message || e)); }); }
-      useEffect(function () { load(); var t = setInterval(load, 60000); return function () { clearInterval(t); }; }, []);
+      function loadStats() {
+        try {
+          var a = SDK.api, pr = a && typeof a.getModelsAnalytics === "function" ? a.getModelsAnalytics(14) : null;
+          if (pr) Promise.resolve(pr).then(function (v) { setByProv(provStats(v)); }).catch(function () {});
+        } catch (e) {}
+      }
+      useEffect(function () { load(); loadStats(); var t = setInterval(function () { load(); loadStats(); }, 60000); return function () { clearInterval(t); }; }, []);
 
       function startEdit(p) { setEdit(p.id); setFerr(null); setF({ key: "", plan_name: p.plan_name || "", monthly_price: p.monthly_price != null ? String(p.monthly_price) : "" }); }
       function save(e) {
@@ -85,6 +114,19 @@
             h("button", { type: "button", className: "su-btn", onClick: function () { setEdit(null); } }, "Cancel"),
             h("button", { type: "submit", className: "su-btn su-primary", disabled: busy || (!p.configured && !f.key.trim()) }, busy ? "Checking…" : "Save")));
       }
+      // A provider with no plan lookup: show what this server itself counted.
+      function payg(p) {
+        var st = (byProv || {})[p.id], ag = p.agents || [], away = ag.filter(function (a) { return !a.local; }).length;
+        var tail = away ? " Agents on their own machines aren't included; their use is counted on those machines." : "";
+        if (st && st.tokens > 0) return h("div", null,
+          h("div", { className: "su-nums" },
+            h("div", null, h("b", null, fmtN(st.tokens)), h("span", null, "tokens, 14 days")),
+            h("div", null, h("b", null, money(st.cost)), h("span", null, "estimated spend")),
+            h("div", null, h("b", null, fmtN(st.calls)), h("span", null, "requests"))),
+          h("div", { className: "su-empty" }, "Counted by this server from its own runs. There is no \"percent left\" figure for " + p.label + " in this version." + tail));
+        if (ag.length) return h("div", { className: "su-empty" }, "No use on this server in the last 14 days." + tail);
+        return h("div", { className: "su-empty" }, "A key for " + p.label + " is set up" + (p.key_here ? "" : " on an agent's own machine") + ", and no agent uses it yet. To put an agent on it, open Agents, pick the agent and use Change model.");
+      }
       function card(p) {
         var u = p.usage, runs = data && data.runs;
         var per = (p.monthly_price && runs && runs.total) ? (p.monthly_price * (runs.days / 30)) / runs.total : null;
@@ -92,12 +134,12 @@
           h("div", { className: "su-card-h" },
             h("div", null,
               h("div", { className: "su-name" }, p.label),
-              h("div", { className: "su-plan" }, !p.supported ? "Usage not connected yet" : p.configured ? ((p.plan_name || "Plan") + (p.monthly_price ? " · " + money(p.monthly_price) + " a month" : "")) : "Not set up")),
+              h("div", { className: "su-plan" }, !p.supported ? "Counted on this server" : p.configured ? ((p.plan_name || "Plan") + (p.monthly_price ? " · " + money(p.monthly_price) + " a month" : "")) : "Not set up")),
             edit === p.id || !p.supported ? null : h("button", { type: "button", className: "su-btn", onClick: function () { startEdit(p); } }, p.configured ? "Edit" : "Set up")),
           p.agents && p.agents.length ? h("div", { className: "su-agents" },
             h("span", { className: "su-agents-l" }, p.agents.length + (p.agents.length === 1 ? " agent" : " agents") + " on this provider: "),
             p.agents.map(function (a, i) { return h("span", { key: a.name }, (i ? ", " : "") + a.name, a.model ? h("span", { className: "su-dim" }, " (" + a.model + ")") : null); })) : null,
-          !p.supported ? h("div", { className: "su-empty" }, "Live usage for " + p.label + " isn't connected in this version, so there are no figures to show yet. The agents above were read from each agent's own Hermes.") : null,
+          !p.supported ? payg(p) : null,
           edit === p.id ? form(p) : null,
           p.supported && !p.configured && edit !== p.id ? h("div", { className: "su-empty" }, "Add this plan's key to see how much is used and what is left.") : null,
           p.configured && u && !u.ok ? h("div", { className: "su-msg" }, u.error) : null,
@@ -112,10 +154,10 @@
       }
       return h("div", { className: "su-wrap" },
         h("div", { className: "su-h1" }, "Usage"),
-        h("div", { className: "su-sub" }, "How much of your AI plan the team has used, what is left, and when it resets. Read live from the provider."),
+        h("div", { className: "su-sub" }, "One card for each AI provider you have set up: what is left on a plan where the provider reports it, and what this server has used otherwise."),
         err ? h("div", { className: "su-msg" }, err) : null,
         data == null ? h("div", { className: "su-empty" }, "Loading…")
-          : (data.providers || []).length === 0 ? h("div", { className: "su-empty" }, "No agent has reported an AI provider yet. A card appears here for each provider your agents use, within about half an hour of an agent being added.")
+          : (data.providers || []).length === 0 ? h("div", { className: "su-empty" }, "No AI provider has been reported yet. A card appears here for each provider you have a key for, within about half an hour of adding it.")
           : h("div", { className: "su-cards" }, (data.providers || []).map(card)));
     }
     try { PLUGINS.register("suburban-usage", Usage); console.info(TAG, "registered"); }

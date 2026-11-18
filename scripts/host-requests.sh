@@ -65,6 +65,12 @@ if [ -f data/backup/update-check-request ]; then
   [ -x scripts/check-updates.sh ] && ./scripts/check-updates.sh >/dev/null 2>&1 || true
 fi
 
+# --- "Refresh the list" under Change model on the Agents page ---------------------------
+if [ -f data/backup/models-refresh-request ]; then
+  rm -f data/backup/models-refresh-request
+  [ -x scripts/agent-models.sh ] && ./scripts/agent-models.sh >/dev/null 2>&1 || true
+fi
+
 # --- Sign-in name, for the Account page to show (not a secret) -------------------------
 if [ -f .env ] && [ -d data/backup ]; then
   signin=$(grep -m1 '^DASHBOARD_USER=' .env | cut -d= -f2-); [ -n "$signin" ] || signin="admin"

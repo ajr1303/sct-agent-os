@@ -14,6 +14,7 @@
     var h = SDK.React.createElement;
     var hooks = SDK.hooks || {};
     var useState = hooks.useState, useEffect = hooks.useEffect;
+    var rfFor = null;
 
     function api(path, opts) {
       opts = opts || {};
@@ -57,6 +58,7 @@
       s = useState(null);  var mi = s[0], setMi = s[1];            // model-change info for the open agent
       s = useState(null);  var mSel = s[0], setMSel = s[1];        // {provider, model} picked
       s = useState(false); var mAsk = s[0], setMAsk = s[1];
+      s = useState("");    var rf = s[0], setRf = s[1];            // "", "wait" or the outcome of "Refresh the list"
 
       function load() {
         return api("/orchestration/team").then(function (d) { setData(d); setErr(null); return d; })
@@ -65,6 +67,24 @@
       function loadModel(id) {
         return api("/orchestration/team/" + encodeURIComponent(id) + "/model").then(function (m) { setMi(m); return m; })
           .catch(function () { setMi({ can_change: false, why_not: null, options: [] }); });
+      }
+      // Re-read which providers and models each agent can use, without waiting for the half-hourly run.
+      function refreshModels(id) {
+        setRf("wait"); rfFor = id;
+        var before = JSON.stringify((mi && mi.options) || []);
+        api("/orchestration/team/models/refresh", { method: "POST" }).then(function () {
+          var tries = 0;
+          (function again() {
+            setTimeout(function () {
+              if (rfFor !== id) return;      // another agent was opened meanwhile
+              loadModel(id).then(function (m) {
+                tries++;
+                if (m && JSON.stringify(m.options || []) !== before) { setRf("The list is up to date."); return; }
+                if (tries < 9) again(); else setRf("Nothing new was found. If you added a key a moment ago, press Restart Gateway in the left menu and try again.");
+              });
+            }, 15000);
+          })();
+        }).catch(function (e) { setRf(String(e.message || e)); });
       }
       function pollModel(id, wait) {
         setTimeout(function () {
@@ -127,7 +147,11 @@
             : mAsk
             ? "This restarts " + det.name + "'s gateway on its own machine, which takes about a minute. If the new model doesn't come up, the previous one is restored."
             : mi.busy ? det.name + " is working on a task right now. Change its model when it is idle."
-            : "Only providers that machine already has a key for are listed. To use another provider, add its key on the machine first."));
+            : "Only providers that machine already has a key for are listed. To use another provider, add its key on the machine first."),
+          mAsk || running ? null : h("div", { className: "sg-hint" }, "Just added a key? ",
+            rf === "wait" ? "Reading the list again. This takes about a minute…"
+              : h("button", { type: "button", className: "sg-linkbtn", onClick: function () { refreshModels(det.id); } }, "Refresh the list"),
+            rf && rf !== "wait" ? " " + rf : null));
       }
       function toForm(d) {
         return { name: d.name || "", title: d.title || "", role: d.role || "general", reports_to: d.reports_to || "",
@@ -135,7 +159,7 @@
       }
       function open(id) {
         setSel(id); setDet(null); setF(null); setMsg(null);
-        setMi(null); setMSel(null); setMAsk(false); loadModel(id);
+        setMi(null); setMSel(null); setMAsk(false); setRf(""); rfFor = null; loadModel(id);
         api("/orchestration/team/" + encodeURIComponent(id)).then(function (d) { setDet(d); setF(toForm(d)); })
           .catch(function (e) { setDet({ id: id, error: String(e.message || e) }); });
       }

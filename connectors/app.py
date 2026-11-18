@@ -1941,6 +1941,7 @@ def _minimax_usage(key):
 
 
 _PROVIDER_LABELS = {"minimax": "MiniMax", "anthropic": "Anthropic", "openai": "OpenAI", "openrouter": "OpenRouter",
+                    "meta": "Meta", "google": "Google Gemini", "groq": "Groq", "mistral": "Mistral",
                     "gemini": "Google Gemini", "vertex": "Google Vertex AI", "xai": "xAI", "deepseek": "DeepSeek",
                     "nous": "Nous Portal", "bedrock": "Amazon Bedrock", "copilot": "GitHub Copilot", "zai": "Z.ai",
                     "huggingface": "Hugging Face", "nvidia": "NVIDIA", "fireworks": "Fireworks", "lmstudio": "LM Studio"}
@@ -1950,18 +1951,20 @@ def _provider_family(slug):
     """Fold a Hermes provider slug into the company it bills through, so 'minimax-oauth'
     and 'minimax' share one card and 'openai-api' / 'openai-codex' share another."""
     s = str(slug or "").strip().lower()
-    for fam in ("minimax", "openai", "anthropic", "kimi", "alibaba", "tencent", "copilot", "xai"):
+    for fam in ("minimax", "openai", "anthropic", "meta", "kimi", "alibaba", "tencent", "copilot", "xai"):
         if s == fam or s.startswith(fam + "-"):
             return fam
     return s
 
 
-def _providers_in_use():
-    """family -> [{name, model}] for every agent whose own Hermes reported a provider."""
+def _providers_known():
+    """(in_use, configured). in_use: family -> [{name, model, local}] for every agent whose
+    own Hermes reported a provider. configured: family -> {label, here, elsewhere} for every
+    provider some agent's machine holds a key for, whether or not anything runs on it."""
     models = _agent_models()
     if not models:
-        return {}
-    names = {}
+        return {}, {}
+    names, local = {}, {}
     try:
         cid = _pc_company_id() if _pc_up() else None
         if cid:
@@ -1969,37 +1972,55 @@ def _providers_in_use():
             for a in (ag if isinstance(ag, list) else (ag.get("agents") or ag.get("data") or [])):
                 if isinstance(a, dict) and str(a.get("status")) != "terminated":
                     names[str(a.get("id"))] = a.get("name") or "Agent"
+                    ac = a.get("adapterConfig") if isinstance(a.get("adapterConfig"), dict) else {}
+                    local[str(a.get("id"))] = bool(_agent_host(ac)[1])
     except Exception:
-        return {}
+        return {}, {}
     out = {}
     for aid, m in models.items():
         if aid in names and m.get("provider"):
-            out.setdefault(_provider_family(m["provider"]), []).append({"name": names[aid], "model": m.get("model")})
+            out.setdefault(_provider_family(m["provider"]), []).append(
+                {"name": names[aid], "model": m.get("model"), "local": local.get(aid, False)})
     for fam in out:
         out[fam].sort(key=lambda x: str(x["name"]).lower())
-    return out
+    conf = {}
+    for aid in names:
+        for o in _agent_model_options(aid):
+            fam = _provider_family(o.get("slug"))
+            if not fam or fam in ("custom", "local"):
+                continue
+            c = conf.setdefault(fam, {"label": str(o.get("name") or "")[:60], "here": False, "elsewhere": False})
+            c["here" if local.get(aid) else "elsewhere"] = True
+    return out, conf
+
+
+def _providers_in_use():
+    return _providers_known()[0]
 
 
 @app.get("/usage")
 def usage_get(_auth=Depends(require_auth)):
     out = {"providers": []}
-    in_use = _providers_in_use()
-    # One card per provider an agent is actually on, plus any plan already set up here.
-    order = [p for p in USAGE_PROVIDERS] + sorted(f for f in in_use if f not in USAGE_PROVIDERS)
+    in_use, conf = _providers_known()
+    # One card per provider an agent is on or a key is set up for, plus any plan set up here.
+    rest = sorted(set(in_use) | set(conf), key=lambda f: (0 if in_use.get(f) else 1, f))
+    order = [p for p in USAGE_PROVIDERS] + [f for f in rest if f not in USAGE_PROVIDERS]
     for pid in order:
         meta = USAGE_PROVIDERS.get(pid)
         agents = in_use.get(pid, [])
+        c = conf.get(pid) or {}
         if not meta:
-            out["providers"].append({"id": pid, "label": _PROVIDER_LABELS.get(pid) or pid.replace("-", " ").title(),
+            out["providers"].append({"id": pid, "label": _PROVIDER_LABELS.get(pid) or c.get("label") or pid.replace("-", " ").title(),
                                      "supported": False, "configured": False, "plan_name": None, "monthly_price": None,
-                                     "usage": None, "agents": agents})
+                                     "usage": None, "agents": agents, "key_here": bool(c.get("here")),
+                                     "key_elsewhere": bool(c.get("elsewhere"))})
             continue
         row = _usage_row(pid)
         if not agents and not (row and row[0]):
             continue      # nobody uses it and nothing is set up: no card
         item = {"id": pid, "label": meta["label"], "supported": True, "configured": bool(row and row[0]),
                 "plan_name": row[1] if row else None, "monthly_price": row[2] if row else None, "usage": None,
-                "agents": agents}
+                "agents": agents, "key_here": bool(c.get("here")), "key_elsewhere": bool(c.get("elsewhere"))}
         if row and row[0]:
             hit = _USAGE_CACHE.get(pid)
             if hit and (datetime.datetime.utcnow() - hit[0]).total_seconds() < 60:
@@ -2158,6 +2179,17 @@ def system_update_request(_auth=Depends(require_auth)):
         os.makedirs(os.path.dirname(_UPD_REQ), exist_ok=True)
         with open(_UPD_REQ, "w", encoding="utf-8") as f:
             f.write(datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ") + "\n")
+    return {"requested": True}
+
+
+@app.post("/orchestration/team/models/refresh")
+def team_models_refresh(_auth=Depends(require_auth)):
+    """Ask the server to re-read which providers and models each agent can use, now
+    (it otherwise does so every half hour). Used after adding a provider key."""
+    req = os.path.join(os.path.dirname(_UPD_REQ), "models-refresh-request")
+    os.makedirs(os.path.dirname(req), exist_ok=True)
+    with open(req, "w", encoding="utf-8") as f:
+        f.write(datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ") + "\n")
     return {"requested": True}
 
 
