@@ -198,6 +198,22 @@
       }
       function fact(label, val) { return h("div", { className: "sg-fact" }, h("div", { className: "sg-fact-l" }, label), h("div", { className: "sg-fact-v" }, val)); }
 
+      // Agents on their own machines reach the task tools over HTTP; their instructions have to say so.
+      function taskTools(ro) {
+        var note = det.task_tools_note;
+        if (!note) return null;
+        var has = String(f.instructions || "").indexOf("--- Agent OS task tools ---") >= 0;
+        if (has) return h("div", { className: "sg-note" }, "This agent's instructions tell it how to split, finish and pass on tasks.");
+        return h("div", { className: "sg-note" },
+          h("div", null, "This agent runs on its own machine, so it can't split a big task, pass one to a colleague or ask you a question unless its instructions say how. Add the note, then save."),
+          ro ? null : h("div", { className: "sg-dacts", style: { marginTop: "10px" } },
+            h("button", { type: "button", className: "sg-btn", disabled: busy, onClick: function () {
+              setF(function (cur) { var o = {}; for (var k in cur) o[k] = cur[k];
+                o.instructions = String(cur.instructions || "").replace(/\s+$/, "") + (cur.instructions ? "\n\n" : "") + note + "\n"; return o; });
+              setMsg(null);
+            } }, "Add task tools to instructions")));
+      }
+
       function detail() {
         if (!sel) return h("div", { className: "sg-detail sg-empty" }, "Select an agent to see and edit its details.");
         if (!det) return h("div", { className: "sg-detail sg-empty" }, "Loading…");
@@ -236,6 +252,7 @@
             h("textarea", { className: "sg-in sg-ta sg-instr", rows: 16, value: f.instructions, disabled: ro, spellCheck: false,
               placeholder: "How this agent should work: its job, its limits, how it hands work over.", onChange: set("instructions") }),
             ins.other_files ? "This agent has " + ins.other_files + " more instruction file" + (ins.other_files === 1 ? "" : "s") + " in Paperclip. Only the main one is edited here." : null),
+          taskTools(ro),
           msg ? h("div", { className: "sg-msg " + (msg.ok ? "sg-msg-ok" : "sg-msg-err") }, msg.text) : null,
           canEdit ? h("div", { className: "sg-save" },
             h("span", { className: "sg-hint" }, "Gateway address, keys, budgets and run history are managed in Paperclip."),

@@ -2,6 +2,17 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.50.0] — 2026-11-18
+
+- **Agents on their own servers can split, finish and pass on tasks.** Until now only
+  agents running on the Agent OS server had these tools, so an invited agent given a
+  big job could not break it into parts. Invited agents now reach the same task tools
+  on the team board's address, signed in with the Paperclip key they already hold.
+  Each agent can only act on tasks assigned to it.
+- **One step for agents you invited earlier:** Agents > pick the agent > **Add task
+  tools to instructions** > Save changes. New invites and tasks filed from Chat
+  include the instructions already.
+
 ## [0.49.4] — 2026-11-18
 
 - **Pictures show in Chat wherever the assistant saved them.** Edited photos and other

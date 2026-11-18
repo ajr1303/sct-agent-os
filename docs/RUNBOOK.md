@@ -674,7 +674,7 @@ If the team board refuses to move a task, a linked task ("Handed over: …") is 
 for the colleague and the original is left waiting on it.
 
 Agents still cannot create fresh tasks of their own; only the chat assistant and the
-owner do that. Agents on their own servers do not have this tool.
+owner do that. Agents on their own servers reach this tool over HTTP (section 22a).
 
 ## 21. Fewer "Needs you" items, and the daily task summary
 
@@ -686,8 +686,8 @@ owner do that. Agents on their own servers do not have this tool.
   genuine choices. Untick it to have agents ask about everything again.
 - The check is on the wording of the question, so it catches the common
   "please verify and close" pattern and lets anything that names a real decision through.
-- It applies to agents that run on this server. Agents on their own servers follow
-  their own instructions; give them the same rule there.
+- It applies to agents that run on this server, and to agents on their own servers
+  when they ask through the task tools (section 22a).
 - **Automations > Daily task summary.** "Show today's summary" previews it. "Create the
   workflow" adds "Agent OS: daily task summary" to n8n, switched off: add an email
   (or Telegram, Slack) step using `{{ $json.text }}` and switch it on. To include it
@@ -720,8 +720,44 @@ things now prevent that for agents on this server:
 - The stuck-agent watch's reminder now tells the agent to split instead of retrying
   the whole job.
 
-New parts count toward the hourly task limit. Agents on their own servers, and tasks
-created directly in Paperclip, are not covered.
+New parts count toward the hourly task limit. Tasks created directly in Paperclip do
+not carry the "how to work this task" lines; the agent's instructions have to cover it.
+
+## 22a. Task tools for agents on their own servers
+
+An invited agent runs on its own machine and cannot reach the tool endpoint used by
+agents on this server. It gets the same four task tools (`split_task`,
+`complete_task`, `hand_off_task`, `need_owner_input`, plus `list_agents`) on the team
+board's public address:
+
+- `GET  https://<paperclip address>/api/agent-os/` lists the tools and their fields.
+- `POST https://<paperclip address>/api/agent-os/call/<tool>` with a JSON body. Reply:
+  `{"ok": true, "result": "..."}` or `{"ok": false, "error": "..."}`.
+- `POST https://<paperclip address>/api/agent-os/mcp` is the same set as an MCP server
+  (streamable HTTP), for runtimes that prefer to add it as one.
+
+How it is protected:
+- The caller sends **its own Paperclip API key** as the Bearer token. Agent OS asks
+  Paperclip whose key it is and acts only as that agent; a caller cannot name another
+  agent. Board keys, gateway keys and keys from another company are refused.
+- Same limits as on this server: only the agent a task is assigned to can change it,
+  2 to 8 parts, a part cannot be split again, hand-off rules, hourly task limit.
+- 60 calls a minute per agent; repeated refused keys are slowed for everyone for a
+  minute. An identity is remembered for five minutes, so a revoked key can keep
+  working for up to that long.
+- These routes skip the browser sign-in on that address (agents have no browser).
+  If Cloudflare Access protects the Paperclip hostname, agents already need a service
+  token for it; nothing changes there.
+
+How an agent learns about it:
+- Tasks filed from Chat or by a split for an agent on its own server carry the
+  instructions, and so does the stuck-agent reminder and the invite text.
+- For agents invited before this version: **Agents > pick the agent > "Add task tools
+  to instructions" > Save changes.** Do this once per agent. Without it, an agent only
+  learns the address from a task that carries the note.
+- The address in the note comes from `PAPERCLIP_PUBLIC_URL`, or the dashboard address
+  with `-paperclip` added. An agent that reaches Paperclip some other way (a private
+  network address that bypasses the proxy) will not find these routes.
 
 ## 23. "Honcho memory is off for this session" in chat
 

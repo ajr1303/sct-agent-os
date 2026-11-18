@@ -1559,6 +1559,7 @@ def team_get(aid: str, _auth=Depends(require_auth)):
     row = _agent_row(d if isinstance(d, dict) else {})
     row["instructions"] = _agent_instructions(aid, d.get("adapterConfig") if isinstance(d, dict) else {})
     row["can_edit"] = _pc_mode() != "external"
+    row["task_tools_note"] = "" if (row.get("local") or _pc_mode() == "external") else _remote_note(_pc_public_base())
     row.update(_agent_models().get(str(row["id"])) or {"model": None, "provider": None, "hermes_version": None,
                                                          "model_ok": False, "model_error": None, "model_checked_at": None})
     return row
@@ -2945,7 +2946,11 @@ def stuck_watch_run(dry_run=False):
                              {"body": "Automatic check: this task %s for %d minutes. Please pick it up and continue. "
                                       "If it is too big to finish in one run, do not try again in one go: do the "
                                       "first part, post it, and call split_task to file the rest as smaller tasks. "
-                                      "If something is blocking you, say what it is and who can unblock it." % (why, mins)},
+                                      "If something is blocking you, say what it is and who can unblock it.%s"
+                                      % (why, mins, "" if _agent_host(a.get("adapterConfig") or {})[1] else
+                                         " If you have no split_task tool: GET %s/api/agent-os/ with your Paperclip "
+                                         "API key lists the task tools you can call over HTTP."
+                                         % (_pc_public_base() or "<your Paperclip API address>"))},
                              what="nudge the task")
                 except Exception:
                     pass
@@ -4085,6 +4090,9 @@ def _build_invite_prompt(onboarding_url, note=""):
         "ws:// or wss:// gateway URL and `headers[\"x-openclaw-token\"]` to your gateway token.",
         "",
         "After connecting, follow the full onboarding instructions in onboarding.txt.",
+        "",
+        "Once you have your Paperclip API key, keep this note with your instructions:",
+        _remote_note(base),
     ]
     return "\n".join(lines)
 
@@ -4762,10 +4770,16 @@ def _create_issue(cid, agent, title, description, priority, part=False):
         _task_times.append(now)
     pr = priority if priority in ("low", "medium", "high", "urgent") else "medium"
     description = description[:6000] + "\n\n" + (_TASK_PART_NOTE if part else _TASK_SIZE_NOTE)
+    try:
+        ac = agent.get("adapterConfig") if isinstance(agent.get("adapterConfig"), dict) else {}
+        if not _agent_host(ac)[1]:
+            description = description + "\n\n" + _remote_note(_pc_public_base())
+    except Exception:
+        pass
     biz = _business_text()
     if biz:
         description = description + "\n\n--- About the business ---\n" + biz[:2000]
-    body = {"title": title[:200], "description": description[:8000],
+    body = {"title": title[:200], "description": description[:12000],
             "assigneeAgentId": agent["id"], "priority": pr}
     try:
         d = _pc_send("POST", "/api/companies/" + _safe_id(cid) + "/issues", body, what="create the task")
@@ -6730,7 +6744,7 @@ MCP_TOOLS = {
 }
 
 
-def _mcp_rpc(msg, scope):
+def _mcp_rpc(msg, scope, agent=None):
     if not isinstance(msg, dict):
         return {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid request"}}
     mid, method, params = msg.get("id"), msg.get("method"), msg.get("params") or {}
@@ -6739,6 +6753,14 @@ def _mcp_rpc(msg, scope):
     def ok(result):
         return {"jsonrpc": "2.0", "id": mid, "result": result}
     visible = {n: t for n, t in MCP_TOOLS.items() if scope == "chat" or t[1] == "all"}
+    if agent is not None:
+        visible = _remote_tools()
+        if method == "initialize":
+            want = params.get("protocolVersion")
+            return ok({"protocolVersion": want if want in _MCP_VERSIONS else _MCP_VERSIONS[0],
+                       "capabilities": {"tools": {"listChanged": False}},
+                       "serverInfo": {"name": "agent-os-tasks", "version": "1.0"},
+                       "instructions": _REMOTE_HELP})
     if method == "initialize":
         want = params.get("protocolVersion")
         return ok({"protocolVersion": want if want in _MCP_VERSIONS else _MCP_VERSIONS[0],
@@ -6768,6 +6790,8 @@ def _mcp_rpc(msg, scope):
         if name not in visible:
             return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": "Unknown tool"}}
         args = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
+        if agent is not None:
+            args = dict(args, agent_id=str(agent["id"]))
         try:
             text, is_err = visible[name][0](args), False
         except ToolError as e:
@@ -6808,6 +6832,189 @@ async def mcp_chat(request: Request):
 async def mcp_agent(request: Request):
     """Subset for working agents (n8n tools only, no delegation)."""
     return await _mcp_http(request, "agent")
+
+
+# --- Task tools for agents that run on their own machines --------------------------------
+# An agent on another machine cannot reach the tool endpoint above (it is internal and
+# uses one shared token). It does hold its own Paperclip API key, so these routes accept
+# that key, ask Paperclip whose it is, and act only as that agent. The proxy publishes
+# them on the team board's address under /api/agent-os/.
+_REMOTE_TOOL_NAMES = ("list_agents", "complete_task", "need_owner_input", "split_task", "hand_off_task")
+_REMOTE_HELP = ("Task tools for an agent working an assigned task: split_task when the job will not fit in "
+                "one run, complete_task when it is finished, hand_off_task to pass it to a colleague, "
+                "need_owner_input when only the owner can decide, list_agents for colleagues' names. You "
+                "are identified by your Paperclip API key, so you never give an agent id. They only work "
+                "on tasks assigned to you.")
+REMOTE_TOOL_CALLS_PER_MIN = 60
+_remote_lock = threading.Lock()
+_remote_ids = {}      # sha256(key) -> (agent, expires)
+_remote_fails = []    # times of refused keys, all callers
+_remote_calls = {}    # agent id -> times
+
+
+def _remote_tools():
+    """The task tools, with agent_id taken out of what the caller fills in."""
+    out = {}
+    for n in _REMOTE_TOOL_NAMES:
+        fn, scope, desc, schema = MCP_TOOLS[n]
+        sch = dict(schema)
+        sch["properties"] = {k: v for k, v in (schema.get("properties") or {}).items() if k != "agent_id"}
+        sch["required"] = [k for k in (schema.get("required") or []) if k != "agent_id"]
+        out[n] = (fn, scope, desc, sch)
+    return out
+
+
+def _remote_agent(request):
+    """Who is calling, by their own Paperclip key. Raises 401/429/503."""
+    if _pc_mode() == "external":
+        raise HTTPException(status_code=404, detail="Not available on this install.")
+    auth = request.headers.get("authorization") or ""
+    key = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+    if not 16 <= len(key) <= 4096 or any(ord(c) < 33 or ord(c) > 126 for c in key):
+        raise HTTPException(status_code=401, detail="Send your own Paperclip API key as 'Authorization: Bearer <key>'.")
+    h = hashlib.sha256(key.encode()).hexdigest()
+    now = time.time()
+    with _remote_lock:
+        hit = _remote_ids.get(h)
+        if hit and hit[1] > now:
+            return hit[0]
+        _remote_fails[:] = [t for t in _remote_fails if now - t < 60]
+        if len(_remote_fails) >= 120:
+            raise HTTPException(status_code=429, detail="Too many refused keys. Wait a minute.")
+    try:
+        with httpx.Client(timeout=10.0, follow_redirects=False) as c:
+            r = c.get(PAPERCLIP_URL + "/api/agents/me", headers={"Authorization": "Bearer " + key})
+    except Exception:
+        raise HTTPException(status_code=503, detail="The team board is not answering. Try again shortly.")
+    d = None
+    if r.status_code == 200:
+        try:
+            d = r.json()
+        except Exception:
+            d = None
+    if r.status_code >= 500:
+        raise HTTPException(status_code=503, detail="The team board is not answering. Try again shortly.")
+    ok = isinstance(d, dict) and re.match(r"^[A-Za-z0-9-]{1,80}$", str(d.get("id") or ""))
+    if ok:
+        try:
+            cid = _pc_company_id()
+        except Exception:
+            cid = None
+        if not cid or str(d.get("companyId") or "") != str(cid):
+            ok = False
+    if not ok:
+        with _remote_lock:
+            _remote_fails.append(now)
+        raise HTTPException(status_code=401, detail="That key is not an agent key for this team. Use the Paperclip "
+                            "API key you were given when you joined, not a gateway key.")
+    agent = {"id": str(d["id"]), "name": str(d.get("name") or "Agent")[:80]}
+    with _remote_lock:
+        if len(_remote_ids) > 500:
+            _remote_ids.clear()
+        _remote_ids[h] = (agent, now + 300)
+    return agent
+
+
+def _remote_meter(agent):
+    now = time.time()
+    with _remote_lock:
+        ts = [t for t in _remote_calls.get(agent["id"], []) if now - t < 60]
+        if len(ts) >= REMOTE_TOOL_CALLS_PER_MIN:
+            raise HTTPException(status_code=429, detail="Too many calls. Wait a minute.")
+        ts.append(now)
+        _remote_calls[agent["id"]] = ts
+
+
+def _remote_note(base=""):
+    """What an agent on its own machine needs to be told. Carries no secret."""
+    base = (base or "").rstrip("/") or "<your Paperclip API address>"
+    return ("--- Agent OS task tools ---\n"
+            "You run on your own machine, so you reach the task tools over HTTP with your own Paperclip API "
+            "key (the one you already use for the board). Send JSON with the header "
+            "'Authorization: Bearer <your Paperclip API key>'.\n"
+            "- Job too big for one run: POST " + base + "/api/agent-os/call/split_task with "
+            "{\"task\": \"<task key>\", \"parts\": [{\"title\": \"...\", \"description\": \"...\", \"agent\": "
+            "\"<optional colleague name>\"}]} (2 to 8 parts; a part cannot be split again). This files the "
+            "parts and closes the task.\n"
+            "- Finished: POST " + base + "/api/agent-os/call/complete_task with {\"task\": \"<task key>\", "
+            "\"summary\": \"...\"}.\n"
+            "- Not yours to finish: POST " + base + "/api/agent-os/call/hand_off_task with {\"task\": "
+            "\"<task key>\", \"to\": \"<colleague name>\", \"reason\": \"...\"}.\n"
+            "- Only the owner can decide: POST " + base + "/api/agent-os/call/need_owner_input with "
+            "{\"task\": \"<task key>\", \"question\": \"...\"}.\n"
+            "- GET " + base + "/api/agent-os/ lists the tools and their exact fields. The same tools are "
+            "an MCP server at " + base + "/api/agent-os/mcp.\n"
+            "Do not guess at other board endpoints to split a task.")
+
+
+def _pc_public_base():
+    v = (os.environ.get("PAPERCLIP_PUBLIC_URL") or "").strip().rstrip("/")
+    h = _gate_url_host(v) if v else ""
+    if v.startswith("https://") and "." in h:
+        return v
+    dash = _gate_url_host(os.environ.get("DASHBOARD_PUBLIC_HOST") or "")
+    label, _, zone = dash.partition(".")
+    if label and "." in zone:
+        return "https://%s-paperclip.%s" % (label, zone)
+    return ""
+
+
+@app.get("/agent-tools")
+@app.get("/agent-tools/")
+def agent_tools_help(request: Request):
+    agent = _remote_agent(request)
+    _remote_meter(agent)
+    return {"you": agent["name"], "how": "POST /api/agent-os/call/<tool> with a JSON body of that tool's fields. "
+            "Reply: {\"ok\": true, \"result\": \"...\"} or {\"ok\": false, \"error\": \"...\"}. MCP: POST /api/agent-os/mcp.",
+            "about": _REMOTE_HELP,
+            "tools": [{"name": n, "description": t[2], "fields": t[3]} for n, t in _remote_tools().items()]}
+
+
+@app.post("/agent-tools/call/{name}")
+async def agent_tools_call(name: str, request: Request):
+    agent = _remote_agent(request)
+    _remote_meter(agent)
+    tools = _remote_tools()
+    if name not in tools:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "No such tool. GET /api/agent-os/ lists them."})
+    try:
+        raw = await request.body()
+        args = json.loads(raw) if raw.strip() else {}
+    except Exception:
+        args = None
+    if not isinstance(args, dict):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Send a JSON object with the tool's fields."})
+    # Common wrappers an agent may guess at.
+    if isinstance(args.get("arguments"), dict) and len(args) == 1:
+        args = args["arguments"]
+    args = dict(args, agent_id=agent["id"])
+    from starlette.concurrency import run_in_threadpool
+    try:
+        text = await run_in_threadpool(tools[name][0], args)
+    except ToolError as e:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"ok": False, "error": "Tool failed: " + _scrub_secrets(str(e))[:200]})
+    return {"ok": True, "result": str(text)}
+
+
+@app.api_route("/agent-tools/mcp", methods=["GET", "POST", "DELETE"])
+async def agent_tools_mcp(request: Request):
+    agent = _remote_agent(request)
+    if request.method != "POST":
+        return Response(status_code=405, headers={"Allow": "POST"})
+    _remote_meter(agent)
+    try:
+        payload = json.loads(await request.body())
+    except Exception:
+        return JSONResponse(status_code=400, content={"jsonrpc": "2.0", "id": None,
+                                                      "error": {"code": -32700, "message": "Parse error"}})
+    from starlette.concurrency import run_in_threadpool
+    if isinstance(payload, list):
+        outs = [o for o in [await run_in_threadpool(_mcp_rpc, m, "agent", agent) for m in payload[:20]] if o]
+        return JSONResponse(outs) if outs else Response(status_code=202)
+    out = await run_in_threadpool(_mcp_rpc, payload, "agent", agent)
+    return JSONResponse(out) if out else Response(status_code=202)
 
 
 class BusinessProfile(BaseModel):

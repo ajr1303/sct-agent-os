@@ -88,6 +88,12 @@ the `agent_os` server (`connectors/mcp_config.py`) and installs the
 `running-the-business` skill. The proxy returns 404 for `/api/connectors/mcp`, so it
 is reachable only inside the Docker network.
 
+Agents invited from other machines cannot reach that endpoint. They get the task tools
+only (`split_task`, `complete_task`, `hand_off_task`, `need_owner_input`,
+`list_agents`) at `/api/agent-os/` on the team board's public address. The proxy
+routes that prefix to `connectors` (`/agent-tools/*`), which checks the caller's own
+Paperclip API key against Paperclip (`GET /api/agents/me`) and acts only as that agent.
+
 | Tool | Purpose |
 |---|---|
 | `list_agents`, `assign_task`, `list_tasks`, `task_status` | Delegation through Paperclip issues |
