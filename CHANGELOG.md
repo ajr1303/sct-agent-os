@@ -2,6 +2,16 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.65.1] — 2026-11-19
+
+### Fixed
+- Model advice, **Show the steps**: the commands edited the config file by hand, which
+  does nothing on installs whose file keeps its settings under an `llm:` block that
+  Hermes never reads. They now use `hermes config set model.default`, print the value
+  before and after, and end with a log check that shows the model really used.
+- The server-driven model change writes `model.default` again in every case (Hermes
+  reads it first), instead of guessing the key from the file's layout.
+
 ## [0.65.0] — 2026-11-19
 
 ### Changed

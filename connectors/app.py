@@ -1671,7 +1671,7 @@ BEFORE=$(cur); [ -n "$BEFORE" ] || { echo "ERR The gateway on that machine did n
 WANT_P="${PROVIDER:-${BEFORE%%|*}}"
 cp -p "$CFG" "$BAK" || { echo "ERR Could not back up the Hermes config, so nothing was changed."; exit 12; }
 undo() { cp -p "$BAK" "$CFG"; }
-"$H" config set "model.$MKEY" "$MODEL" >/dev/null 2>&1 || { undo; echo "ERR This Hermes version could not set the model from a command. Nothing was changed."; exit 13; }
+"$H" config set model.default "$MODEL" >/dev/null 2>&1 || { undo; echo "ERR This Hermes version could not set the model from a command. Nothing was changed."; exit 13; }
 if [ -n "$PROVIDER" ] && [ "$PROVIDER" != "${BEFORE%%|*}" ]; then
   "$H" config set model.provider "$PROVIDER" >/dev/null 2>&1 || { undo; echo "ERR This Hermes version could not set the provider from a command. Nothing was changed."; exit 13; }
 fi
@@ -6754,15 +6754,19 @@ def _tier_for(provider, model):
 
 
 def _manual_model_commands(old, new):
-    """Terminal steps for a machine this server cannot change itself. Works for both config layouts."""
-    return ("CFG=~/.hermes/config.yaml\n"
-            "cp $CFG $CFG.before-change\n"
-            "sed -i -E 's/^([[:space:]]+(default|model):[[:space:]]*)%s[[:space:]]*$/\\1%s/' $CFG\n"
-            "diff $CFG.before-change $CFG        # should show one changed line\n"
+    """Terminal steps for a machine this server cannot change itself. Uses Hermes' own
+    command, because config files differ between installs: some keep an "llm:" block that
+    Hermes never reads, so editing the file by hand can change nothing at all."""
+    return ("H=$(command -v hermes || echo ~/.hermes/node_modules/hermes-agent/runtime/hermes-agent/venv/bin/hermes)\n"
+            "$H config get model.default          # what it uses now (\"not set\" means Hermes' own default)\n"
+            "cp ~/.hermes/config.yaml ~/.hermes/config.yaml.before-change\n"
+            "$H config set model.default %s\n"
+            "$H config get model.default          # should now print %s\n"
             "SVC=$(systemctl list-units --type=service --no-legend | grep -i -E 'hgw|hermes' | awk '{print $1}' | head -1)\n"
             "sudo systemctl restart $SVC && systemctl is-active $SVC\n"
-            "# to undo:  cp $CFG.before-change $CFG && sudo systemctl restart $SVC"
-            % (re.sub(r"([.\[\]*^$\\/+?(){}|])", r"\\\1", old), new.replace("/", "\\/").replace("&", "\\&")))
+            "grep 'API call' ~/.hermes/logs/agent.log | tail -1     # after its next task: shows the model really used\n"
+            "# to undo:  cp ~/.hermes/config.yaml.before-change ~/.hermes/config.yaml && sudo systemctl restart $SVC"
+            % (shlex.quote(new), new))
 
 
 @app.get("/orchestration/model-advice")
