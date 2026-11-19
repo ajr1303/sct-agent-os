@@ -389,7 +389,8 @@
         return Stat("Website visitors, 7 days", fmtNum(site.visitors || 0), note);
       }
       // One tile for every AI provider that has a key, an agent on it, or use in the last 14 days.
-      function llmTiles() {
+      // One line per AI provider: who uses it, and what it has used or has left.
+      function llmRows() {
         var ps = ((planUse && planUse.providers) || []).slice(), st = byProv || {}, seen = {}, k;
         for (var i = 0; i < ps.length; i++) seen[ps[i].id] = 1;
         var extra = []; for (k in st) if (!seen[k] && st[k].tokens > 0) extra.push({ id: k, label: provLabel(k), agents: [] });
@@ -397,23 +398,28 @@
         ps = ps.concat(extra).slice(0, 10);
         return ps.map(function (p) {
           var u = p.usage, w = u && u.ok && u.groups && u.groups[0] && u.groups[0].weekly;
-          if (w) {
-            var hrs = Math.round((w.resets_in_seconds || 0) / 3600);
-            var note = w.on_pace_to_run_out ? "On pace to run out before it resets" : ("Resets in " + (hrs >= 48 ? Math.round(hrs / 24) + " days" : hrs + " h"));
-            return h("div", { key: p.id, style: { display: "contents" } }, Stat(p.label + " plan, this week", w.remaining_percent + "% left", note, w.on_pace_to_run_out || w.remaining_percent <= 25));
-          }
           var ag = p.agents || [], n = ag.length, away = ag.filter(function (a) { return !a.local; }).length;
-          var who = n ? n + (n === 1 ? " agent" : " agents") : "", s14 = st[p.id], tile;
-          if (s14 && s14.tokens > 0) {
+          var who = n ? n + (n === 1 ? " agent" : " agents") : "No agent uses it yet", s14 = st[p.id];
+          var main, note = "", bar = null, warn = false;
+          if (w) {
+            var hrs = Math.round((w.resets_in_seconds || 0) / 3600), left = Math.max(0, Math.min(100, Number(w.remaining_percent) || 0));
+            warn = !!w.on_pace_to_run_out || left <= 25;
+            main = left + "% of this week's plan left";
+            note = w.on_pace_to_run_out ? "On pace to run out before it resets" : "Resets in " + (hrs >= 48 ? Math.round(hrs / 24) + " days" : hrs + " h");
+            bar = h("span", { className: "sc-prov-bar" }, h("span", { className: "sc-prov-fill" + (warn ? " warn" : ""), style: { width: left + "%" } }));
+          } else if (s14 && s14.tokens > 0) {
             var paid = s14.cost >= 0.005;
-            tile = Stat(p.label + ", 14 days", paid ? fmtCost(s14.cost) : fmtNum(s14.tokens),
-              (paid ? fmtNum(s14.tokens) + " tokens" : "Tokens") + " on this server" + (who ? " · " + who : ""));
+            main = paid ? fmtCost(s14.cost) : fmtNum(s14.tokens) + " tokens";
+            note = (paid ? fmtNum(s14.tokens) + " tokens · " : "") + "on this server";
           } else if (n) {
-            tile = Stat(p.label, who, away === n ? "On their own machines · use isn't counted here" : "No use on this server in 14 days");
-          } else {
-            tile = Stat(p.label, "Ready", "Key added · no agent uses it yet");
-          }
-          return h("div", { key: p.id, style: { display: "contents" } }, tile);
+            main = away === n ? "Not counted here" : "No use in 14 days";
+            note = away === n ? "Its agents run on their own machines" : "";
+          } else { main = "Ready"; note = "Key added"; }
+          return h("div", { className: "sc-prov", key: p.id },
+            h("span", { className: "sc-prov-n" }, p.label),
+            h("span", { className: "sc-prov-w" }, who),
+            h("span", { className: "sc-prov-m" + (warn ? " warn" : "") }, bar, main),
+            h("span", { className: "sc-prov-note" }, note));
         });
       }
       var agRank = { running: 0, error: 1 };
@@ -546,15 +552,18 @@
           bookTile(),
           siteTile(),
           Stat("Chat sessions, 14 days", analytics ? String(tot.total_sessions || 0) : "—", useManaged ? "On this server only" : "Conversations and automations"),
-          Stat("Tokens, 14 days", analytics ? fmtNum(tokens) : "—", useManaged ? "This server only · input + output" : "Input + output"),
-          Stat("AI spend, 14 days", analytics ? fmtCost(tot.total_estimated_cost) : "—", useManaged ? "This server only · estimated" : "Estimated from usage")),
+          null),
 
         (function () {
-          var tiles = llmTiles();
-          return tiles.length ? h("div", { className: "sc-llm" },
-            h("div", { className: "sc-llm-h" }, h("span", null, "Your AI providers"),
-              h("a", { className: "sc-link", href: "/usage" + (location.search || "") }, "Details in Usage →")),
-            h("div", { className: "sc-stats" }, tiles)) : null;
+          var rows = llmRows();
+          if (!rows.length) return null;
+          var total = analytics ? fmtNum(tokens) + " tokens" + (tot.total_estimated_cost >= 0.005 ? " · " + fmtCost(tot.total_estimated_cost) + (useManaged ? " estimated" : "") : "") : "";
+          return h("div", { className: "sc-panel sc-provs" },
+            h("div", { className: "sc-panel-h" },
+              h("span", { className: "sc-panel-t" }, "AI usage, last 14 days"),
+              h("span", { className: "sc-panel-r" }, total ? total + (useManaged ? " on this server" : "") + " · " : "",
+                h("a", { className: "sc-link", href: "/usage" + (location.search || "") }, "Details in Usage →"))),
+            h("div", { className: "sc-panel-b sc-provs-b" }, rows));
         })(),
 
         h("div", { className: "sc-cols sc-cols-sum" },

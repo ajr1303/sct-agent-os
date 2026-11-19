@@ -2,6 +2,14 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.64.1] — 2026-11-19
+
+### Changed
+- Overview: the row of large "Your AI providers" tiles is now one compact panel,
+  "AI usage, last 14 days", with a line per provider (who uses it, what it has used
+  or how much of its plan is left, with a bar). The separate Tokens and AI spend
+  tiles are gone; their totals sit in that panel's header.
+
 ## [0.64.0] — 2026-11-19
 
 ### Added
