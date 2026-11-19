@@ -1212,3 +1212,27 @@ start using the tool.
 - The saving is half of that agent's recorded cost for the week, shown only when
   the board recorded a cost. It is an estimate.
 
+## 39. What an update does to running tasks
+
+From 0.61.0, `scripts/update.sh` (and so **Update now**) does this before it
+restarts anything:
+
+1. Asks how many tasks are running. If any are, it waits, checking every 15 seconds,
+   for up to 5 minutes. `AOS_UPDATE_WAIT=600 ./scripts/update.sh` waits 10 minutes;
+   `AOS_UPDATE_WAIT=0` does not wait.
+2. Once nothing is running, it pauses the team, so no task starts during the restart.
+   It never pauses while work is running, because pausing a team in Paperclip stops
+   its running work.
+3. If tasks are still running when the wait is over, it goes ahead without pausing
+   and says which agents were busy. Paperclip retries a run that was cut off, and the
+   stuck-agent watch picks up anything left idle.
+4. After the services are back, it switches the team on again. It does the same if
+   the update stops with an error.
+
+A team that was already paused (by the owner or a budget) is left exactly as it was.
+If the update dies so hard that step 4 never runs, the stuck-agent watch switches
+the team back on once the pause is 45 minutes old.
+
+Agents on their own machines keep working through an update; what they cannot do
+while the board restarts is report back, which the same retry covers.
+

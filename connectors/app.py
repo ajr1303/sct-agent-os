@@ -2913,6 +2913,10 @@ def stuck_watch_run(dry_run=False):
             _idea_tick()       # the day's idea for the owner, once their morning has started
         except Exception:
             pass
+        try:
+            _update_pause_net()   # an update that died must not leave the team paused
+        except Exception:
+            pass
 
     def done(skipped=None):
         out["skipped"] = skipped
@@ -6847,6 +6851,102 @@ def model_advice(_auth=Depends(require_auth)):
     out["saving"] = round(sum(r["saving"] or 0 for r in out["agents"]), 2) or None
     out["ok"] = True
     return out
+
+
+# ---------------------------------------------------------------------------
+# Safe updates. The updater (scripts/update.sh) asks three things of this service,
+# from inside the container with the internal token:
+#   quiet  - how many tasks are running right now
+#   pause  - stop new work from starting (only ever called once nothing is running:
+#            pausing the team in Paperclip stops running work, it does not wait for it)
+#   resume - switch the team back on, if it was the updater that paused it
+# If an update dies before it resumes, the watch pass resumes after UPDATE_PAUSE_MAX_MIN.
+# ---------------------------------------------------------------------------
+UPDATE_PAUSE_MAX_MIN = 45
+
+
+def _internal_auth(request):
+    got = request.headers.get("authorization") or ""
+    if not CHAT_TOOLS_TOKEN or not hmac.compare_digest(got.encode(), ("Bearer " + CHAT_TOOLS_TOKEN).encode()):
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+def _update_pause_state():
+    try:
+        d = json.loads(_kv_get("update_pause") or "{}")
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _update_running():
+    cid = _pc_company_id()
+    if not cid:
+        return None, []
+    live = [r for r in _list(_pc_get("/api/companies/" + str(cid) + "/live-runs"), "runs", "liveRuns") if isinstance(r, dict)]
+    names = {}
+    try:
+        names = {a.get("id"): _agent_name(a) for a in _list(_pc_get("/api/companies/%s/agents" % cid), "agents") if isinstance(a, dict)}
+    except Exception:
+        pass
+    return cid, sorted({names.get(r.get("agentId")) or "an agent" for r in live})
+
+
+def _update_resume(why):
+    st = _update_pause_state()
+    if not st.get("we_paused"):
+        _kv_set("update_pause", "{}")
+        return False
+    cid = _pc_company_id()
+    _pc_send("PATCH", "/api/companies/" + _safe_id(cid), {"status": "active"}, what="resume the team")
+    _kv_set("update_pause", "{}")
+    try:
+        with closing(get_db()) as con:
+            _watch_log(con, "resumed", "team", why)
+            con.commit()
+    except Exception:
+        pass
+    return True
+
+
+def _update_pause_net():
+    """A pause left behind by an update that never finished must not last."""
+    st = _update_pause_state()
+    at = _ts(st.get("at"))
+    if st.get("we_paused") and at and _now() - at > datetime.timedelta(minutes=UPDATE_PAUSE_MAX_MIN):
+        _update_resume("An update paused the team and did not switch it back on, so it was switched on again.")
+
+
+@app.post("/internal/update/{step}")
+def internal_update(step: str, request: Request):
+    _internal_auth(request)
+    if _pc_mode() == "external" or not _pc_up() or not _pc_key():
+        return {"ok": True, "skip": True, "running": 0, "who": [], "paused": False}
+    try:
+        if step == "quiet":
+            _cid, who = _update_running()
+            return {"ok": True, "running": len(who), "who": who}
+        if step == "pause":
+            cid, who = _update_running()
+            if not cid:
+                return {"ok": True, "skip": True, "paused": False}
+            if who:
+                return {"ok": True, "paused": False, "running": len(who), "who": who}
+            co = _pc_get("/api/companies/" + str(cid))
+            if isinstance(co, dict) and str(co.get("status")).lower() != "active":
+                # The owner (or a budget) already paused the team: leave it exactly as it is afterwards.
+                _kv_set("update_pause", json.dumps({"we_paused": False, "at": _now().isoformat()}))
+                return {"ok": True, "paused": False, "already": True}
+            _kv_set("update_pause", json.dumps({"we_paused": True, "at": _now().isoformat()}))
+            _pc_send("PATCH", "/api/companies/" + _safe_id(cid), {"status": "paused"}, what="pause the team")
+            return {"ok": True, "paused": True}
+        if step == "resume":
+            return {"ok": True, "resumed": _update_resume("Switched the team back on after an update.")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"ok": False, "error": _scrub_secrets(str(e))[:200]})
+    raise HTTPException(status_code=404, detail="Not found")
 
 
 def t_complete_task(a):

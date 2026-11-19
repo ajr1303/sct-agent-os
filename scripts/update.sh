@@ -29,8 +29,54 @@ fi
 # Tell the watchdog to stand down while services are rebuilt and restarted, and say
 # plainly what state things are in if a step fails.
 mkdir -p data && touch data/.maintenance
-trap 'rm -f data/.maintenance' EXIT
+trap 'resume_team; rm -f data/.maintenance' EXIT
 trap 'echo; echo "x  The update stopped partway. The services that were running are still running."; echo "   Fix the error above and run this again. Version before this update: ${AOS_PREV_COMMIT:-unknown}"' ERR
+
+# Safe updates: ask the connectors service (inside its container, with the internal
+# token) about the team. Every call is best effort: an install too old to answer, or a
+# team board that is not set up, simply means the update goes ahead as it always did.
+aos_team() {
+  docker compose exec -T connectors python -c 'import os,sys,urllib.request
+r=urllib.request.Request("http://127.0.0.1:8000/internal/update/"+sys.argv[1],data=b"{}",headers={"Authorization":"Bearer "+os.environ.get("CHAT_TOOLS_TOKEN",""),"Content-Type":"application/json"})
+print(urllib.request.urlopen(r,timeout=30).read().decode())' "$1" 2>/dev/null || true
+}
+aos_field() { python3 -c 'import sys,json
+try: d=json.loads(sys.argv[1] or "{}")
+except Exception: d={}
+v=d.get(sys.argv[2]); print(", ".join(v) if isinstance(v,list) else ("" if v is None else str(v).lower() if isinstance(v,bool) else v))' "$1" "$2" 2>/dev/null || true; }
+AOS_TEAM_PAUSED=""
+# Wait for a quiet moment, then stop new work from starting. Pausing the team stops
+# running work, so it is only done once nothing is running. AOS_UPDATE_WAIT is the
+# longest to wait, in seconds (0 = do not wait).
+quiet_then_pause() {
+  local limit=${AOS_UPDATE_WAIT:-300} waited=0 r n
+  r=$(aos_team pause); [ -n "$r" ] || return 0
+  [ "$(aos_field "$r" skip)" = true ] && return 0
+  while :; do
+    if [ "$(aos_field "$r" paused)" = true ]; then
+      AOS_TEAM_PAUSED=1; echo "Nothing is running. Paused the team so no task starts during the restart."; return 0
+    fi
+    [ "$(aos_field "$r" already)" = true ] && { echo "The team is already paused; leaving it that way."; return 0; }
+    n=$(aos_field "$r" running); [ -n "$n" ] || return 0
+    if [ "$waited" -ge "$limit" ]; then
+      echo "  ! Still running after $((limit / 60)) min: $(aos_field "$r" who). Going ahead; a task cut off by the restart is retried automatically."
+      return 0
+    fi
+    [ "$waited" -eq 0 ] && echo "Waiting for running tasks to finish before restarting (up to $((limit / 60)) min): $(aos_field "$r" who)"
+    sleep 15; waited=$((waited + 15)); r=$(aos_team pause); [ -n "$r" ] || return 0
+  done
+}
+# Switch the team back on. Runs at the end, and from the failure handler too.
+resume_team() {
+  [ -n "$AOS_TEAM_PAUSED" ] || return 0
+  local r
+  for _ in $(seq 1 24); do
+    r=$(aos_team resume)
+    if [ -n "$r" ] && [ "$(aos_field "$r" ok)" = true ]; then AOS_TEAM_PAUSED=""; echo "Switched the team back on."; return 0; fi
+    sleep 5
+  done
+  echo "  ! Could not switch the team back on. It switches itself on within 45 minutes, or resume it from the dashboard."
+}
 
 # Phase 2 (running from the freshly-pulled script).
 # Backfill secrets introduced after the original install, so compose won't error
@@ -116,6 +162,7 @@ docker compose build connectors
 ./scripts/sync-branding.sh
 # Chat tools: write the MCP entry + routing skill before Hermes restarts below.
 ./scripts/sync-chat-tools.sh || echo "  ! chat tools setup reported problems"
+quiet_then_pause
 # A release that moves the memory service to a new version changes the memory
 # database on first start. Save a copy first, and go back to it if the new version
 # does not come up (scripts/upgrade-memory.sh).
@@ -134,6 +181,7 @@ docker compose restart gateway-tls 2>/dev/null || true
 # Re-enable plugins on every profile AFTER the restart, so the enable lands on a
 # ready gateway (enable-plugins.sh waits for readiness and covers all profiles).
 ./scripts/enable-plugins.sh || echo "  ! plugin enable reported problems; check: docker compose logs hermes"
+resume_team
 # Every scheduled job (watchdog, backups, update check, dashboard requests), so an
 # install that predates one of them, or never finished, still ends up with all of them.
 mkdir -p backups data/backup && chmod 700 backups data/backup

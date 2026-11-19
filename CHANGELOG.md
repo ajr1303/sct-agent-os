@@ -2,6 +2,18 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.61.0] — 2026-11-19
+
+### Added
+- **Safe updates.** Before restarting anything, the updater waits for running tasks
+  to finish (up to 5 minutes; `AOS_UPDATE_WAIT` seconds to change it), then pauses
+  the team so no task starts during the restart, and switches it back on at the end,
+  including when the update fails. A team the owner had already paused is left
+  paused. If an update dies before resuming, the team switches itself back on within
+  45 minutes.
+- Takes effect from the update *after* this one: the wait runs against the service
+  that is already installed, and the installed one does not know how to answer yet.
+
 ## [0.60.0] — 2026-11-19
 
 ### Added
