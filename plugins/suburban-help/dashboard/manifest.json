@@ -1,0 +1,12 @@
+{
+  "name": "suburban-help",
+  "label": "Help",
+  "description": "What each page is for, how to do common things, and how to reach support",
+  "icon": "FileText",
+  "version": "0.1.0",
+  "tab": {
+    "path": "/help"
+  },
+  "entry": "dist/index.js",
+  "css": "dist/style.css"
+}

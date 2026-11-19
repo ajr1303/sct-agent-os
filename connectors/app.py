@@ -7135,6 +7135,61 @@ def team_template_install(b: TeamTemplateIn, _auth=Depends(require_auth)):
     return {"ok": not failed, "created": created, "skipped": skipped, "failed": failed, "linked": linked}
 
 
+# ---------------------------------------------------------------------------
+# Security check for the Overview card: a few yes/no facts the owner can act on.
+# ---------------------------------------------------------------------------
+@app.get("/security/check")
+def security_check(_auth=Depends(require_auth)):
+    items = []
+
+    def add(key, ok, title, detail, href):
+        items.append({"id": key, "ok": ok, "title": title, "detail": detail, "href": href})
+    try:
+        m = _mfa_admin_view(_mfa_load(fresh=True))
+        if m.get("active"):
+            add("two_step", True, "Two-step sign-in is on", "", "/security")
+            left = int(m.get("recovery_left") or 0)
+            if left <= 2:
+                add("recovery", False, "Only %s left" % _plural(left, "recovery code"), "Make a new set so you are not locked out if you lose your phone.", "/security")
+        elif m.get("enabled"):
+            add("two_step", False, "Two-step sign-in is switched on but not active yet", "It takes effect within a few minutes.", "/security")
+        else:
+            add("two_step", False, "Two-step sign-in is off", "A stolen password would be enough to get in. Turn it on.", "/security")
+    except Exception:
+        add("two_step", None, "Two-step sign-in could not be checked", "", "/security")
+    try:
+        st = (backup_tool.summary() or {}).get("status") or {}
+        at = _ts(st.get("at"))
+        hrs = ((_now() - at).total_seconds() / 3600.0) if at else None
+        if not st or hrs is None:
+            add("backup", False, "No backup has been made yet", "The first one runs overnight. You can start one now.", "/backups")
+        elif not st.get("ok"):
+            add("backup", False, "The last backup failed", "Open Backups to see why.", "/backups")
+        elif hrs > 36:
+            add("backup", False, "The last backup is %s old" % _plural(int(hrs // 24) or 1, "day"), "Backups should run every night.", "/backups")
+        elif not st.get("uploaded"):
+            add("backup", False, "Backups are kept on this server only", "If the server is lost, so are they. Connect off-site storage.", "/backups")
+        else:
+            add("backup", True, "Backed up off-site in the last day", "", "/backups")
+    except Exception:
+        add("backup", None, "Backups could not be checked", "", "/backups")
+    try:
+        if _pc_up() and _pc_key():
+            cid = _pc_company_id()
+            ov = _pc_get("/api/companies/" + str(cid) + "/budgets/overview") if cid else None
+            capped = any(isinstance(p, dict) and p.get("scopeType") == "company" and p.get("isActive")
+                         and isinstance(p.get("amount"), (int, float)) and p.get("amount") > 0
+                         for p in ((ov or {}).get("policies") or [])) if isinstance(ov, dict) else False
+            if capped:
+                add("spend", True, "A monthly spending limit is set for the team", "", "/usage")
+            else:
+                add("spend", False, "No monthly spending limit for the team", "Without one, a runaway agent can keep spending.", "/orchestration")
+    except Exception:
+        pass
+    good = sum(1 for i in items if i["ok"] is True)
+    return {"items": items, "good": good, "total": len(items)}
+
+
 def t_complete_task(a):
     summary = (a.get("summary") or "").strip()
     if len(summary) < 5:

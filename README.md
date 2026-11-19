@@ -2,7 +2,7 @@
 
 A branded, self-hosted **agent operating system** from Suburban Cyber Technologies: a thin, maintainable layer on top of the open-source [Hermes Agent](https://github.com/NousResearch/hermes-agent) (MIT). It turns a bare Linux box into a running AI-agent platform with a single command: an isolated agent runtime, a branded dashboard, a chat assistant that delegates work to a team of agents, bundled automations, and long-term memory.
 
-> **What this is:** an installer, a dashboard theme, seventeen dashboard plugins, a small connectors service, and the scripts to run it. It does **not** fork anything. [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Paperclip](https://github.com/paperclipai/paperclip), [n8n](https://n8n.io) and [Honcho](https://github.com/plastic-labs/honcho) run unmodified at pinned versions; everything Suburban Cyber adds lives in `plugins/`, `connectors/`, `brand/`, `skills/`, `scripts/` and `templates/`. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+> **What this is:** an installer, a dashboard theme, eighteen dashboard plugins, a small connectors service, and the scripts to run it. It does **not** fork anything. [Hermes Agent](https://github.com/NousResearch/hermes-agent), [Paperclip](https://github.com/paperclipai/paperclip), [n8n](https://n8n.io) and [Honcho](https://github.com/plastic-labs/honcho) run unmodified at pinned versions; everything Suburban Cyber adds lives in `plugins/`, `connectors/`, `brand/`, `skills/`, `scripts/` and `templates/`. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ---
 
@@ -377,6 +377,7 @@ plugins/
   suburban-models/          AI models: choose the main model and connect AI providers
   suburban-plan/            Plan: the one-page business plan, kept by the lead agent, every version saved
   suburban-files/           Files: what the team has handed over, linked to the task it came from
+  suburban-help/            Help: what each page is for, common how-tos, who to ask
   suburban-security/        Two-step sign-in with an authenticator app
   suburban-tasks/           Delegated tasks, halted-task release
   suburban-automations/     n8n status, workflow approvals

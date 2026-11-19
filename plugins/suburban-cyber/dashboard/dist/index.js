@@ -220,6 +220,32 @@
         h("div", { className: "sc-panel-b" }, body, msg ? h("div", { className: "sc-idea-msg" }, msg) : null));
     }
 
+    // Security check: a few yes/no facts the owner can act on, plus whether an update is waiting.
+    function SecurityCard() {
+      var a = useState(null), d = a[0], setD = a[1];
+      var b = useState(null), upd = b[0], setUpd = b[1];
+      useEffect(function () {
+        try {
+          fetch("/api/connectors/security/check", { credentials: "same-origin" }).then(function (r) { return r.ok ? r.json() : null; }).then(function (v) { if (v) setD(v); }).catch(function () {});
+          fetch("/sct-brand/update-status.json", { cache: "no-store" }).then(function (r) { return r.ok ? r.json() : null; }).then(function (v) { if (v) setUpd(v); }).catch(function () {});
+        } catch (e) {}
+      }, []);
+      if (!d || !d.items) return null;
+      var q = location.search || "", items = d.items.slice();
+      if (upd && typeof upd.update_available === "boolean") items.push(upd.update_available
+        ? { id: "update", ok: false, title: "An update is waiting" + (upd.latest ? " (" + upd.latest + ")" : ""), detail: "Updates include security fixes. Press Check for updates at the top of this page.", href: "" }
+        : { id: "update", ok: true, title: "Agent OS is up to date", detail: "", href: "" });
+      var good = items.filter(function (i) { return i.ok === true; }).length, bad = items.filter(function (i) { return i.ok === false; });
+      return h("div", { className: "sc-panel sc-sec" },
+        h("div", { className: "sc-panel-h" }, h("span", { className: "sc-panel-t" }, "Security check"),
+          h("span", { className: "sc-panel-r" + (bad.length ? " sc-sec-warn" : "") }, bad.length ? bad.length + " to look at" : "All " + good + " good")),
+        h("div", { className: "sc-panel-b" }, items.map(function (i) {
+          var inner = [h("i", { key: "d", className: "sc-sum-dot " + (i.ok === true ? "ok" : i.ok === false ? "hot" : "") }),
+            h("span", { key: "t", className: "sc-sec-t" }, i.title, i.ok === false && i.detail ? h("span", { className: "sc-sec-d" }, i.detail) : null)];
+          return i.href ? h("a", { className: "sc-sec-row", key: i.id, href: i.href + q }, inner) : h("div", { className: "sc-sec-row", key: i.id }, inner);
+        })));
+    }
+
     function Overview() {
       var sa = useState(null), status = sa[0], setStatus = sa[1];
       var sb = useState(null), sessions = sb[0], setSessions = sb[1];
@@ -575,6 +601,7 @@
                               model ? h("span", { className: "sc-tag" }, model) : null,
                               h("span", { className: "sc-skill" }, (ag.skill_count != null ? ag.skill_count : 0) + " skills")));
                         })),
+            h(SecurityCard, null),
             h("div", { className: "sc-managed" },
               h("div", { className: "sc-managed-h" }, OPERATOR ? "MANAGED BY " + OPERATOR.toUpperCase() : "YOUR SYSTEM"),
               SUPPORT ? h("div", { className: "sc-managed-row" }, h("span", { className: "sc-muted" }, "Support"), h("span", null, SUPPORT)) : null,

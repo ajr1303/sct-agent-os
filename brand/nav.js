@@ -24,7 +24,7 @@
     { id: "main", label: "", items: ["/chat", "/projects", "/plan", "/files", "/memory"] },                    // Overview is added in front of Chat
     { id: "team", label: "Your team", items: ["/tasks", "/team", "/orchestration", "/automations", "/usage"] },
     { id: "conn", label: "Connections", items: ["/bookings", "/mailboxes", "/website", "/channels", "/pairing", "/backups"] },
-    { id: "set", label: "Settings", items: ["/security", "/ai-models", "/env", "/skills", "/sessions"] },
+    { id: "set", label: "Settings", items: ["/security", "/ai-models", "/env", "/skills", "/sessions", "/help"] },
     { id: "adv", label: "Operator tools", items: ["/models", "/profiles", "/mcp", "/plugins", "/cron", "/files", "/webhooks",
         "/config", "/system", "/logs"] }
   ];

@@ -2,6 +2,19 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.64.0] — 2026-11-19
+
+### Added
+- **Security check card** on Overview: two-step sign-in, recovery codes running
+  low, backups (recent, and whether a copy is kept off the server), a monthly
+  spending limit for the team, and whether an update is waiting. Each line links to
+  the page that fixes it (`GET /security/check`).
+- **Help page** (Settings, Help): what each page is for, eight common how-tos, and
+  the support contact set for this install. It takes the place of the removed
+  Documentation link.
+- **Install as an app.** The dashboard now carries an app manifest and icons, so a
+  phone or desktop browser can add it to the home screen and open it full screen.
+
 ## [0.63.0] — 2026-11-19
 
 ### Added

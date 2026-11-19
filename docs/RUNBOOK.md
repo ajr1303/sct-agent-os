@@ -1257,3 +1257,18 @@ while the board restarts is report back, which the same retry covers.
   models, or bring any data. The instructions were written for another business:
   open each new agent and adjust them, and fill in the business profile and the plan.
 
+## 41. Security check, Help, and installing as an app
+
+- **Security check** (Overview, right column) reads `GET /api/connectors/security/check`
+  and the hourly update status. A green dot is fine; an amber one has a line saying
+  what to do and links to the page for it. Items: two-step sign-in, recovery codes
+  (flagged at two or fewer), backups (flagged when none, failed, older than 36 hours,
+  or kept on this server only), the team's monthly spending limit, updates.
+- **Help** is the last entry under Settings. The support line comes from the operator
+  name and contact given at install (`AOS_OPERATOR_NAME`, `AOS_OPERATOR_SUPPORT` in
+  `.env`; re-run `scripts/sync-branding.sh` after changing them).
+- **Install as an app.** iPhone: open the dashboard in Safari, Share, Add to Home
+  Screen. Android and desktop Chrome or Edge: the browser menu, Install app. It is
+  the same site in its own window; it does not work offline and there are no
+  notifications. The name and colors are in `brand/manifest.json`.
+
