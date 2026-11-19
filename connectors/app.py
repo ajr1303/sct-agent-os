@@ -4698,6 +4698,262 @@ def _dec_public(d):
             "with_lead": d["with_lead"], "lead": d["lead"], "triage": d["triage"], "can_act": _pc_mode() != "external"}
 
 
+# ---------------------------------------------------------------------------
+# Overview summary: "what happened while I was away", in a few lines.
+# Every sentence is built from counts read off the board, so it costs nothing and
+# cannot say something that did not happen. The browser sends the start of the
+# period (its own midnight), because the server does not know the owner's timezone.
+# ---------------------------------------------------------------------------
+_SUMMARY_CACHE = {}
+HEAVY_MIN = 30            # a run this long is heavy for anyone
+HEAVY_COST = 1.0          # ... or one that cost this much (USD)
+HEAVY_TOKENS = 500_000    # floor before "3x this agent's usual" counts
+
+
+def _median(xs):
+    xs = sorted(x for x in xs if x)
+    if not xs:
+        return 0
+    m = len(xs) // 2
+    return xs[m] if len(xs) % 2 else (xs[m - 1] + xs[m]) / 2.0
+
+
+def _plural(n, one, many=None):
+    return "%d %s" % (n, one if n == 1 else (many or one + "s"))
+
+
+def _summary_runs(cid, since, now, names):
+    """Runs since `since`, the heavy ones among them, and how the period compares
+    with the same stretch of earlier days."""
+    runs = _list(_pc_get("/api/companies/%s/heartbeat-runs?limit=1000&summary=true" % cid), "runs")
+    rows = []
+    for r in runs:
+        if not isinstance(r, dict):
+            continue
+        st = _ts(r.get("startedAt") or r.get("createdAt"))
+        if not st:
+            continue
+        en = _ts(r.get("finishedAt")) or (now if str(r.get("status")) in ("running", "queued") else None)
+        mins = max(0.0, ((en or st) - st).total_seconds() / 60.0)
+        try: cost = float(r.get("costUsd")) if r.get("costUsd") is not None else None
+        except Exception: cost = None
+        try: tok = float(r.get("totalTokens") or 0) or (float(r.get("inputTokens") or 0) + float(r.get("outputTokens") or 0))
+        except Exception: tok = 0.0
+        rows.append({"id": r.get("id"), "agent": r.get("agentId"), "issue": r.get("issueId"), "start": st,
+                     "mins": mins, "cost": cost, "tokens": tok, "status": str(r.get("status") or ""),
+                     "running": en is now})
+    cur = [x for x in rows if x["start"] >= since]
+    old = [x for x in rows if x["start"] < since]
+    base = {}
+    for x in old:
+        base.setdefault(x["agent"], []).append(x)
+    heavy = []
+    for x in cur:
+        b = base.get(x["agent"]) or []
+        mm, mc, mt = _median([y["mins"] for y in b]), _median([y["cost"] for y in b]), _median([y["tokens"] for y in b])
+        enough = len(b) >= 5
+        why = None
+        if x["mins"] >= HEAVY_MIN or (enough and x["mins"] >= 20 and mm and x["mins"] >= 3 * mm):
+            why = "long"
+        if (x["cost"] or 0) >= HEAVY_COST or (enough and (x["cost"] or 0) >= 0.25 and mc and x["cost"] >= 3 * mc):
+            why = "cost"
+        if not why and enough and x["tokens"] >= HEAVY_TOKENS and mt and x["tokens"] >= 3 * mt:
+            why = "tokens"
+        if why:
+            heavy.append(dict(x, why=why))
+    heavy.sort(key=lambda x: (-(x["cost"] or 0), -x["tokens"], -x["mins"]))
+    # Compare with the same stretch of each earlier day the list still covers.
+    span = now - since
+    has_cost = any(x["cost"] for x in rows)
+    val = (lambda x: x["cost"] or 0) if has_cost else (lambda x: x["tokens"])
+    total = sum(val(x) for x in cur)
+    prior = []
+    oldest = min([x["start"] for x in rows], default=now)
+    for k in range(1, 8):
+        a = since - k * (span if span >= datetime.timedelta(days=1) else datetime.timedelta(days=1))
+        if a < oldest or len(runs) >= 1000 and a < oldest + datetime.timedelta(hours=1):
+            break
+        prior.append(sum(val(x) for x in rows if a <= x["start"] < a + span))
+    usual = (sum(prior) / len(prior)) if len(prior) >= 2 else None
+    ratio = (total / usual) if usual else None
+    return {"count": len(cur), "heavy": heavy, "has_cost": has_cost,
+            "cost": sum(x["cost"] or 0 for x in cur) if has_cost else None,
+            "tokens": sum(x["tokens"] for x in cur), "ratio": ratio,
+            "failed": sum(1 for x in cur if x["status"] in ("failed", "timed_out"))}
+
+
+def _summary_events(since, until):
+    """Appointments between two moments, from the connected booking apps."""
+    with closing(get_db()) as con:
+        accts = con.execute("SELECT provider, secret FROM bookings_accounts ORDER BY id").fetchall()
+    out = []
+    for provider, secret in accts:
+        try:
+            for e in BOOKING_FETCH[provider](json.loads(fernet.decrypt(secret).decode()), since, 200):
+                d = _ts(e.get("start"))
+                if d and since <= d < until:
+                    out.append({"at": d.isoformat(), "title": str(e.get("title") or "Appointment")[:80]})
+        except Exception:
+            continue
+    out.sort(key=lambda e: e["at"])
+    return out
+
+
+@app.get("/orchestration/summary")
+def orchestration_summary(since: float = 0, until: float = 0, label: str = "today", _auth=Depends(require_auth)):
+    now = _now()
+    try:
+        s = datetime.datetime.fromtimestamp(float(since), datetime.timezone.utc)
+    except Exception:
+        s = now - datetime.timedelta(hours=24)
+    if not (now - datetime.timedelta(days=8) <= s <= now):
+        s = now - datetime.timedelta(hours=24)
+    try:
+        u = datetime.datetime.fromtimestamp(float(until), datetime.timezone.utc)
+    except Exception:
+        u = now
+    if not (now <= u <= now + datetime.timedelta(days=2)):
+        u = now + datetime.timedelta(hours=12)
+    label = label if label in ("today", "yesterday", "week") else "today"
+    ck = (int(s.timestamp()) // 60, label)
+    hit = _SUMMARY_CACHE.get(ck)
+    if hit and time.time() - hit[0] < 60:
+        return hit[1]
+    out = {"ok": False, "at": now.isoformat(), "label": label, "text": "", "numbers": {}, "heavy": [], "heavy_more": 0,
+           "day": [], "day_more": 0}
+    if not _pc_up() or not _pc_key():
+        out["text"] = "Your team's board is not connected yet, so there is nothing to summarize."
+        return out
+    try:
+        cid = _pc_company_id()
+    except Exception:
+        cid = None
+    if not cid:
+        out["text"] = "Your team's board is not connected yet, so there is nothing to summarize."
+        return out
+    names = {}
+    agents = []
+    try:
+        agents = [a for a in _list(_pc_get("/api/companies/%s/agents" % cid), "agents") if isinstance(a, dict)]
+        names = {a.get("id"): a.get("name") or a.get("displayName") or "Agent" for a in agents}
+    except Exception:
+        pass
+
+    def issues(q):
+        try:
+            return [i for i in _list(_pc_get("/api/companies/%s/issues%s" % (cid, q)), "issues") if isinstance(i, dict)]
+        except Exception:
+            return []
+    done_rows = issues("?status=done&sortField=updated&sortDir=desc&limit=200")
+    done = [i for i in done_rows if (_ts(i.get("completedAt") or i.get("updatedAt")) or s) >= s and
+            (_ts(i.get("completedAt") or i.get("updatedAt")) is not None)]
+    done_plus = len(done) == len(done_rows) == 200
+    prog = issues("?status=in_progress&sortField=updated&sortDir=desc&limit=200")
+    titles = {i.get("id"): (i.get("title") or "", i.get("identifier") or "") for i in done_rows + prog}
+    need, oldest_wait = 0, None
+    try:
+        dec = _decisions()
+        if dec.get("ok"):
+            cards = list(dec.get("decisions") or []) + list(dec.get("alerts") or [])
+            need = len(cards)
+            for c in cards:
+                d = _ts(c.get("at") or c.get("createdAt") or c.get("since"))
+                if d and (oldest_wait is None or d < oldest_wait):
+                    oldest_wait = d
+    except Exception:
+        pass
+    try:
+        runs = _summary_runs(cid, s, now, names)
+    except Exception:
+        runs = {"count": 0, "heavy": [], "has_cost": False, "cost": None, "tokens": 0, "ratio": None, "failed": 0}
+    spent = runs["cost"]
+    try:   # the board's own ledger is the better number when it has one
+        cs = _pc_get("/api/companies/%s/costs/summary?from=%s" % (cid, quote(s.isoformat().replace("+00:00", "Z"))))
+        if isinstance(cs, dict) and cs.get("spendCents") is not None and float(cs["spendCents"]) > 0:
+            spent = float(cs["spendCents"]) / 100.0
+    except Exception:
+        pass
+    # Agents: still stopped now, and cleared automatically during the period.
+    down = [a.get("name") or "An agent" for a in agents if str(a.get("status") or "").lower() == "error"]
+    cleared = []
+    try:
+        with closing(get_db()) as con:
+            for at, action, target in con.execute(
+                    "SELECT at, action, target FROM stuck_watch_log WHERE action IN ('cleared error','restarted') ORDER BY id DESC LIMIT 200"):
+                d = _ts(at)
+                if d and d >= s and target not in cleared and target not in down:
+                    cleared.append(target)
+    except Exception:
+        pass
+    stalled = [i for i in prog if (_ts(i.get("updatedAt")) or now) < now - datetime.timedelta(hours=24)]
+
+    # ---- the paragraph: two or three sentences, never more ----
+    when = {"today": "so far today", "yesterday": "since yesterday", "week": "this week"}[label]
+    nd = ("%d+" % len(done)) if done_plus else str(len(done))
+    quiet = not done and not prog and not need and not runs["count"] and not down
+    sents = []
+    if quiet:
+        sents.append("Nothing has happened %s. Your team is idle and nothing is waiting on you." % when)
+    else:
+        a = "Your team finished %s task%s %s" % (nd, "" if len(done) == 1 and not done_plus else "s", when)
+        a += (" and is working on %s more." % len(prog)) if prog else "."
+        if not done:
+            a = ("Your team is working on %s %s; nothing is finished yet." % (_plural(len(prog), "task"), when)) if prog \
+                else "No tasks were finished %s." % when
+        sents.append(a)
+        sents.append("%s waiting on you." % (_plural(need, "decision is", "decisions are")) if need else "Nothing is waiting on you.")
+        if down:
+            sents.append("%s stopped and need%s a look." % (_join_names(down), "s" if len(down) == 1 else ""))
+        elif runs["ratio"] and runs["ratio"] >= 1.8 and runs["heavy"]:
+            sents.append("%s is about %s a normal %s because of %s." % (
+                "Spending" if runs["has_cost"] else "AI usage",
+                "double" if runs["ratio"] < 2.6 else "%d times" % round(runs["ratio"]),
+                {"week": "week", "yesterday": "stretch like this"}.get(label, "day by this time"),
+                _plural(len(runs["heavy"]), "heavy run")))
+        elif cleared:
+            sents.append("%s stopped and %s restarted automatically." % (_join_names(cleared), "was" if len(cleared) == 1 else "were"))
+    out["text"] = " ".join(sents[:3])
+    out["numbers"] = {"finished": nd, "in_progress": len(prog), "need_you": need,
+                      "spent": round(spent, 2) if spent is not None else None,
+                      "tokens": int(runs["tokens"]) if spent is None else None}
+    for x in runs["heavy"][:3]:
+        t = titles.get(x["issue"]) or ("", "")
+        out["heavy"].append({"agent": names.get(x["agent"]) or "An agent", "task": t[0][:70], "key": t[1],
+                             "minutes": int(round(x["mins"])), "cost": round(x["cost"], 2) if x["cost"] else None,
+                             "tokens": int(x["tokens"]) if x["tokens"] else None, "running": bool(x["running"])})
+    out["heavy_more"] = max(0, len(runs["heavy"]) - 3)
+    # ---- your day: what needs the owner first, then what is ahead ----
+    day = []
+    if down:
+        day.append({"kind": "alert", "text": "%s stopped. See Decisions for why." % _join_names(down), "href": "/tasks"})
+    if need and oldest_wait and now - oldest_wait >= datetime.timedelta(hours=24):
+        n = (now - oldest_wait).days
+        day.append({"kind": "alert", "text": "A decision has been waiting on you for %s." % _plural(n, "day"), "href": "/tasks"})
+    if stalled:
+        day.append({"kind": "warn", "text": "%s had no progress for over a day." % _plural(len(stalled), "task has", "tasks have"),
+                    "href": "/tasks"})
+    try:
+        for e in _summary_events(now, u):
+            day.append({"kind": "event", "at": e["at"], "text": e["title"]})
+    except Exception:
+        pass
+    out["day"], out["day_more"] = day[:4], max(0, len(day) - 4)
+    out["quiet"] = bool(quiet)
+    out["ok"] = True
+    _SUMMARY_CACHE.clear()
+    _SUMMARY_CACHE[ck] = (time.time(), out)
+    return out
+
+
+def _join_names(xs):
+    xs = [str(x) for x in xs if x]
+    if len(xs) <= 1:
+        return xs[0] if xs else "An agent"
+    if len(xs) > 3:
+        return "%s and %d others" % (", ".join(xs[:2]), len(xs) - 2)
+    return ", ".join(xs[:-1]) + " and " + xs[-1]
+
+
 @app.get("/orchestration/decisions")
 def decisions_get(_auth=Depends(require_auth)):
     if not _pc_key():

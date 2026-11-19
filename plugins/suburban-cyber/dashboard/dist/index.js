@@ -75,6 +75,83 @@
         h("div", { className: "sc-panel-b" }, children));
     }
 
+    // "Today so far": a short written summary, four numbers, heavy runs and the owner's day.
+    // The sentences come from the server, built from real counts (no AI model involved).
+    function SummaryCard() {
+      var a = useState("today"), range = a[0], setRange = a[1];
+      var b = useState(null), data = b[0], setData = b[1];
+      var c = useState(false), busy = c[0], setBusy = c[1];
+      var d = useState(false), all = d[0], setAll = d[1];
+      function load(r) {
+        var m = new Date(); m.setHours(0, 0, 0, 0);
+        var since = m.getTime() - (r === "yesterday" ? 86400000 : r === "week" ? 6 * 86400000 : 0);
+        var until = m.getTime() + 86400000;
+        setBusy(true);
+        try {
+          fetch("/api/connectors/orchestration/summary?label=" + r + "&since=" + Math.floor(since / 1000) + "&until=" + Math.floor(until / 1000),
+            { credentials: "same-origin" })
+            .then(function (x) { return x.ok ? x.json() : null; })
+            .then(function (v) { if (v) setData(v); setBusy(false); }).catch(function () { setBusy(false); });
+        } catch (e) { setBusy(false); }
+      }
+      useEffect(function () {
+        load(range);
+        var t = setInterval(function () { load(range); }, 120000);
+        return function () { clearInterval(t); };
+      }, [range]);
+      function clock(iso) { try { return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); } catch (e) { return ""; } }
+      function money(n) { return "$" + Number(n).toFixed(2); }
+      function big(n) { n = Number(n) || 0; return n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "K" : String(n); }
+      function span(mn) { mn = Number(mn) || 0; return mn >= 90 ? (mn / 60).toFixed(1) + " hr" : mn + " min"; }
+      var q = location.search || "";
+      var titles = { today: "Today so far", yesterday: "Since yesterday", week: "This week" };
+      var tabs = h("span", { className: "sc-sum-tabs" }, ["today", "yesterday", "week"].map(function (r) {
+        return h("button", { key: r, className: "sc-sum-tab" + (r === range ? " on" : ""), onClick: function () { setAll(false); setRange(r); } },
+          r === "today" ? "Today" : r === "yesterday" ? "Since yesterday" : "This week");
+      }));
+      var body;
+      if (!data) body = h("div", { className: "sc-empty" }, "Loading…");
+      else {
+        var n = data.numbers || {}, heavy = data.heavy || [], day = data.day || [];
+        var tiles = data.ok && !data.quiet ? h("div", { className: "sc-sum-nums" },
+          h("div", { className: "sc-sum-num" }, h("span", null, "Finished"), h("b", null, String(n.finished == null ? "0" : n.finished))),
+          h("div", { className: "sc-sum-num" }, h("span", null, "In progress"), h("b", null, String(n.in_progress || 0))),
+          h("a", { className: "sc-sum-num" + (n.need_you ? " warn" : ""), href: "/tasks" + q }, h("span", null, "Need you"), h("b", null, String(n.need_you || 0))),
+          n.spent != null
+            ? h("div", { className: "sc-sum-num" }, h("span", null, "Spent"), h("b", null, money(n.spent)))
+            : h("div", { className: "sc-sum-num" }, h("span", null, "AI usage"), h("b", null, big(n.tokens) + " tokens"))) : null;
+        body = h("div", null,
+          h("p", { className: "sc-sum-text" }, data.text || ""),
+          tiles,
+          heavy.length ? h("div", { className: "sc-sum-sec" },
+            h("div", { className: "sc-sum-h" }, "Heavy runs"),
+            heavy.map(function (x, i) {
+              var right = [span(x.minutes) + (x.running ? " so far" : "")];
+              if (x.cost != null) right.push(money(x.cost)); else if (x.tokens) right.push(big(x.tokens) + " tokens");
+              return h("div", { className: "sc-sum-row", key: i },
+                h("span", { className: "sc-sum-l" }, h("i", { className: "sc-sum-dot hot" }), x.agent + (x.task ? ", " + x.task : "")),
+                h("span", { className: "sc-sum-r" }, right.join(", ")));
+            }),
+            data.heavy_more ? h("a", { className: "sc-link sc-sum-more", href: "/usage" + q }, "and " + data.heavy_more + " more in Usage →") : null) : null,
+          day.length ? h("div", { className: "sc-sum-sec" },
+            h("div", { className: "sc-sum-h" }, "Your day"),
+            (all ? day : day.slice(0, 4)).map(function (x, i) {
+              var txt = x.kind === "event" ? clock(x.at) + " " + x.text : x.text;
+              var inner = [h("i", { key: "d", className: "sc-sum-dot " + (x.kind === "alert" ? "bad" : x.kind === "warn" ? "hot" : "ok") }), txt];
+              return x.href ? h("a", { className: "sc-sum-row sc-sum-a", key: i, href: x.href + q }, h("span", { className: "sc-sum-l" }, inner))
+                            : h("div", { className: "sc-sum-row", key: i }, h("span", { className: "sc-sum-l" }, inner));
+            }),
+            data.day_more ? h("div", { className: "sc-sum-more sc-muted" }, "and " + data.day_more + " more") : null) : null);
+      }
+      return h("div", { className: "sc-panel sc-sum" },
+        h("div", { className: "sc-panel-h" },
+          h("span", { className: "sc-panel-t" }, titles[range]),
+          h("span", { className: "sc-sum-meta" }, tabs,
+            h("button", { className: "sc-sum-ref", title: "Refresh", disabled: busy, onClick: function () { load(range); } },
+              data && data.at ? "Updated " + clock(data.at) + " ↻" : "↻"))),
+        h("div", { className: "sc-panel-b" }, body));
+    }
+
     function Overview() {
       var sa = useState(null), status = sa[0], setStatus = sa[1];
       var sb = useState(null), sessions = sb[0], setSessions = sb[1];
@@ -379,7 +456,8 @@
             h("div", { className: "sc-stats" }, tiles)) : null;
         })(),
 
-        h("div", { className: "sc-cols" },
+        h("div", { className: "sc-cols sc-cols-sum" },
+          h("div", { className: "sc-col" }, h(SummaryCard, null)),
           h("div", { className: "sc-col" },
             Panel("Waiting on you", "Only decisions. The team handles the rest.", waitingBody()),
             useManaged
@@ -412,7 +490,9 @@
                               model ? h("span", { className: "sc-tag" }, model) : null,
                               h("span", { className: "sc-skill" }, (ag.skill_count != null ? ag.skill_count : 0) + " skills")));
                         }))
-          ),
+          )
+        ),
+        h("div", { className: "sc-cols sc-cols-low" },
           h("div", { className: "sc-col" },
             Panel("Activity log", "Live from your gateway",
               recent.length === 0
@@ -422,7 +502,8 @@
                     return h("div", { className: "sc-log", key: i },
                       h("span", { className: "sc-log-t" }, timeAgo(pick(s, ["last_active", "updated_at", "created_at", "started_at"])) || "recent"),
                       h("span", null, String(title).slice(0, 60)));
-                  })),
+                  }))),
+          h("div", { className: "sc-col" },
             h("div", { className: "sc-managed" },
               h("div", { className: "sc-managed-h" }, OPERATOR ? "MANAGED BY " + OPERATOR.toUpperCase() : "YOUR SYSTEM"),
               SUPPORT ? h("div", { className: "sc-managed-row" }, h("span", { className: "sc-muted" }, "Support"), h("span", null, SUPPORT)) : null,

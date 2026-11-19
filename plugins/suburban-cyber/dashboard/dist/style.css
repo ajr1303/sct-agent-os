@@ -104,3 +104,32 @@
 .sc-chk-btn:focus-visible{outline:2px solid var(--color-primary,#25c9ee);outline-offset:2px}
 .sc-chk-btn:disabled{cursor:default;text-decoration:none}
 @media (max-width:640px){.sc-topr{align-items:flex-start}}
+
+/* Overview summary card */
+.sc-cols-sum,.sc-cols-low{grid-template-columns:minmax(0,1.5fr) minmax(0,1fr)}
+.sc-cols-sum>.sc-col,.sc-cols-low>.sc-col{min-width:0}
+@media (max-width:900px){.sc-cols-sum,.sc-cols-low{grid-template-columns:minmax(0,1fr)}}
+.sc-sum .sc-panel-h{align-items:center;flex-wrap:wrap}
+.sc-sum-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.sc-sum-tabs{display:inline-flex;border:1px solid var(--color-border,rgba(255,255,255,.14))}
+.sc-sum-tab{background:none;border:0;color:inherit;opacity:.65;font-size:11px;padding:3px 8px;cursor:pointer}
+.sc-sum-tab.on{opacity:1;background:rgba(255,255,255,.1)}
+.sc-sum-ref{background:none;border:0;color:inherit;opacity:.6;font-size:11px;cursor:pointer;padding:0}
+.sc-sum-ref:hover{opacity:1}
+.sc-sum-text{font-size:14px;line-height:1.6;margin:10px 0 12px}
+.sc-sum-nums{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:6px}
+@media (max-width:520px){.sc-sum-nums{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.sc-sum-num{display:flex;flex-direction:column;gap:2px;padding:8px 10px;border:1px solid var(--color-border,rgba(255,255,255,.12));background:rgba(255,255,255,.03);color:inherit;text-decoration:none;min-width:0}
+.sc-sum-num span{font-size:11px;opacity:.7}
+.sc-sum-num b{font-size:19px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sc-sum-num.warn{border-color:rgba(245,180,60,.6);background:rgba(245,180,60,.12)}
+.sc-sum-num.warn b,.sc-sum-num.warn span{color:#f7c66a;opacity:1}
+.sc-sum-sec{margin-top:12px}
+.sc-sum-h{font-size:11px;text-transform:uppercase;letter-spacing:.07em;opacity:.6;margin-bottom:4px}
+.sc-sum-row{display:flex;justify-content:space-between;gap:12px;font-size:13px;padding:3px 0;color:inherit;text-decoration:none}
+.sc-sum-a:hover{text-decoration:underline}
+.sc-sum-l{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sc-sum-r{white-space:nowrap;opacity:.85}
+.sc-sum-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:8px;vertical-align:1px;background:#7fd1a0}
+.sc-sum-dot.hot{background:#f5b43c}.sc-sum-dot.bad{background:#f0706a}
+.sc-sum-more{display:block;font-size:12px;margin-top:4px}

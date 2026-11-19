@@ -1097,3 +1097,28 @@ Owners stay with the main assistant, which hands work to the others. With **Oper
 tools** switched on (Account), the box comes back. Addresses that carry `?profile=`
 are left alone: Hermes adds that itself on every page (0.55.0 removed it and
 reloaded, which looped; fixed in 0.55.1).
+
+## 34. The Overview summary card
+
+The card at the top of the lower half of Overview answers "what happened while I
+was away". It is read from `GET /api/connectors/orchestration/summary`, which takes
+`since` and `until` (seconds, sent by the browser because the server does not know
+the owner's timezone) and `label` (`today`, `yesterday`, `week`).
+
+- **The sentences** are fixed patterns filled with real counts: tasks finished in
+  the period, tasks in progress, decision cards waiting, agents stopped. No AI model
+  is involved, so the card costs nothing and cannot invent anything.
+- **Spent** is the board's cost ledger for the period when it has one, otherwise the
+  cost recorded on each run. If neither exists (some agents report tokens only), the
+  tile shows tokens instead.
+- **Heavy runs**: 30 minutes or more, $1 or more, or three times that agent's usual
+  time (and at least 20 minutes), cost (at least $0.25) or tokens (at least 500,000),
+  judged against its earlier runs. The limits are `HEAVY_MIN`, `HEAVY_COST` and
+  `HEAVY_TOKENS` in `connectors/app.py`.
+- **"About double a normal day"** compares the period with the same stretch of
+  earlier days, and only appears with at least two earlier days to compare.
+- **Your day**: stopped agents, a decision waiting more than a day, tasks with no
+  progress for over a day, then today's remaining appointments from the connected
+  booking apps. Paperclip tasks carry no due date, so the card cannot say what is
+  due today.
+- The answer is cached for a minute; the card refreshes every two minutes.

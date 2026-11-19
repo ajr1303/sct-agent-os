@@ -2,6 +2,21 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.56.0] — 2026-11-19
+
+### Added
+- **Summary card on Overview** ("Today so far", with "Since yesterday" and "This
+  week"). Two or three plain sentences, four numbers (finished, in progress, need
+  you, spent), up to three heavy runs, and "Your day": anything that needs the
+  owner first, then appointments still ahead today. Every sentence is built from
+  counts read off the board (`GET /orchestration/summary`); no AI model writes it.
+- A run counts as heavy at 30 minutes or $1, or at three times that agent's usual
+  time, cost or tokens. Quiet sections hide themselves.
+
+### Changed
+- Overview layout: the summary sits beside Waiting on you and Your agents, with
+  Activity log and Your system in a row below.
+
 ## [0.55.1] — 2026-11-19
 
 ### Fixed
