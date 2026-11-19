@@ -1,0 +1,10 @@
+{
+  "name": "suburban-models",
+  "label": "AI models",
+  "description": "Choose the AI model your assistant uses and connect AI providers",
+  "icon": "Cpu",
+  "version": "0.1.0",
+  "tab": { "path": "/ai-models" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css"
+}

@@ -24,15 +24,15 @@
     { id: "main", label: "", items: ["/chat", "/projects", "/memory"] },                    // Overview is added in front of Chat
     { id: "team", label: "Your team", items: ["/tasks", "/team", "/orchestration", "/automations", "/usage"] },
     { id: "conn", label: "Connections", items: ["/bookings", "/mailboxes", "/website", "/channels", "/pairing", "/backups"] },
-    { id: "set", label: "Settings", items: ["/security", "/models", "/env", "/skills", "/sessions"] },
-    { id: "adv", label: "Operator tools", items: ["/profiles", "/mcp", "/plugins", "/cron", "/files", "/webhooks",
+    { id: "set", label: "Settings", items: ["/security", "/ai-models", "/env", "/skills", "/sessions"] },
+    { id: "adv", label: "Operator tools", items: ["/models", "/profiles", "/mcp", "/plugins", "/cron", "/files", "/webhooks",
         "/config", "/system", "/logs"] }
   ];
   // Hermes pages left out of the menu: its own task board (Tasks replaces it), usage
   // badges, and its own manual.
   var GONE = { "/kanban": 1, "/achievements": 1, "/docs": 1 };
   // Plain names for Hermes pages an owner uses.
-  var RENAME = { "/channels": "Messaging", "/pairing": "Messaging access", "/models": "AI models", "/env": "Keys", "/sessions": "Chat history" };
+  var RENAME = { "/channels": "Messaging", "/pairing": "Messaging access", "/models": "Advanced models", "/env": "Keys", "/sessions": "Chat history" };
   var OPKEY = "sct-operator";
   function operatorOn() { return store(OPKEY) === "1"; }
   function relabel(a, text) {
@@ -152,12 +152,34 @@
     } catch (err) { window.location.assign("/" + (location.search || "")); }
   }, true);
 
+  // Owners stay with the main assistant, which hands work to the others, so the
+  // "switch profile" box at the top of the menu is hidden. It comes back with
+  // Operator tools switched on (Account), for whoever maintains the server.
+  var bounced = false;
+  function oneProfile() {
+    var op = operatorOn(), sw = document.getElementById("hermes-profile-switcher");
+    if (sw) {
+      var box = sw.closest("div[title]") || sw.parentElement;
+      if (box) box.style.display = op ? "" : "none";
+    }
+    // A link or bookmark that names another profile would leave the owner inside it
+    // with no way back, so drop the name and load the main one.
+    if (!op && !bounced && /[?&]profile=/.test(location.search)) {
+      bounced = true;
+      try {
+        var u = new URL(location.href); u.searchParams.delete("profile");
+        location.replace(u.pathname + (u.search || "") + u.hash);
+      } catch (e) {}
+    }
+  }
+
   var pending = null;
   function schedule() {
     if (pending) return;
-    pending = setTimeout(function () { pending = null; try { arrange(); } catch (e) {} }, 60);
+    pending = setTimeout(function () { pending = null; try { oneProfile(); } catch (e) {} try { arrange(); } catch (e) {} }, 60);
   }
   function start() {
+    try { oneProfile(); } catch (e) {}
     try { arrange(); } catch (e) {}
     try { new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true }); } catch (e) {}
     window.addEventListener("popstate", schedule);

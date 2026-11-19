@@ -935,7 +935,7 @@ up by hand.
 2. Dashboard > Settings > **Keys** > find **Meta Model API** > paste the key > save.
 3. Agents > pick an agent on this server > **Change model** > **Refresh the list** >
    choose Meta and a Muse model. To make it the default for every on-server agent,
-   use Settings > AI models instead.
+   use Settings > AI models instead (Connect is on that page too).
 4. If Meta does not appear after a refresh, press **Restart Gateway** in the left
    menu and refresh again.
 
@@ -1070,3 +1070,29 @@ read the changed database. `scripts/update.sh` handles this through
   old image, and `docker compose up -d`.
 - 3.2.0 to 3.6.1 was tested on a restored backup: 19 database changes, a few
   seconds on a small install and 13 seconds with 150,000 messages.
+
+## 33. AI models page, and the profile switcher
+
+**AI models** (Settings > AI models) is the owner's page for models. It replaces
+Hermes's own Models page in the menu.
+
+- **Your main model:** what the assistant and the on-server agents without their own
+  model use. **Change** picks a connected provider, then a model. Recommended models
+  come first; "Show all" lists the rest. Prices are shown where Hermes knows them. An
+  expensive model asks for a second confirmation. The change applies to new chats
+  and tasks.
+- **AI providers:** each one is Connected or Not connected. **Connect** takes the API
+  key from the owner's account with that provider; it is stored on the server and
+  not shown again. **Replace key** and **Disconnect** are on connected ones (not on
+  the provider the main model comes from). If a new key does not show as connected
+  within a minute, press Restart Gateway.
+- **Agents on a different model:** read-only list; change them on the Agents page.
+- It uses Hermes's own routes (`/api/model/options`, `/api/model/set`, `/api/env`),
+  so anything set here is what Hermes itself reads.
+- Hermes's page (helper-task models, mixture of agents, custom endpoints) is under
+  **Operator tools > Advanced models**.
+
+**Profile switcher.** The "managing profile" box at the top of the menu is hidden.
+Owners stay with the main assistant, which hands work to the others. A link that
+names another profile (`?profile=`) is opened on the main one. With **Operator
+tools** switched on (Account), the box and profile links work as before.

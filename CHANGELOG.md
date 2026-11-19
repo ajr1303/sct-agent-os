@@ -2,6 +2,16 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.55.0] — 2026-11-19
+
+- **New AI models page.** A simpler page in the Agent OS style: see your main model,
+  change it in two steps (provider, then model, with recommended ones first and
+  prices shown), and connect or disconnect AI providers by pasting a key. Agents on
+  a different model are listed with a link to the Agents page.
+- **The profile switcher is gone from the menu.** Owners stay with the main
+  assistant. It comes back when Operator tools is switched on.
+- Hermes's own Models page is still there for operators, as "Advanced models".
+
 ## [0.54.0] — 2026-11-19
 
 - **Memory page.** See what your assistant has learned about you, the statements each
