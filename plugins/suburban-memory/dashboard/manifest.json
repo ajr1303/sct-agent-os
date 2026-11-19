@@ -1,0 +1,10 @@
+{
+  "name": "suburban-memory",
+  "label": "Memory",
+  "description": "See what your assistant has learned about you, where it came from, and remove anything that is wrong",
+  "icon": "Brain",
+  "version": "0.1.0",
+  "tab": { "path": "/memory" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css"
+}

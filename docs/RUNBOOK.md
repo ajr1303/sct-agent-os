@@ -1024,3 +1024,49 @@ and acts:
 - The cause is matched from the error text, so an unusual message lands in
   "unknown" and is simply retried. The watch log on the Automations page shows each
   action.
+
+## 32. Memory page, and upgrading the memory service
+
+**The Memory page** (menu: Memory) shows what the assistant has learned about the
+owner:
+
+- **Your profile:** the short card the assistant keeps in mind in every chat.
+- **Recent reviews:** the memory service looks over what it knows from time to time
+  ("dreaming" in Honcho's words). Each review lists what it learned and the
+  statements it was based on, what it tidied away, and how the profile changed.
+  Reviews are kept for about 30 days.
+- **Everything it knows about you:** each item, whether you said it or it was
+  worked out, and **Not right?** to remove it. The same sentence stored more than
+  once is shown once and removed everywhere.
+- **Review now** starts a review. It uses the AI model, so it is limited to one every
+  ten minutes.
+
+It reads Honcho on the internal network (`/v3/workspaces/<ws>/dreams`, `conclusions`,
+`peers/<id>/card`), using the workspace and names in `data/hermes/honcho.json`. Needs
+Honcho 3.6 or later for the reviews list; on an older one the rest still shows. With
+basic memory (no Honcho) the page says so.
+
+**Upgrading the memory service.** A release that pins a newer Honcho changes the
+memory database the first time the new version starts, and the old version cannot
+read the changed database. `scripts/update.sh` handles this through
+`scripts/upgrade-memory.sh`:
+
+1. Stops Honcho and saves the memory database to
+   `backups/honcho-before-upgrade-<time>.sql.gz` (kept 14 days). If the copy cannot be
+   saved, the memory service is left on its current version.
+2. Starts the new version and waits up to 15 minutes for it to report healthy.
+3. If it does not, restores the copy, returns to the version that was running, and
+   pins it in `.env` (`HONCHO_IMAGE=`). The reason is in
+   `backups/memory-upgrade-failed.log`. The rest of the update carries on.
+
+- `sudo ./scripts/upgrade-memory.sh status` says which version runs.
+- `sudo ./scripts/upgrade-memory.sh retry` tries a rolled-back upgrade again. A
+  later release with a different Honcho version retries on its own.
+- To restore the copy by hand: stop `honcho-api` and `honcho-deriver`, then
+  `docker exec agent-os-honcho-db psql -U honcho -d postgres -c 'DROP DATABASE IF
+  EXISTS honcho WITH (FORCE)' -c 'CREATE DATABASE honcho'` and
+  `gunzip -c backups/honcho-before-upgrade-<time>.sql.gz | docker exec -i
+  agent-os-honcho-db psql -U honcho -d honcho`, set `HONCHO_IMAGE` in `.env` to the
+  old image, and `docker compose up -d`.
+- 3.2.0 to 3.6.1 was tested on a restored backup: 19 database changes, a few
+  seconds on a small install and 13 seconds with 150,000 messages.

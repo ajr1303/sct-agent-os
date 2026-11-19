@@ -205,6 +205,8 @@ denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
   appointment in the next 7 days across connected calendars (cached 5 minutes); the
   browser counts the ones on the viewer's own calendar day.
 - **Website visitors:** `GET /website` (plugin `suburban-website`, tab `/website`).
+- **Memory:** plugin `suburban-memory`, tab `/memory`. `connectors` routes `/memory*` read Honcho's dream
+  history, conclusions and peer card for the owner (`data/hermes/honcho.json` names the workspace and peers).
 - **Projects:** plugin `suburban-projects`, tab `/projects`. Tables `projects`,
   `project_files` (metadata + extracted text), `project_blobs` (the bytes),
   `project_tasks`. Routes `GET/POST /projects`, `GET/PATCH/DELETE /projects/{id}`,

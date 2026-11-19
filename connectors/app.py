@@ -7690,6 +7690,197 @@ async def agent_tools_mcp(request: Request):
     return JSONResponse(out) if out else Response(status_code=202)
 
 
+# --- Memory: what the assistant has learned, and why -------------------------------------
+# Honcho (the memory service) reviews conversations in the background ("dreaming"):
+# it draws conclusions about the owner, merges duplicates and updates a short profile
+# card. From Honcho 3.6 each of those reviews is recorded, with the evidence behind
+# every new conclusion. These routes read that for the Memory page and let the owner
+# remove something that is wrong. Honcho is on the internal network only.
+HONCHO_URL = (os.environ.get("HONCHO_URL") or "http://honcho-api:8000").rstrip("/")
+MEMORY_REVIEW_EVERY_MIN = 10
+_MEM_ID = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
+_MEM_NAME = re.compile(r"^[^\x00-\x1f/\\?#%]{1,100}$")
+_MEM_LEVELS = {"explicit": "You said this", "deductive": "Worked out from what you said", "inductive": "A pattern it noticed",
+               "contradiction": "Two things that don't agree"}
+
+
+def _mem_conf():
+    """Workspace and peer names, from the same file Hermes's memory plugin uses."""
+    try:
+        with open(os.path.join(HERMES_HOME_RO, "honcho.json"), "r", encoding="utf-8") as f:
+            d = json.load(f)
+        h = (d.get("hosts") or {}).get("hermes") or {}
+        ws, owner, ai = str(h.get("workspace") or "").strip(), str(h.get("peerName") or "").strip(), str(h.get("aiPeer") or "").strip()
+        if all(_MEM_NAME.match(x) for x in (ws, owner, ai)):
+            return {"workspace": ws, "owner": owner, "assistant": ai}
+    except Exception:
+        pass
+    return None
+
+
+def _mem_call(method, path, body=None, params=None, ok=(200, 201, 204)):
+    """One call to Honcho. Returns (status, json or None)."""
+    with httpx.Client(timeout=20.0, follow_redirects=False) as c:
+        r = c.request(method, HONCHO_URL + "/v3" + path, json=body, params=params)
+    data = None
+    if r.status_code in ok and r.content:
+        try:
+            data = r.json()
+        except Exception:
+            data = None
+    return r.status_code, data
+
+
+def _mem_q(name):
+    return quote(str(name), safe="")
+
+
+def _mem_fact(c):
+    return {"id": c.get("id"), "text": _clip(c.get("content"), 600), "level": c.get("level") or "explicit",
+            "kind": _MEM_LEVELS.get(c.get("level") or "explicit", "Noted"), "at": c.get("created_at")}
+
+
+@app.get("/memory")
+def memory_get(_auth=Depends(require_auth)):
+    conf = _mem_conf()
+    if not conf:
+        return {"available": False, "why": "Long-term memory (Honcho) is not set up on this server, so there is nothing to show here."}
+    ws = _mem_q(conf["workspace"])
+    out = {"available": True, "history": True, "owner": conf["owner"], "assistant": conf["assistant"], "card": [], "facts": [],
+           "reviews": [], "review_wait": 0}
+    try:
+        # The profile card: the assistant's view of the owner first, else the owner's own.
+        for obs, params in ((conf["assistant"], {"target": conf["owner"]}), (conf["owner"], None)):
+            st, d = _mem_call("GET", "/workspaces/%s/peers/%s/card" % (ws, _mem_q(obs)), params=params)
+            card = (d or {}).get("peer_card") if st == 200 else None
+            if card:
+                out["card"] = [_clip(x, 300) for x in card if isinstance(x, str)][:60]
+                break
+        st, d = _mem_call("POST", "/workspaces/%s/conclusions/list" % ws, {"filters": {"observed_id": conf["owner"]}}, {"size": 100, "page": 1})
+        seen = set()
+        for c in (d or {}).get("items") or []:
+            if isinstance(c, dict) and c.get("content") and c["content"] not in seen:
+                seen.add(c["content"])
+                out["facts"].append(_mem_fact(c))
+        out["facts_total"] = (d or {}).get("total")
+        st, d = _mem_call("POST", "/workspaces/%s/dreams/list" % ws, {"observed_id": conf["owner"]}, {"size": 30, "page": 1})
+        if st in (404, 405):
+            out["history"] = False     # an older memory service: no record of reviews yet
+        for r in (d or {}).get("items") or []:
+            if isinstance(r, dict):
+                out["reviews"].append({"id": r.get("id"), "at": r.get("started_at"), "status": r.get("status"),
+                                       "added": r.get("created_count") or 0, "removed": r.get("removed_count") or 0,
+                                       "card_updated": bool(r.get("peer_card_updated")),
+                                       "asked": r.get("trigger_reason") == "manual"})
+    except Exception:
+        return {"available": False, "why": "The memory service is not answering right now. It may be restarting; try again in a minute."}
+    last = _ts(_kv_get("memory_review_at"))
+    if last:
+        left = MEMORY_REVIEW_EVERY_MIN * 60 - (_now() - last).total_seconds()
+        out["review_wait"] = int(max(0, left))
+    return out
+
+
+@app.get("/memory/reviews/{run_id}")
+def memory_review(run_id: str, _auth=Depends(require_auth)):
+    conf = _mem_conf()
+    if not conf or not _MEM_ID.match(run_id):
+        raise HTTPException(status_code=404, detail="That review was not found.")
+    try:
+        st, d = _mem_call("GET", "/workspaces/%s/dreams/%s" % (_mem_q(conf["workspace"]), run_id))
+    except Exception:
+        raise HTTPException(status_code=502, detail="The memory service is not answering right now.")
+    if st != 200 or not isinstance(d, dict) or d.get("observed_id") != conf["owner"]:
+        raise HTTPException(status_code=404, detail="That review was not found. Reviews are kept for about 30 days.")
+
+    def ref(x):
+        x = x if isinstance(x, dict) else {}
+        return {"text": _clip(x.get("content"), 600) if x.get("content") else None, "kind": _MEM_LEVELS.get(x.get("level") or "", "Noted"),
+                "still_there": x.get("status") == "current"}
+    added = [{"id": (c.get("conclusion") or {}).get("id"), **ref(c.get("conclusion")),
+              "because": [ref(s_) for s_ in (c.get("sources") or []) if isinstance(s_, dict)][:12]}
+             for c in (d.get("created") or []) if isinstance(c, dict)]
+    by_id = {a["id"]: a["text"] for a in added}
+    removed = [{"text": _clip(c.get("content"), 600), "replaced_by": by_id.get(c.get("replaced_by"))}
+               for c in (d.get("removed") or []) if isinstance(c, dict)]
+    pc = d.get("peer_card") if isinstance(d.get("peer_card"), dict) else None
+    card = None
+    if pc:
+        before, after = [str(x) for x in (pc.get("before") or [])], [str(x) for x in (pc.get("after") or [])]
+        card = {"added": [_clip(x, 300) for x in after if x not in before][:40], "dropped": [_clip(x, 300) for x in before if x not in after][:40]}
+    return {"id": d.get("id"), "at": d.get("started_at"), "finished": d.get("finished_at"), "status": d.get("status"),
+            "added": added[:200], "removed": removed[:200], "card": card,
+            "trimmed": bool(d.get("pruned_at"))}
+
+
+@app.post("/memory/review")
+def memory_review_now(_auth=Depends(require_auth)):
+    """Ask the memory service to review what it knows about the owner now. Each review
+    uses the AI model, so it is limited to one every ten minutes."""
+    conf = _mem_conf()
+    if not conf:
+        raise HTTPException(status_code=400, detail="Long-term memory is not set up on this server.")
+    last = _ts(_kv_get("memory_review_at"))
+    if last and (_now() - last).total_seconds() < MEMORY_REVIEW_EVERY_MIN * 60:
+        raise HTTPException(status_code=429, detail="A review was asked for a few minutes ago. Give it ten minutes between reviews.")
+    ws = _mem_q(conf["workspace"])
+    sent = 0
+    try:
+        # Each "observer" keeps its own notes about the owner; review the ones that exist.
+        st, d = _mem_call("POST", "/workspaces/%s/conclusions/list" % ws, {"filters": {"observed_id": conf["owner"]}}, {"size": 100, "page": 1})
+        observers = []
+        for c in (d or {}).get("items") or []:
+            o = c.get("observer_id") if isinstance(c, dict) else None
+            if o and o not in observers and _MEM_NAME.match(str(o)):
+                observers.append(o)
+        for o in (observers or [conf["owner"]])[:3]:
+            st, _ = _mem_call("POST", "/workspaces/%s/schedule_dream" % ws, {"observer": o, "observed": conf["owner"], "dream_type": "omni"})
+            if st == 204:
+                sent += 1
+            elif st == 400:
+                raise HTTPException(status_code=400, detail="Reviews are switched off in the memory service's settings.")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=502, detail="The memory service is not answering right now.")
+    if not sent:
+        raise HTTPException(status_code=502, detail="The memory service did not accept the request.")
+    _kv_set("memory_review_at", _now().isoformat())
+    return {"ok": True, "message": "Review started. It usually finishes within a couple of minutes and then appears in the list."}
+
+
+@app.delete("/memory/facts/{fact_id}")
+def memory_forget(fact_id: str, _auth=Depends(require_auth)):
+    """Remove one thing the assistant believes about the owner."""
+    conf = _mem_conf()
+    if not conf or not _MEM_ID.match(fact_id):
+        raise HTTPException(status_code=404, detail="That item was not found.")
+    ws = _mem_q(conf["workspace"])
+    try:
+        st, d = _mem_call("GET", "/workspaces/%s/conclusions/%s" % (ws, fact_id))
+        if st != 200 or not isinstance(d, dict) or d.get("observed_id") != conf["owner"]:
+            raise HTTPException(status_code=404, detail="That item was not found. It may already be gone.")
+        st, _ = _mem_call("DELETE", "/workspaces/%s/conclusions/%s" % (ws, fact_id))
+        # The same sentence is often stored more than once (each observer keeps its own
+        # copy). The page shows it once, so remove every copy.
+        if st in (200, 204):
+            for page in (1, 2, 3):
+                s2, lst = _mem_call("POST", "/workspaces/%s/conclusions/list" % ws, {"filters": {"observed_id": conf["owner"]}}, {"size": 100, "page": page})
+                items = (lst or {}).get("items") or []
+                for c in items:
+                    if isinstance(c, dict) and c.get("content") == d.get("content") and _MEM_ID.match(str(c.get("id") or "")):
+                        _mem_call("DELETE", "/workspaces/%s/conclusions/%s" % (ws, c["id"]))
+                if len(items) < 100:
+                    break
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=502, detail="The memory service is not answering right now.")
+    if st not in (200, 204):
+        raise HTTPException(status_code=502, detail="The memory service could not remove it.")
+    return {"ok": True, "message": "Removed. The assistant will no longer use it."}
+
+
 class BusinessProfile(BaseModel):
     name: str = ""
     about: str = ""

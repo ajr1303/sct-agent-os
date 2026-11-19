@@ -2,6 +2,20 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.54.0] — 2026-11-19
+
+- **Memory page.** See what your assistant has learned about you, the statements each
+  conclusion was based on, and how your profile changed after each review. **Not
+  right?** removes anything that is wrong, and **Review now** asks it to look over
+  recent conversations.
+- **Memory service upgraded to Honcho 3.6.1** (from 3.2.0). This adds the record of
+  reviews the Memory page shows, and brings fixes: memory jobs no longer fail when an
+  OpenAI-compatible model leaves out token counts, Claude 5 models work as the memory
+  model, and the memory worker no longer stalls on one bad item.
+- **The upgrade protects your memory.** The updater saves a copy of the memory
+  database first, waits for the new version to come up healthy, and puts the copy back
+  on the old version if it does not. The first update takes a few minutes longer.
+
 ## [0.53.0] — 2026-11-18
 
 - **Agents in error are cleared and restarted automatically.** The stuck-agent watch
