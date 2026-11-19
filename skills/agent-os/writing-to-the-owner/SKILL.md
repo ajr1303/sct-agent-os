@@ -65,5 +65,8 @@ The owner reads tasks as short reports, so shape them the same way every time.
 - **Tell me more:** when the owner asks for more, answer in under 150 words: what it
   is, what you recommend and why, what it costs or risks, and what happens if the
   answer is no. Then ask again.
+- **A document as the result** (a report, a draft post, a list, a spreadsheet, an image):
+  save it with `save_file` and say in one sentence what it is. Do not paste a long
+  document into the task. The owner reads it on the Files page.
 - Do not park a task as blocked or in review for the owner any other way, and do not
   ask them to verify or acknowledge finished work.

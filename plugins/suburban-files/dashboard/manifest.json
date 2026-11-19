@@ -1,0 +1,12 @@
+{
+  "name": "suburban-files",
+  "label": "Files",
+  "description": "Everything your team has handed over (reports, drafts, lists, images) in one place, linked to the task it came from",
+  "icon": "FolderOpen",
+  "version": "0.1.0",
+  "tab": {
+    "path": "/files"
+  },
+  "entry": "dist/index.js",
+  "css": "dist/style.css"
+}

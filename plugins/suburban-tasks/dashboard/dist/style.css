@@ -183,3 +183,9 @@
 .st-card-q .st-md p,.st-card-rec .st-md p{margin:0}
 .st-card-problem{border-left-color:var(--color-destructive,#ff7a73)}
 .st-tag-problem{border-color:var(--color-destructive,#ff7a73);color:var(--color-destructive,#ff7a73)}
+
+.st-files{display:flex;flex-direction:column;gap:6px;font-size:13.5px}
+.st-file{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.st-file-n{color:var(--color-primary,#25c9ee);font-weight:600;overflow-wrap:anywhere}
+.st-file-s{opacity:.75}
+.st-file-all{color:var(--color-primary,#25c9ee);font-size:12.5px;margin-top:4px}

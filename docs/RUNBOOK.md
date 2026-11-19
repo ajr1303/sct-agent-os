@@ -1167,3 +1167,27 @@ headings (`## What we do`, `## Who we serve`, `## Goals for this quarter`,
   the daily idea task includes it. It is not pasted into every task, to keep tasks
   short; the short business profile in Account still is.
 
+## 37. Files
+
+**Files** in the menu lists what agents have handed over. A file gets there when an
+agent calls `save_file` on the task it is working, so the page fills up as agents
+start using the tool.
+
+- **Agents on this server** have the tool straight away. **Agents on their own
+  machines** learn about it from their instructions: Agents, choose the agent,
+  **Add task tools to instructions**, Save changes. Do this once per agent after
+  updating to 0.59.0.
+- **What can be saved.** Text files (md, txt, csv, json, html and a few code types)
+  up to 400,000 characters; PDF, png, jpg, gif, webp, docx, xlsx, pptx and zip up to
+  4 MB. Nothing else is accepted.
+- **Reading.** Markdown and CSV are shown formatted; other text is shown as plain
+  text; pictures are shown; everything else is download only. An HTML file is shown
+  as its source and never runs in the dashboard.
+- **Limits.** 20 files a task, 3,000 files and 500 MB in total (set
+  `TEAM_FILES_MAX_MB` in `.env` to change the total). When full, agents are told to
+  ask the owner, who can delete old files on the page. Nothing is deleted
+  automatically.
+- **Backups.** Files live in the connectors database, so they are in every backup.
+- Files made before this version, and anything an agent wrote only to its own disk,
+  are not on the page.
+

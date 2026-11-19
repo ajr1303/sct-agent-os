@@ -210,6 +210,9 @@ denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
 - **Plan:** plugin `suburban-plan`, tab `/plan`. `connectors` routes `/plan*` keep the business plan in
   table `business_plan` (every save is a new row; 60 kept). Agents read it with `get_business_plan`;
   only the lead (CEO role) can write it, with `update_business_plan`. Today's idea reads it.
+- **Files:** plugin `suburban-files`, tab `/files`. Agents hand over documents with the `save_file` tool
+  (text, or base64 up to 4 MB); `connectors` keeps them in `team_files` / `team_blobs` and serves them at
+  `/files*`. Downloads are always attachments with a sandbox policy; only real image types preview inline.
 - **Memory:** plugin `suburban-memory`, tab `/memory`. `connectors` routes `/memory*` read Honcho's dream
   history, conclusions and peer card for the owner (`data/hermes/honcho.json` names the workspace and peers).
 - **Projects:** plugin `suburban-projects`, tab `/projects`. Tables `projects`,

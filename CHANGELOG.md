@@ -2,6 +2,23 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.59.0] — 2026-11-19
+
+### Added
+- **Files page.** One place for what the team hands over: reports, drafts, lists,
+  spreadsheets, images. Search, filter by agent, read text, Markdown and CSV in the
+  page, copy, download, delete. Each file shows the agent and the task it came from,
+  and the task page lists its files.
+- **`save_file` tool for agents**, also reachable from agents on their own machines.
+  Text up to 400,000 characters, or PDF, image and Office files up to 4 MB. Saving
+  the same name on the same task replaces the file. 20 files a task, 500 MB in all
+  (`TEAM_FILES_MAX_MB`).
+- The agents' writing guide tells them to save a document rather than paste it into
+  the task.
+
+### Changed
+- The task tools address accepts bodies up to 6 MB (was 256 KB) so files fit.
+
 ## [0.58.0] — 2026-11-19
 
 ### Added

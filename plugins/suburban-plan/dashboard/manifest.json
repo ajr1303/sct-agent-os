@@ -2,7 +2,7 @@
   "name": "suburban-plan",
   "label": "Plan",
   "description": "The one-page business plan your team works from, kept by your lead agent, with every version saved",
-  "icon": "ListChecks",
+  "icon": "FileText",
   "version": "0.1.0",
   "tab": {
     "path": "/plan"

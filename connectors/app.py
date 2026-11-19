@@ -5227,6 +5227,10 @@ def task_detail(key: str, _auth=Depends(require_auth)):
     except Exception as e:
         out["errors"].append("work-products: " + str(e)[:100])
     try:
+        out["files"] = _files_rows("WHERE task_key=?", (str(out.get("key") or key),), 50)
+    except Exception:
+        out["files"] = []
+    try:
         rs = _pc_get("/api/issues/" + key + "/runs?view=recent")
         ritems = rs if isinstance(rs, list) else (rs.get("runs") or rs.get("items") or rs.get("data") or [])
         if ritems and isinstance(ritems[0], dict):
@@ -6527,6 +6531,187 @@ def t_update_business_plan(a):
         _set_issue(issue, "done", "Completed: " + summary)
         return "Saved as the current plan, and this task is closed. Stop here."
     return "Saved as the current plan." if changed else "The plan already says exactly that; nothing changed."
+
+
+# ---------------------------------------------------------------------------
+# Team files: documents the agents hand over (a report, a draft post, a list, an image),
+# kept in one place and linked to the task that produced them. Agents save with the
+# save_file tool; the owner reads, copies, downloads and deletes on the Files page.
+# ---------------------------------------------------------------------------
+TEAM_FILE_TEXT_MAX = 400000                    # characters, for text sent as "content"
+TEAM_FILE_BIN_MAX = 4 * 1024 * 1024            # bytes, for "content_base64"
+TEAM_FILES_PER_TASK = 20
+TEAM_FILES_MAX = 3000
+TEAM_STORE_MAX = int(os.environ.get("TEAM_FILES_MAX_MB") or 500) * 1024 * 1024
+_TEAM_TEXT_EXT = {"md": "text/markdown", "txt": "text/plain", "csv": "text/csv", "json": "application/json",
+                  "html": "text/html", "htm": "text/html", "xml": "application/xml", "yaml": "text/plain", "yml": "text/plain",
+                  "log": "text/plain", "sql": "text/plain", "py": "text/plain", "js": "text/plain", "css": "text/plain", "sh": "text/plain"}
+_TEAM_BIN_EXT = {"pdf": "application/pdf", "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif",
+                 "webp": "image/webp", "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                 "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                 "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation", "zip": "application/zip"}
+_TEAM_IMG = ("image/png", "image/jpeg", "image/gif", "image/webp")
+
+
+def _files_db():
+    con = get_db()
+    con.execute("CREATE TABLE IF NOT EXISTS team_files (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, mime TEXT, size INTEGER, "
+                "text TEXT, summary TEXT, agent TEXT, task_key TEXT, task_title TEXT, created_at TEXT)")
+    con.execute("CREATE TABLE IF NOT EXISTS team_blobs (file_id INTEGER PRIMARY KEY, data BLOB)")
+    con.execute("CREATE INDEX IF NOT EXISTS team_files_task ON team_files(task_key)")
+    return con
+
+
+def _file_clean_name(name):
+    name = re.split(r"[\\/]", str(name or ""))[-1]            # the file's own name, never a path
+    name = re.sub(r"[\x00-\x1f:*?\"<>|]+", " ", name).strip().strip(".").strip()
+    name = re.sub(r"\s+", " ", name)[:120]
+    return name
+
+
+def _files_rows(where="", args=(), limit=500):
+    with closing(_files_db()) as con:
+        rows = con.execute("SELECT id, name, mime, size, summary, agent, task_key, task_title, created_at, text IS NOT NULL "
+                           "FROM team_files " + where + " ORDER BY id DESC LIMIT ?", tuple(args) + (limit,)).fetchall()
+    out = []
+    for r in rows:
+        out.append({"id": r[0], "name": r[1], "mime": r[2], "size": r[3], "summary": r[4] or "", "agent": r[5] or "",
+                    "task": r[6] or "", "task_title": r[7] or "", "at": r[8], "readable": bool(r[9]),
+                    "image": r[2] in _TEAM_IMG})
+    return out
+
+
+def t_save_file(a):
+    issue = _own_issue(a)
+    name = _file_clean_name(a.get("name"))
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    text, b64 = a.get("content"), a.get("content_base64")
+    if not name or not ext:
+        raise ToolError("Give the file a name with an ending, for example \"client-report.md\".")
+    if (text is None) == (b64 is None):
+        raise ToolError("Send either content (text) or content_base64 (for a PDF, image or Office file), not both.")
+    if text is not None:
+        if ext not in _TEAM_TEXT_EXT:
+            raise ToolError("For text, the name must end in one of: %s. For other files use content_base64." % ", ".join(sorted(_TEAM_TEXT_EXT)))
+        text = str(text)
+        if not text.strip():
+            raise ToolError("The file is empty.")
+        if len(text) > TEAM_FILE_TEXT_MAX:
+            raise ToolError("That is too long for one file (limit %d characters). Split it into parts." % TEAM_FILE_TEXT_MAX)
+        data, mime = text.encode("utf-8"), _TEAM_TEXT_EXT[ext]
+    else:
+        if ext not in _TEAM_BIN_EXT and ext not in _TEAM_TEXT_EXT:
+            raise ToolError("That kind of file is not accepted. Allowed: %s." % ", ".join(sorted(set(_TEAM_BIN_EXT) | set(_TEAM_TEXT_EXT))))
+        try:
+            data = base64.b64decode(re.sub(r"\s+", "", str(b64)), validate=True)
+        except Exception:
+            raise ToolError("content_base64 is not valid base64.")
+        if not data:
+            raise ToolError("The file is empty.")
+        if len(data) > TEAM_FILE_BIN_MAX:
+            raise ToolError("That file is too big (limit %d MB)." % (TEAM_FILE_BIN_MAX // 1048576))
+        mime = _TEAM_BIN_EXT.get(ext) or _TEAM_TEXT_EXT[ext]
+        text = None
+        if ext in _TEAM_TEXT_EXT:
+            try: text = data.decode("utf-8")
+            except Exception: raise ToolError("That text file is not UTF-8.")
+    key = str(issue.get("identifier") or issue.get("id") or "")
+    agent = ""
+    try:
+        _cid, agents = _tool_agents()
+        agent = next((_agent_name(x) for x in agents if str(x.get("id")) == str(issue.get("assigneeAgentId"))), "")
+    except Exception:
+        pass
+    with closing(_files_db()) as con:
+        old = con.execute("SELECT id FROM team_files WHERE task_key=? AND name=?", (key, name)).fetchone()
+        if not old:
+            n_task = con.execute("SELECT COUNT(*) FROM team_files WHERE task_key=?", (key,)).fetchone()[0]
+            n_all, total = con.execute("SELECT COUNT(*), COALESCE(SUM(size),0) FROM team_files").fetchone()
+            if n_task >= TEAM_FILES_PER_TASK:
+                raise ToolError("This task already has %d files. Replace one by reusing its name, or put the rest in one file." % n_task)
+            if n_all >= TEAM_FILES_MAX or total + len(data) > TEAM_STORE_MAX:
+                raise ToolError("The team's file storage is full. Tell the owner with need_owner_input; they can delete old files on the Files page.")
+        row = (name, mime, len(data), text, _clip((a.get("summary") or "").strip(), 240), agent, key,
+               _clip(issue.get("title") or "", 160), _now().isoformat())
+        if old:
+            con.execute("UPDATE team_files SET name=?, mime=?, size=?, text=?, summary=?, agent=?, task_key=?, task_title=?, created_at=? "
+                        "WHERE id=?", row + (old[0],))
+            fid = old[0]
+            con.execute("DELETE FROM team_blobs WHERE file_id=?", (fid,))
+        else:
+            fid = con.execute("INSERT INTO team_files(name, mime, size, text, summary, agent, task_key, task_title, created_at) "
+                              "VALUES(?,?,?,?,?,?,?,?,?)", row).lastrowid
+        con.execute("INSERT INTO team_blobs(file_id, data) VALUES(?,?)", (fid, sqlite3.Binary(data)))
+        con.commit()
+    return ("%s \"%s\". The owner finds it on the Files page and on this task, so do not paste its contents into your "
+            "reply: say in a sentence what it is." % ("Replaced" if old else "Saved", name))
+
+
+@app.get("/files")
+def files_list(task: str = "", _auth=Depends(require_auth)):
+    if task:
+        return {"files": _files_rows("WHERE task_key=?", (task[:60],), 50)}
+    rows = _files_rows()
+    with closing(_files_db()) as con:
+        n, total = con.execute("SELECT COUNT(*), COALESCE(SUM(size),0) FROM team_files").fetchone()
+    return {"files": rows, "count": n, "bytes": total, "max_bytes": TEAM_STORE_MAX,
+            "agents": sorted({r["agent"] for r in rows if r["agent"]})}
+
+
+def _file_row(fid):
+    with closing(_files_db()) as con:
+        r = con.execute("SELECT id, name, mime, size, text FROM team_files WHERE id=?", (fid,)).fetchone()
+    if not r:
+        raise HTTPException(status_code=404, detail="That file is no longer here.")
+    return dict(zip(("id", "name", "mime", "size", "text"), r))
+
+
+@app.get("/files/{fid}/text")
+def files_text(fid: int, _auth=Depends(require_auth)):
+    f = _file_row(fid)
+    if f["text"] is None:
+        raise HTTPException(status_code=400, detail="That file cannot be shown as text. Download it instead.")
+    t = f.pop("text")
+    f["text"], f["cut"] = t[:200000], len(t) > 200000
+    return f
+
+
+@app.get("/files/{fid}/image")
+def files_image(fid: int, _auth=Depends(require_auth)):
+    """A picture, for the preview. Only real image types, never anything that can run."""
+    f = _file_row(fid)
+    if f["mime"] not in _TEAM_IMG:
+        raise HTTPException(status_code=400, detail="Not a picture.")
+    with closing(_files_db()) as con:
+        r = con.execute("SELECT data FROM team_blobs WHERE file_id=?", (fid,)).fetchone()
+    if not r:
+        raise HTTPException(status_code=404, detail="That file is no longer here.")
+    return Response(content=bytes(r[0]), media_type=f["mime"],
+                    headers={"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox; default-src 'none'",
+                             "Cache-Control": "private, max-age=300"})
+
+
+@app.get("/files/{fid}")
+def files_download(fid: int, _auth=Depends(require_auth)):
+    f = _file_row(fid)
+    with closing(_files_db()) as con:
+        r = con.execute("SELECT data FROM team_blobs WHERE file_id=?", (fid,)).fetchone()
+    if not r:
+        raise HTTPException(status_code=404, detail="That file is no longer here.")
+    # Always a download: a file an agent wrote must never run as part of the dashboard.
+    return Response(content=bytes(r[0]), media_type="application/octet-stream",
+                    headers={"Content-Disposition": "attachment; filename*=UTF-8''" + quote(f["name"], safe=""),
+                             "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox",
+                             "Cache-Control": "no-store"})
+
+
+@app.delete("/files/{fid}")
+def files_delete(fid: int, _auth=Depends(require_auth)):
+    with closing(_files_db()) as con:
+        con.execute("DELETE FROM team_blobs WHERE file_id=?", (fid,))
+        con.execute("DELETE FROM team_files WHERE id=?", (fid,))
+        con.commit()
+    return files_list(_auth=True)
 
 
 def t_complete_task(a):
@@ -8064,6 +8249,17 @@ MCP_TOOLS = {
                  "plan": {"type": "string", "description": "The whole plan in markdown"},
                  "summary": {"type": "string", "description": "One sentence: what changed"}},
                 ("task", "agent_id", "plan", "summary"))),
+    "save_file": (t_save_file, "all",
+        "Hand the owner a file from the task you are working: a report, a draft, a list, a spreadsheet, an image. Use it "
+        "whenever the result is a document rather than a short answer, instead of pasting it into a comment. Saving "
+        "again with the same name on the same task replaces the file.",
+        _schema({"task": {"type": "string", "description": "The task you are working, id or key"},
+                 "agent_id": {"type": "string", "description": "Your Agent ID from the runtime identity"},
+                 "name": {"type": "string", "description": "File name with its ending, e.g. client-report.md, leads.csv"},
+                 "content": {"type": "string", "description": "The text of the file (md, txt, csv, json, html)"},
+                 "content_base64": {"type": "string", "description": "For PDF, images and Office files: the bytes as base64 (4 MB limit)"},
+                 "summary": {"type": "string", "description": "One sentence: what this file is"}},
+                ("task", "agent_id", "name"))),
     "post_idea": (t_post_idea, "all",
         "Only for the daily task titled \"Today's idea for the owner\": sends the one idea that appears on the "
         "owner's dashboard, and closes that task. Use kind \"none\" when nothing has a real reason behind it today.",
@@ -8320,7 +8516,7 @@ async def mcp_agent(request: Request):
 # that key, ask Paperclip whose it is, and act only as that agent. The proxy publishes
 # them on the team board's address under /api/agent-os/.
 _REMOTE_TOOL_NAMES = ("list_agents", "complete_task", "need_owner_input", "split_task", "hand_off_task", "post_idea",
-                      "get_business_plan", "update_business_plan")
+                      "get_business_plan", "update_business_plan", "save_file")
 _REMOTE_HELP = ("Task tools for an agent working an assigned task: split_task when the job will not fit in "
                 "one run, complete_task when it is finished, hand_off_task to pass it to a colleague, "
                 "need_owner_input when only the owner can decide, list_agents for colleagues' names. You "
@@ -8425,6 +8621,10 @@ def _remote_note(base=""):
             "{\"task\": \"<task key>\", \"summary\": \"2 to 4 plain sentences\", \"question\": \"one yes-or-no "
             "question\", \"recommendation\": \"what you would do and why\"}. The owner answers with Approve, Decline "
             "or Tell me more. Do not park a task as blocked or in review for the owner any other way.\n"
+            "- The result is a document (report, draft, list, image): POST " + base + "/api/agent-os/call/save_file "
+            "with {\"task\": \"<task key>\", \"name\": \"report.md\", \"content\": \"...\", \"summary\": \"one "
+            "sentence\"} and do not paste it into a comment. PDFs, images and Office files go in "
+            "\"content_base64\" instead of \"content\".\n"
             "- GET " + base + "/api/agent-os/ lists the tools and their exact fields. The same tools are "
             "an MCP server at " + base + "/api/agent-os/mcp.\n"
             "Do not guess at other board endpoints to split a task.")
