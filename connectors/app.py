@@ -6949,6 +6949,192 @@ def internal_update(step: str, request: Request):
     raise HTTPException(status_code=404, detail="Not found")
 
 
+# ---------------------------------------------------------------------------
+# Team templates: a team's shape in one file (who the agents are, what each is told
+# to do, who reports to whom), to install on another Agent OS server. A template
+# never carries keys, addresses, budgets, tasks, files, memory or the business plan.
+# ---------------------------------------------------------------------------
+TEAM_TPL_FORMAT = "agent-os-team"
+TEAM_TPL_MAX_AGENTS = 30
+TEAM_TPL_MAX_TEXT = 60000
+
+
+def _tpl_version():
+    for p in ("/app/VERSION", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "VERSION")):
+        try:
+            with open(p, encoding="utf-8") as f:
+                return f.read().strip()[:20]
+        except Exception:
+            continue
+    return ""
+
+
+_TPL_SECRET_RES = [
+    re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}"), re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"),
+    re.compile(r"\bxox[abpsr]-[A-Za-z0-9-]{10,}"), re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]{20,}"),
+    re.compile(r"(?i)\b((?:api[ _-]?key|access[ _-]?token|token|secret|password|passwd|pwd)\b[\"']?\s*[:=]\s*[\"']?)[^\s\"',;]{8,}"),
+]
+
+
+def _tpl_scrub(text):
+    """Take anything that looks like a key or password out of text that is about to leave this server."""
+    for rx in _TPL_SECRET_RES:
+        text = rx.sub(lambda m: (m.group(1) + (" " if m.re.pattern.startswith("(?i)\\b(bearer)") else "") if m.groups() else "") + "[removed]", text)
+    return text
+
+
+@app.get("/orchestration/team-template")
+def team_template_export(_auth=Depends(require_auth)):
+    try:
+        _cid, agents = _tool_agents()
+    except ToolError as e:
+        raise HTTPException(status_code=400, detail=str(e)[:200])
+    agents = [a for a in agents if str(a.get("status") or "").lower() not in ("terminated", "pending_approval")]
+    if not agents:
+        raise HTTPException(status_code=400, detail="There are no agents to save yet.")
+    names = {str(a.get("id")): _agent_name(a) for a in agents}
+    out, hidden = [], 0
+    for a in agents[:TEAM_TPL_MAX_AGENTS]:
+        aid = str(a.get("id"))
+        full = {}
+        try:
+            full = _pc_get("/api/agents/" + aid) or {}
+        except Exception:
+            pass
+        ac = full.get("adapterConfig") if isinstance(full.get("adapterConfig"), dict) else {}
+        text = ""
+        try:
+            text = _strip_footer(_agent_instructions(aid, ac).get("text") or "")
+        except Exception:
+            pass
+        text = text.split("--- Agent OS task tools ---", 1)[0].rstrip()   # that note is specific to this server
+        clean = _tpl_scrub(_scrub_secrets(text))
+        hidden += 1 if clean != text else 0
+        out.append({"name": _agent_name(a), "role": str(a.get("role") or "general"), "title": a.get("title") or "",
+                    "capabilities": a.get("capabilities") or "", "reports_to": names.get(str(a.get("reportsTo") or ""), ""),
+                    "instructions": clean[:TEAM_TPL_MAX_TEXT]})
+    biz = _business()
+    doc = {"format": TEAM_TPL_FORMAT, "version": 1, "name": ((biz.get("name") or "My") + " team").strip(),
+           "made_with": _tpl_version(), "created_at": _now().isoformat(), "agents": out}
+    fname = re.sub(r"[^A-Za-z0-9]+", "-", doc["name"]).strip("-").lower() or "team"
+    return Response(content=json.dumps(doc, indent=2, ensure_ascii=False), media_type="application/json",
+                    headers={"Content-Disposition": "attachment; filename=\"%s-template.json\"" % fname,
+                             "X-Agents": str(len(out)), "X-Hidden-Secrets": str(hidden), "Cache-Control": "no-store"})
+
+
+def _tpl_read(doc):
+    """Validate an uploaded template. Returns the cleaned agent list or raises ValueError in plain words."""
+    if not isinstance(doc, dict) or doc.get("format") != TEAM_TPL_FORMAT:
+        raise ValueError("That file is not an Agent OS team template.")
+    if int(doc.get("version") or 0) != 1:
+        raise ValueError("That template was made by a newer Agent OS. Update this server first.")
+    raw = doc.get("agents")
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("That template has no agents in it.")
+    if len(raw) > TEAM_TPL_MAX_AGENTS:
+        raise ValueError("That template has %d agents; the limit is %d." % (len(raw), TEAM_TPL_MAX_AGENTS))
+    out, seen = [], set()
+    for a in raw:
+        if not isinstance(a, dict):
+            raise ValueError("That template is damaged (an agent entry is not readable).")
+        name = re.sub(r"\s+", " ", str(a.get("name") or "")).strip()
+        if not name or len(name) > 80 or not re.match(r"^[\w][\w .'()&-]*$", name):
+            raise ValueError("An agent in that template has a name this server cannot use: \"%s\"." % name[:40])
+        if name.lower() in seen:
+            raise ValueError("That template lists \"%s\" twice." % name)
+        seen.add(name.lower())
+        role = str(a.get("role") or "general").strip().lower()
+        text = str(a.get("instructions") or "")
+        if len(text) > TEAM_TPL_MAX_TEXT:
+            raise ValueError("The instructions for \"%s\" are too long." % name)
+        out.append({"name": name, "role": role if role in AGENT_ROLES else "general", "title": str(a.get("title") or "").strip()[:120],
+                    "capabilities": str(a.get("capabilities") or "").strip()[:4000],
+                    "reports_to": re.sub(r"\s+", " ", str(a.get("reports_to") or "")).strip()[:80], "instructions": text})
+    return out
+
+
+def _tpl_plan(doc):
+    """What installing would do here, without doing it."""
+    agents = _tpl_read(doc)
+    _cid, have = _tool_agents()
+    have = [a for a in have if str(a.get("status") or "").lower() != "terminated"]
+    by_name = {_agent_name(a).lower(): a for a in have}
+    has_lead = _lead_agent(have) is not None
+    rows = []
+    for a in agents:
+        row = dict(a, action="create", note="")
+        row.pop("instructions")
+        row["words"] = len(a["instructions"].split())
+        if a["name"].lower() in by_name:
+            row["action"], row["note"] = "skip", "An agent with this name is already on your team, so it is left as it is."
+        elif a["role"] == "ceo" and has_lead:
+            row["role"], row["note"] = "general", "You already have a lead agent, so this one joins as a regular agent."
+        elif a["role"] == "ceo":
+            has_lead = True
+        rows.append(row)
+    return agents, rows, by_name
+
+
+class TeamTemplateIn(BaseModel):
+    template: dict
+
+
+@app.post("/orchestration/team-template/check")
+def team_template_check(b: TeamTemplateIn, _auth=Depends(require_auth)):
+    try:
+        _agents, rows, _ = _tpl_plan(b.template)
+    except (ValueError, ToolError) as e:
+        raise HTTPException(status_code=400, detail=str(e)[:240])
+    return {"ok": True, "name": str(b.template.get("name") or "Team template")[:120], "made_with": str(b.template.get("made_with") or "")[:20],
+            "agents": rows, "create": sum(1 for r in rows if r["action"] == "create")}
+
+
+@app.post("/orchestration/team-template/install")
+def team_template_install(b: TeamTemplateIn, _auth=Depends(require_auth)):
+    _task_writable()
+    try:
+        agents, rows, by_name = _tpl_plan(b.template)
+    except (ValueError, ToolError) as e:
+        raise HTTPException(status_code=400, detail=str(e)[:240])
+    ids = {n: str(a.get("id")) for n, a in by_name.items()}
+    created, failed = [], []
+    for a, row in zip(agents, rows):
+        if row["action"] != "create":
+            continue
+        try:
+            r = create_agent(AgentCreate(name=a["name"], instructions=a["instructions"], role=row["role"]), _auth=True)
+            new_id = str((r.get("agent") or {}).get("id") or "")
+            if not new_id:
+                raise RuntimeError("no id came back")
+            ids[a["name"].lower()] = new_id
+            extra = {k: v for k, v in (("title", a["title"]), ("capabilities", a["capabilities"])) if v}
+            if extra:
+                try:
+                    _pc_send("PATCH", "/api/agents/" + _safe_id(new_id), extra, what="finish setting up the agent")
+                except Exception:
+                    pass
+            created.append(a["name"])
+        except HTTPException as e:
+            failed.append({"name": a["name"], "why": str(e.detail)[:200]})
+            if not created and e.status_code in (400, 500):
+                break                      # nothing works (no board, no key): do not repeat the same error 30 times
+        except Exception as e:
+            failed.append({"name": a["name"], "why": _scrub_secrets(str(e))[:200]})
+    # Second pass: who reports to whom, now that everyone exists.
+    linked = 0
+    for a in agents:
+        me, boss = ids.get(a["name"].lower()), ids.get(a["reports_to"].lower()) if a["reports_to"] else None
+        if a["name"] in created and me and boss and me != boss:
+            try:
+                _pc_send("PATCH", "/api/agents/" + _safe_id(me), {"reportsTo": boss}, what="set the manager")
+                linked += 1
+            except Exception:
+                pass
+    skipped = [r["name"] for r in rows if r["action"] == "skip"]
+    return {"ok": not failed, "created": created, "skipped": skipped, "failed": failed, "linked": linked}
+
+
 def t_complete_task(a):
     summary = (a.get("summary") or "").strip()
     if len(summary) < 5:

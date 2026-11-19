@@ -2,6 +2,19 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.62.0] — 2026-11-19
+
+### Added
+- **Team templates** on the Agents page. **Save this team as a template** downloads
+  one file with each agent's name, role, title, description, manager and
+  instructions. **Install a template** reads such a file on another server, shows
+  exactly which agents it will add, and adds them.
+- A template never contains keys, gateway addresses, budgets, tasks, files, memory,
+  the business plan or the business profile. Anything in the instructions that looks
+  like a key or password is removed on the way out, and the page says so.
+- Installing never changes or replaces an agent that is already there (same name is
+  skipped), and a second lead agent joins as a regular agent.
+
 ## [0.61.0] — 2026-11-19
 
 ### Added

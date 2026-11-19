@@ -1236,3 +1236,24 @@ the team back on once the pause is 45 minutes old.
 Agents on their own machines keep working through an update; what they cannot do
 while the board restarts is report back, which the same retry covers.
 
+## 40. Team templates
+
+**Agents**, at the bottom of the page.
+
+- **Save this team as a template** downloads `<business>-team-template.json`. It
+  holds, for each agent: name, role, title, description, who it reports to and its
+  instructions. The task-tools note added for agents on their own machines is left
+  out, because it names this server's address. Text that looks like a key, token or
+  password is replaced with `[removed]`; read the file before sending it to anyone,
+  since that check cannot catch everything.
+- **Install a template** on another server: choose the file, read the list (Add or
+  Skip for each agent), press Add. Up to 30 agents.
+- **What installing does.** Each new agent is created on that server, running on its
+  Hermes with the server's main AI model. An agent whose name is already taken is
+  skipped and never changed. If the server already has a lead agent, a lead in the
+  template joins as a regular agent. Reporting lines are set afterwards for the new
+  agents.
+- **What it does not do.** It does not set up agents on their own machines, copy
+  models, or bring any data. The instructions were written for another business:
+  open each new agent and adjust them, and fill in the business profile and the plan.
+

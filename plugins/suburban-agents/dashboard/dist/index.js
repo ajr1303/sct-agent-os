@@ -45,6 +45,71 @@
     function roleLabel(r) { for (var i = 0; i < ROLES.length; i++) if (ROLES[i][0] === r) return ROLES[i][1]; return r || "General"; }
     function pcBase() { var L = window.__SCT_LINKS__; if (L && L.paperclip) return L.paperclip.replace(/\/+$/, ""); return location.protocol + "//" + location.hostname + ":3100"; }
 
+    // Team templates: save this team's shape to a file, or install one made on another server.
+    function Templates(props) {
+      var a = useState(null), plan = a[0], setPlan = a[1];      // { doc, check }
+      var b = useState(null), msg = b[0], setMsg = b[1];
+      var c = useState(false), busy = c[0], setBusy = c[1];
+      var d = useState(null), done = d[0], setDone = d[1];
+      function save() {
+        setBusy(true); setMsg(null);
+        fetch("/api/connectors/orchestration/team-template", { credentials: "same-origin" }).then(function (r) {
+          return r.text().then(function (t) {
+            if (!r.ok) { var j = {}; try { j = JSON.parse(t); } catch (e) {} throw new Error(j.error || j.detail || "Could not save the template."); }
+            var name = (/filename="([^"]+)"/.exec(r.headers.get("content-disposition") || "") || [])[1] || "team-template.json";
+            var url = URL.createObjectURL(new Blob([t], { type: "application/json" })), link = document.createElement("a");
+            link.href = url; link.download = name; document.body.appendChild(link); link.click(); link.remove(); setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+            var n = r.headers.get("x-agents"), hid = Number(r.headers.get("x-hidden-secrets") || 0);
+            setMsg({ t: "Saved " + n + " agents to " + name + "." + (hid ? " Something that looked like a key or password was removed from " + hid + (hid === 1 ? " agent's" : " agents'") + " instructions." : "") });
+          });
+        }).catch(function (e) { setMsg({ t: e.message, err: true }); }).then(function () { setBusy(false); });
+      }
+      function pick(ev) {
+        var f = ev.target.files && ev.target.files[0]; ev.target.value = ""; setDone(null); setMsg(null); setPlan(null);
+        if (!f) return;
+        if (f.size > 2 * 1024 * 1024) { setMsg({ t: "That file is too big to be a team template.", err: true }); return; }
+        var rd = new FileReader();
+        rd.onload = function () {
+          var doc; try { doc = JSON.parse(String(rd.result)); } catch (e) { setMsg({ t: "That file is not an Agent OS team template.", err: true }); return; }
+          api("/orchestration/team-template/check", { method: "POST", body: JSON.stringify({ template: doc }) })
+            .then(function (chk) { setPlan({ doc: doc, check: chk }); }).catch(function (e) { setMsg({ t: e.message, err: true }); });
+        };
+        rd.readAsText(f);
+      }
+      function install() {
+        setBusy(true); setMsg(null);
+        api("/orchestration/team-template/install", { method: "POST", body: JSON.stringify({ template: plan.doc }) })
+          .then(function (r) { setDone(r); setPlan(null); if (props.onChange) props.onChange(); })
+          .catch(function (e) { setMsg({ t: e.message, err: true }); }).then(function () { setBusy(false); });
+      }
+      var chk = plan && plan.check;
+      return h("div", { className: "sg-tpl" },
+        h("div", { className: "sg-tpl-h" },
+          h("div", null,
+            h("div", { className: "sg-tpl-t" }, "Team templates"),
+            h("div", { className: "sg-tpl-s" }, "Save this team's shape (who the agents are, their instructions, who reports to whom) to a file, or install one on this server. A template never contains keys, tasks, files or memory.")),
+          h("div", { className: "sg-tpl-b" },
+            h("button", { type: "button", className: "sg-btn", disabled: busy, onClick: save }, "Save this team as a template"),
+            h("label", { className: "sg-btn sg-tpl-up" }, "Install a template…", h("input", { type: "file", accept: ".json,application/json", onChange: pick })))),
+        msg ? h("div", { className: "sg-msg" + (msg.err ? " sg-msg-err" : "") }, msg.t) : null,
+        chk ? h("div", { className: "sg-tpl-plan" },
+          h("div", { className: "sg-tpl-pt" }, "“" + chk.name + "” will add " + chk.create + (chk.create === 1 ? " agent" : " agents") + " to this server"),
+          chk.agents.map(function (x) {
+            return h("div", { className: "sg-tpl-row", key: x.name },
+              h("span", { className: "sg-tpl-act" + (x.action === "skip" ? " skip" : "") }, x.action === "skip" ? "Skip" : "Add"),
+              h("span", { className: "sg-tpl-n" }, x.name, x.title ? h("span", { className: "sg-tpl-ti" }, x.title) : null),
+              h("span", { className: "sg-tpl-note" }, x.note || (x.reports_to ? "Reports to " + x.reports_to : "") ));
+          }),
+          h("div", { className: "sg-tpl-foot" }, "New agents run on this server and use its main AI model. Check their instructions afterwards: they were written for another business."),
+          h("div", { className: "sg-tpl-b" },
+            h("button", { type: "button", className: "sg-btn sg-btn-go", disabled: busy || !chk.create, onClick: install }, busy ? "Adding…" : "Add " + chk.create + (chk.create === 1 ? " agent" : " agents")),
+            h("button", { type: "button", className: "sg-btn", disabled: busy, onClick: function () { setPlan(null); } }, "Cancel"))) : null,
+        done ? h("div", { className: "sg-msg" + (done.failed && done.failed.length ? " sg-msg-err" : "") },
+          (done.created.length ? "Added " + done.created.join(", ") + ". " : "No agents were added. ")
+          + (done.skipped.length ? "Already here, left alone: " + done.skipped.join(", ") + ". " : "")
+          + (done.failed.length ? "Could not add: " + done.failed.map(function (f) { return f.name + " (" + f.why + ")"; }).join("; ") + "." : "")) : null);
+    }
+
     function Agents() {
       var s;
       s = useState(null);  var data = s[0], setData = s[1];        // {agents, can_edit, paperclip_up}
@@ -307,7 +372,8 @@
               : data.connected === false ? null
               : shown.length === 0 ? h("div", { className: "sg-empty" }, agents.length ? "No agent matches." : "No agents yet. Create one on the Orchestration page.")
               : shown.map(row)),
-          detail()));
+          detail()),
+        data && data.connected !== false && up !== false ? h(Templates, { onChange: function () { try { load(); } catch (e) {} } }) : null);
     }
 
     try { PLUGINS.register("suburban-agents", Agents); console.info(TAG, "registered"); }
