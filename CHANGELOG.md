@@ -2,6 +2,15 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.63.0] — 2026-11-19
+
+### Added
+- **Board view on Tasks.** A List / Board switch at the top right. The board shows
+  the same tasks in four columns: Needs you, In progress, Up next and Done. Clicking
+  a card opens the task underneath. The choice is remembered on that browser.
+  Done shows the latest eight, the other columns up to 25, each with a link to the
+  full list.
+
 ## [0.62.0] — 2026-11-19
 
 ### Added

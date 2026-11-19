@@ -149,6 +149,9 @@
       s = useState("");    var note = s[0], setNote = s[1];
       s = useState(false); var showAlerts = s[0], setShowAlerts = s[1];
       s = useState(false); var askOpen = s[0], setAskOpen = s[1];  // full request shown
+      s = useState(function () { try { return localStorage.getItem("sct-tasks-view") === "board" ? "board" : "list"; } catch (e) { return "list"; } });
+      var view = s[0], setViewRaw = s[1];                          // list | board
+      function setView(v) { try { localStorage.setItem("sct-tasks-view", v); } catch (e) {} setViewRaw(v); }
 
       function loadList() {
         return api("/orchestration/tasks").then(function (d) { setList(d); setErr(null); return d; })
@@ -243,7 +246,36 @@
         return h("div", { className: "st-top" },
           h("div", null,
             h("div", { className: "st-h1" }, "Tasks"),
-            h("div", { className: "st-sub" }, "What your agents are working on and what they've produced. Decisions that need you come first; everything else is handled by the team.")));
+            h("div", { className: "st-sub" }, "What your agents are working on and what they've produced. Decisions that need you come first; everything else is handled by the team.")),
+          h("div", { className: "st-view" }, ["list", "board"].map(function (v) {
+            return h("button", { type: "button", key: v, className: "st-view-b" + (view === v ? " on" : ""), onClick: function () { setView(v); } }, v === "list" ? "List" : "Board");
+          })));
+      }
+      // Board: the same tasks in four columns. A card opens the task underneath.
+      function boardPane() {
+        if (up === false) return h("div", { className: "st-empty" }, "Team management is starting. Tasks will appear once it's up.");
+        if (list == null) return h("div", { className: "st-empty" }, err ? "Couldn't load tasks. Try again in a minute." : "Loading…");
+        if (list.connected === false) return h("div", { className: "st-empty" }, "Your team isn't linked yet. ",
+          h("a", { href: "/orchestration" + (location.search || "") }, "Finish setup on the Orchestration page"), ".");
+        var cols = [["you", "Needs you", []], ["doing", "In progress", []], ["next", "Up next", []], ["done", "Done", []]];
+        tasks.forEach(function (t) {
+          var st = String(t.status || "").toLowerCase();
+          var i = isClosed(st) ? 3 : t.waiting_on === "owner" ? 0 : (t.running || st === "in_progress") ? 1 : 2;
+          cols[i][2].push(t);
+        });
+        return h("div", { className: "st-board" }, cols.map(function (c) {
+          var items = c[2], CAP = c[0] === "done" ? 8 : 25;      // finished work is history: a short tail keeps the board even
+          return h("div", { className: "st-bcol st-bcol-" + c[0], key: c[0] },
+            h("div", { className: "st-bcol-h" }, h("span", null, c[1]), h("span", { className: "st-bcol-n" }, items.length)),
+            items.length === 0 ? h("div", { className: "st-bcol-e" }, c[0] === "you" ? "Nothing needs you." : "Nothing here.")
+              : items.slice(0, CAP).map(function (t) {
+                  return h("button", { type: "button", key: t.key, className: "st-bcard" + (sel === t.key ? " sel" : ""),
+                      onClick: function () { open(t.key); setTimeout(function () { try { var el = document.querySelector(".st-bdetail"); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" }); } catch (e) {} }, 60); } },
+                    h("span", { className: "st-bcard-t" }, t.title),
+                    h("span", { className: "st-bcard-m" }, (t.agentName ? t.agentName + " · " : "") + t.key + (t.updatedAt ? " · " + whenStr(t.updatedAt) : "")));
+                }),
+            items.length > CAP ? h("button", { type: "button", className: "st-linkbtn st-bmore", onClick: function () { setView("list"); } }, "and " + (items.length - CAP) + " more in the list") : null);
+        }));
       }
 
       function filters() {
@@ -497,7 +529,9 @@
         header(),
         err ? h("div", { className: "st-msgbar st-err" }, err) : null,
         blockedBanner(),
-        h("div", { className: "st-cols" }, listPane(), detailPane()),
+        view === "board"
+          ? h("div", { className: "st-boardwrap" }, boardPane(), sel ? h("div", { className: "st-bdetail" }, detailPane()) : null)
+          : h("div", { className: "st-cols" }, listPane(), detailPane()),
         h("div", { className: "st-foot" }, "Answer decisions, reply, reopen, finish or cancel a task here. The full history and file downloads open on the team board."));
     }
 
