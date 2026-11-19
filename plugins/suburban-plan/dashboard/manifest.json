@@ -1,0 +1,12 @@
+{
+  "name": "suburban-plan",
+  "label": "Plan",
+  "description": "The one-page business plan your team works from, kept by your lead agent, with every version saved",
+  "icon": "ListChecks",
+  "version": "0.1.0",
+  "tab": {
+    "path": "/plan"
+  },
+  "entry": "dist/index.js",
+  "css": "dist/style.css"
+}

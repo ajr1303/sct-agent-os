@@ -2,6 +2,18 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.58.0] — 2026-11-19
+
+### Added
+- **Plan page.** One business plan the whole team works from: what the business
+  does, who it serves, this quarter's goals, what to avoid. The owner can ask the
+  lead agent to write it or change it in plain words, or edit it directly. Every
+  change is a saved version that can be viewed and brought back.
+- Agents read the plan with `get_business_plan`. Only the lead agent can change it
+  (`update_business_plan`), must send the whole plan with a one-sentence summary,
+  and is refused if it sends less than half of the current plan by mistake.
+- Today's idea now reads the plan, so ideas follow the owner's stated goals.
+
 ## [0.57.2] — 2026-11-19
 
 ### Changed

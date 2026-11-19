@@ -6083,6 +6083,12 @@ def _idea_facts(cid, agents, prefs):
             lines.append("Appointments in the next 7 days: %d" % len(bw.get("starts") or []))
     except Exception:
         pass
+    try:
+        pl = _plan_current()
+        if pl:
+            lines.append("The business plan (the owner's direction; ideas should serve it):\n" + _clip(pl["body"], 2500))
+    except Exception:
+        pass
     past = [r for r in _idea_rows(limit=14) if r["status"] in ("done", "later", "declined", "ready")]
     if past:
         words = {"done": "owner said do it", "later": "owner said not today", "declined": "owner turned this kind off", "ready": "not answered"}
@@ -6326,6 +6332,201 @@ def idea_act(b: IdeaAct, _auth=Depends(require_auth)):
     else:
         raise HTTPException(status_code=400, detail="Unknown action.")
     return dict(_idea_public(), ok=True, message=msg)
+
+
+# ---------------------------------------------------------------------------
+# Business plan: one living document the lead agent keeps, with every version kept.
+# The owner edits it directly or asks the lead to change it. Any agent may read it;
+# only the lead may write it. Today's idea reads it too.
+# ---------------------------------------------------------------------------
+PLAN_MAX = 12000
+PLAN_KEEP = 60               # versions kept
+PLAN_SHAPE = ("## What we do\n## Who we serve\n## Goals for this quarter\n## How the team helps\n## What to avoid")
+
+
+def _plan_db():
+    con = get_db()
+    con.execute("CREATE TABLE IF NOT EXISTS business_plan (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT, note TEXT, "
+                "author TEXT, created_at TEXT)")
+    con.execute("CREATE TABLE IF NOT EXISTS plan_requests (issue_id TEXT, issue_key TEXT, request TEXT, status TEXT, created_at TEXT)")
+    return con
+
+
+def _plan_current():
+    with closing(_plan_db()) as con:
+        r = con.execute("SELECT id, body, note, author, created_at FROM business_plan ORDER BY id DESC LIMIT 1").fetchone()
+    return {"id": r[0], "body": r[1] or "", "note": r[2] or "", "author": r[3] or "", "at": r[4]} if r else None
+
+
+def _plan_save(body, note, author):
+    body = (body or "").replace("\r\n", "\n").strip()
+    if len(body) < 20:
+        raise ValueError("The plan is too short to save.")
+    if len(body) > PLAN_MAX:
+        raise ValueError("The plan is too long (%d characters; the limit is %d). Trim it and try again." % (len(body), PLAN_MAX))
+    cur = _plan_current()
+    if cur and cur["body"] == body:
+        return cur["id"], False
+    with closing(_plan_db()) as con:
+        c = con.execute("INSERT INTO business_plan(body, note, author, created_at) VALUES(?,?,?,?)",
+                        (body, _clip((note or "").strip(), 200), _clip(author or "", 60), _now().isoformat()))
+        con.execute("DELETE FROM business_plan WHERE id NOT IN (SELECT id FROM business_plan ORDER BY id DESC LIMIT ?)", (PLAN_KEEP,))
+        con.commit()
+        return c.lastrowid, True
+
+
+def _plan_public():
+    with closing(_plan_db()) as con:
+        vs = con.execute("SELECT id, note, author, created_at, length(body) FROM business_plan ORDER BY id DESC LIMIT ?", (PLAN_KEEP,)).fetchall()
+        rq = con.execute("SELECT issue_key, request, status, created_at FROM plan_requests ORDER BY rowid DESC LIMIT 1").fetchone()
+    pending = None
+    if rq and rq[2] == "requested":
+        at = _ts(rq[3])
+        if at and _now() - at < datetime.timedelta(minutes=45):
+            pending = {"task": rq[0], "request": rq[1], "at": rq[3]}
+    return {"current": _plan_current(), "pending": pending, "limit": PLAN_MAX,
+            "versions": [{"id": v[0], "note": v[1] or "", "author": v[2] or "", "at": v[3], "size": v[4]} for v in vs]}
+
+
+class PlanSave(BaseModel):
+    body: str
+    note: str = ""
+
+
+class PlanAsk(BaseModel):
+    request: str = ""
+
+
+@app.get("/plan")
+def plan_get(_auth=Depends(require_auth)):
+    return _plan_public()
+
+
+@app.get("/plan/versions/{vid}")
+def plan_version(vid: int, _auth=Depends(require_auth)):
+    with closing(_plan_db()) as con:
+        r = con.execute("SELECT id, body, note, author, created_at FROM business_plan WHERE id=?", (vid,)).fetchone()
+    if not r:
+        raise HTTPException(status_code=404, detail="That version is no longer kept.")
+    return {"id": r[0], "body": r[1], "note": r[2], "author": r[3], "at": r[4]}
+
+
+@app.put("/plan")
+def plan_put(b: PlanSave, _auth=Depends(require_auth)):
+    try:
+        _plan_save(b.body, b.note or "Edited by you", "You")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return _plan_public()
+
+
+@app.post("/plan/restore/{vid}")
+def plan_restore(vid: int, _auth=Depends(require_auth)):
+    with closing(_plan_db()) as con:
+        r = con.execute("SELECT body, created_at FROM business_plan WHERE id=?", (vid,)).fetchone()
+    if not r:
+        raise HTTPException(status_code=404, detail="That version is no longer kept.")
+    _plan_save(r[0], "Brought back the version from " + str(r[1])[:10], "You")
+    return _plan_public()
+
+
+@app.post("/plan/ask")
+def plan_ask(b: PlanAsk, _auth=Depends(require_auth)):
+    """Ask the lead agent to write the plan, or to change it."""
+    _task_writable()
+    req = (b.request or "").strip()[:1500]
+    cur = _plan_current()
+    if cur and len(req) < 5:
+        raise HTTPException(status_code=400, detail="Say what should change.")
+    if _plan_public()["pending"]:
+        raise HTTPException(status_code=409, detail="Your lead agent is already working on the plan.")
+    try:
+        cid, agents = _tool_agents()
+    except ToolError as e:
+        raise HTTPException(status_code=400, detail=str(e)[:200])
+    lead = _lead_agent(agents)
+    if not lead:
+        raise HTTPException(status_code=400, detail="The plan is kept by your lead agent (the one with the CEO role), and there is not one yet.")
+    base = ""
+    try:
+        base = _pc_public_base()
+    except Exception:
+        pass
+    how = ("Send the whole plan (not only the changed part) with the update_business_plan tool: task (this task's key), "
+           "plan (markdown, under %d characters) and summary (one sentence saying what changed). That also closes this task.%s"
+           % (PLAN_MAX, (" On your own machine: POST %s/api/agent-os/call/update_business_plan." % base) if base else ""))
+    if cur:
+        desc = ("The owner asked for a change to the business plan:\n\n> %s\n\nMake that change and nothing else. Keep the "
+                "owner's own wording wherever it is not affected. If the request is unclear or conflicts with the plan, do "
+                "not guess: ask with need_owner_input.\n\n%s\n\n--- The current plan ---\n%s"
+                % (req.replace("\n", "\n> "), how, cur["body"]))
+        title = "Update the business plan"
+    else:
+        desc = ("Write the first business plan for the owner. It is the one page the whole team works from, so keep it "
+                "short, concrete and in plain words. Use only what you actually know: the business profile below, what "
+                "the team has been doing, and anything the owner added here. Where you do not know something, write "
+                "\"To decide:\" and the question, rather than inventing it.\n\n%sUse these headings:\n%s\n\n%s\n\n"
+                "--- What the team has been doing ---\n%s"
+                % (("The owner added: %s\n\n" % req) if req else "", PLAN_SHAPE, how, _idea_facts(cid, agents, _idea_prefs())))
+        title = "Write the business plan"
+    try:
+        key = _create_issue(cid, lead, title, desc, "medium", note=(
+            "--- How to work this task ---\nThis takes a few minutes. Do not split it or hand it off: send the plan with "
+            "update_business_plan and stop."))
+    except ToolError as e:
+        raise HTTPException(status_code=400, detail=str(e)[:200])
+    iid = ""
+    try:
+        iid = str((_pc_get("/api/issues/" + str(key)) or {}).get("id") or "")
+    except Exception:
+        pass
+    with closing(_plan_db()) as con:
+        con.execute("INSERT INTO plan_requests(issue_id, issue_key, request, status, created_at) VALUES(?,?,?,?,?)",
+                    (iid, str(key), req, "requested", _now().isoformat()))
+        con.commit()
+    return dict(_plan_public(), message="%s is on it. The plan updates here when it is ready." % _agent_name(lead))
+
+
+def t_get_business_plan(a):
+    cur = _plan_current()
+    if not cur:
+        return "There is no business plan yet. The owner can ask the lead agent to write one from the Plan page."
+    return "Business plan (last changed %s by %s):\n\n%s" % (str(cur["at"])[:10], cur["author"] or "the owner", cur["body"])
+
+
+def t_update_business_plan(a):
+    issue = _own_issue(a)
+    try:
+        _cid, agents = _tool_agents()
+    except ToolError:
+        agents = []
+    lead = _lead_agent(agents)
+    if not lead or str(lead.get("id")) != str(issue.get("assigneeAgentId")):
+        raise ToolError("Only the lead agent keeps the business plan. If the plan should change, tell the lead or ask the "
+                        "owner with need_owner_input.")
+    plan = (a.get("plan") or "").strip()
+    summary = _clip((a.get("summary") or "").strip(), 200)
+    if len(summary) < 8:
+        raise ToolError("Give a one-sentence summary of what changed.")
+    cur = _plan_current()
+    if (cur and len(cur["body"]) > 200 and len(plan) < len(cur["body"]) * 0.5
+            and not summary.lower().startswith("shortened:")):
+        raise ToolError("That is less than half the current plan. Send the whole plan with your change in it, not only the "
+                        "changed part. If the owner really asked to cut it down this far, start the summary with "
+                        "\"Shortened:\".")
+    try:
+        vid, changed = _plan_save(plan, summary, _agent_name(lead))
+    except ValueError as e:
+        raise ToolError(str(e))
+    with closing(_plan_db()) as con:
+        row = con.execute("SELECT rowid FROM plan_requests WHERE (issue_id=? OR issue_key=?) AND status='requested'",
+                          (str(issue.get("id")), str(issue.get("identifier") or ""))).fetchone()
+        if row:
+            con.execute("UPDATE plan_requests SET status='done' WHERE rowid=?", (row[0],)); con.commit()
+    if row and issue.get("status") not in ("done", "cancelled"):
+        _set_issue(issue, "done", "Completed: " + summary)
+        return "Saved as the current plan, and this task is closed. Stop here."
+    return "Saved as the current plan." if changed else "The plan already says exactly that; nothing changed."
 
 
 def t_complete_task(a):
@@ -7851,6 +8052,18 @@ MCP_TOOLS = {
         _schema({"need": {"type": "string", "description": "The work that has no owner"},
                  "request": {"type": "string", "description": "The owner's request in their words"}},
                 ("need",))),
+    "get_business_plan": (t_get_business_plan, "all",
+        "Read the business plan: what the business does, who it serves, this quarter's goals and what to avoid. "
+        "Read it before work where direction matters (content, outreach, priorities).",
+        _schema({}, ())),
+    "update_business_plan": (t_update_business_plan, "all",
+        "Lead agent only. Replaces the business plan with a new version (earlier versions are kept). Send the whole "
+        "plan, not only the changed part.",
+        _schema({"task": {"type": "string", "description": "The task you are working, id or key"},
+                 "agent_id": {"type": "string", "description": "Your Agent ID from the runtime identity"},
+                 "plan": {"type": "string", "description": "The whole plan in markdown"},
+                 "summary": {"type": "string", "description": "One sentence: what changed"}},
+                ("task", "agent_id", "plan", "summary"))),
     "post_idea": (t_post_idea, "all",
         "Only for the daily task titled \"Today's idea for the owner\": sends the one idea that appears on the "
         "owner's dashboard, and closes that task. Use kind \"none\" when nothing has a real reason behind it today.",
@@ -8106,7 +8319,8 @@ async def mcp_agent(request: Request):
 # uses one shared token). It does hold its own Paperclip API key, so these routes accept
 # that key, ask Paperclip whose it is, and act only as that agent. The proxy publishes
 # them on the team board's address under /api/agent-os/.
-_REMOTE_TOOL_NAMES = ("list_agents", "complete_task", "need_owner_input", "split_task", "hand_off_task", "post_idea")
+_REMOTE_TOOL_NAMES = ("list_agents", "complete_task", "need_owner_input", "split_task", "hand_off_task", "post_idea",
+                      "get_business_plan", "update_business_plan")
 _REMOTE_HELP = ("Task tools for an agent working an assigned task: split_task when the job will not fit in "
                 "one run, complete_task when it is finished, hand_off_task to pass it to a colleague, "
                 "need_owner_input when only the owner can decide, list_agents for colleagues' names. You "

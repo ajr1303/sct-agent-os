@@ -1147,3 +1147,23 @@ card this one uses an AI model: one small task a day on the lead agent's model.
 - **Quality** follows the business profile (Account). The fuller it is, the more
   specific the ideas.
 
+## 36. The business plan
+
+**Plan** in the menu holds one document the team works from. It is plain text with
+headings (`## What we do`, `## Who we serve`, `## Goals for this quarter`,
+`## How the team helps`, `## What to avoid`), up to 12,000 characters.
+
+- **Writing it.** With no plan yet, the page offers **Have my lead agent write it**
+  (the lead drafts from the business profile and recent work, and writes "To decide:"
+  where it does not know) or **Write it myself**.
+- **Changing it.** Type the change in the box at the top and press **Ask**: the lead
+  gets a task holding the request and the current plan, and the page updates when it
+  answers (it shows as working for up to 45 minutes). Or press **Edit**.
+- **Versions.** Every save is kept (the last 60). Click one to read it;
+  **Bring this version back** makes it current again as a new version.
+- **Who can change it.** The owner, and the lead agent. Any other agent calling
+  `update_business_plan` is refused and told to raise it with the lead or the owner.
+- **Where it is used.** Agents call `get_business_plan` when direction matters, and
+  the daily idea task includes it. It is not pasted into every task, to keep tasks
+  short; the short business profile in Account still is.
+

@@ -207,6 +207,9 @@ denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
 - **Website visitors:** `GET /website` (plugin `suburban-website`, tab `/website`).
 - **AI models:** plugin `suburban-models`, tab `/ai-models`. Browser-only: it calls Hermes's own model and key
   routes through the dashboard session. Hermes's `/models` page moves under Operator tools.
+- **Plan:** plugin `suburban-plan`, tab `/plan`. `connectors` routes `/plan*` keep the business plan in
+  table `business_plan` (every save is a new row; 60 kept). Agents read it with `get_business_plan`;
+  only the lead (CEO role) can write it, with `update_business_plan`. Today's idea reads it.
 - **Memory:** plugin `suburban-memory`, tab `/memory`. `connectors` routes `/memory*` read Honcho's dream
   history, conclusions and peer card for the owner (`data/hermes/honcho.json` names the workspace and peers).
 - **Projects:** plugin `suburban-projects`, tab `/projects`. Tables `projects`,
