@@ -2,11 +2,11 @@ name: suburban-cyber
 label: Suburban Cyber
 description: Dark cyan theme for Suburban Cyber Agent OS
 palette:
-  background: "#071217"
-  midground: "#e6eef0"
+  background: "#0b1620"
+  midground: "#eaf4fb"
   foreground: { hex: "#ffffff", alpha: 0 }
-  warmGlow: "rgba(37, 201, 238, 0.10)"
-  noiseOpacity: 0.25
+  warmGlow: "rgba(37, 201, 238, 0.04)"
+  noiseOpacity: 0
 typography:
   fontSans: "'IBM Plex Sans', system-ui, sans-serif"
   fontMono: "'IBM Plex Mono', ui-monospace, monospace"

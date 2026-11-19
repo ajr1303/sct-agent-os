@@ -2,6 +2,19 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.65.0] — 2026-11-19
+
+### Changed
+- **Dark theme colors.** The background is now a deep navy (`#0b1620`, was `#071217`)
+  with slightly cooler text (`#eaf4fb`), a flat surface (no grain) and a fainter
+  glow. Cards, borders and the cyan accent follow from those. The light theme is
+  unchanged.
+- The Overview's own colors now come from the theme: one cyan, one amber, one red and
+  one green everywhere, in place of several near-matches.
+- **Overview top row:** four tiles at most, none repeating the summary card. Agents,
+  Active automations, Appointments and Website come first; Agent runs and Chat
+  sessions fill in when one of those is not connected.
+
 ## [0.64.1] — 2026-11-19
 
 ### Changed

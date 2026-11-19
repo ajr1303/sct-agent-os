@@ -35,7 +35,7 @@
 .sp-first-t{font-size:17px;font-weight:650;margin-bottom:6px}
 .sp-first-s{font-size:13.5px;line-height:1.6;opacity:.8}
 .sp-first .sp-pend{margin-top:16px}
-.sp-old{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 16px;font-size:13px;border-bottom:1px solid rgba(245,180,60,.5);background:rgba(245,180,60,.1);color:#f7c66a}
+.sp-old{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 16px;font-size:13px;border-bottom:1px solid rgba(255,189,56,.5);background:rgba(255,189,56,.1);color:var(--color-warning,#ffbd38)}
 .sp-ver{display:flex;flex-direction:column;gap:3px;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--color-border,rgba(255,255,255,.08));color:inherit;font:inherit;padding:11px 16px;cursor:pointer}
 .sp-ver:last-child{border-bottom:0}
 .sp-ver:hover{background:rgba(255,255,255,.035)}

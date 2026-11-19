@@ -541,18 +541,19 @@
             chk && chk !== "Checking…" ? h("span", { className: "sc-chk" }, chk)
               : h("button", { type: "button", className: "sc-chk sc-chk-btn", disabled: chk === "Checking…", onClick: checkUpd }, chk || "Check for updates"))),
 
-        h("div", { className: "sc-stats" },
-          Stat(agentTileLabel, agentTileVal, agentTileSub, true),
-          work ? Stat("Agent runs, " + (work.days || 14) + " days", fmtNum(work.runs || 0),
-            (work.succeeded || 0) + " succeeded · " + (work.failed || 0) + " failed · " + (work.runs_today || 0) + " today") : null,
-          work ? Stat("Tasks in progress", String(work.tasks_in_progress != null ? work.tasks_in_progress : "—"),
-            (work.tasks_open != null ? work.tasks_open : "—") + " open in total") : null,
-          autos ? Stat("Active automations", String(autos.active),
+        (function () {
+          // Four tiles at most, and none that repeats the summary card below (tasks in progress, today's runs, spend).
+          var first = [Stat(agentTileLabel, agentTileVal, agentTileSub, true),
+            autos ? Stat("Active automations", String(autos.active),
             autos.count + " workflow" + (autos.count === 1 ? "" : "s") + " in total" + (watch && watch.active ? " · stuck-agent watch on" : ""), autos.active > 0) : null,
-          bookTile(),
-          siteTile(),
-          Stat("Chat sessions, 14 days", analytics ? String(tot.total_sessions || 0) : "—", useManaged ? "On this server only" : "Conversations and automations"),
-          null),
+            bookTile(), siteTile()];
+          var spare = [work ? Stat("Agent runs, " + (work.days || 14) + " days", fmtNum(work.runs || 0),
+            (work.succeeded || 0) + " succeeded · " + (work.failed || 0) + " failed · " + (work.runs_today || 0) + " today") : null,
+            Stat("Chat sessions, 14 days", analytics ? String(tot.total_sessions || 0) : "—", useManaged ? "On this server only" : "Conversations and automations")];
+          var tiles = first.filter(Boolean);
+          for (var i = 0; i < spare.length && tiles.length < 4; i++) if (spare[i]) tiles.push(spare[i]);
+          return h("div", { className: "sc-stats sc-stats4" }, tiles.slice(0, 4).map(function (t, i) { return h("div", { key: i, style: { display: "contents" } }, t); }));
+        })(),
 
         (function () {
           var rows = llmRows();

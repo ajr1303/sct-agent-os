@@ -69,7 +69,7 @@
 .sx-adv-role{font-weight:400;font-size:12px;opacity:.6;margin-left:8px}
 .sx-adv-m{font-size:13px;margin-top:3px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow-wrap:anywhere}
 .sx-adv-to{color:#8fe3bd;font-weight:600}
-.sx-adv-to.up{color:#f7c66a}
+.sx-adv-to.up{color:var(--color-warning,#ffbd38)}
 .sx-adv-save{font-family:inherit;font-size:12px;margin-left:10px;padding:2px 7px;border:1px solid rgba(62,207,142,.5);color:#8fe3bd;white-space:nowrap}
 .sx-adv-why{font-size:13px;line-height:1.5;opacity:.8;margin-top:4px}
 .sx-adv-act{flex:none}
