@@ -133,3 +133,23 @@
 .sc-sum-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:8px;vertical-align:1px;background:#7fd1a0}
 .sc-sum-dot.hot{background:#f5b43c}.sc-sum-dot.bad{background:#f0706a}
 .sc-sum-more{display:block;font-size:12px;margin-top:4px}
+
+/* Today's idea card */
+.sc-idea .sc-panel-b{padding-top:12px}
+.sc-idea-tag{margin-left:10px;font-size:10px;letter-spacing:.05em;padding:2px 7px;border:1px solid rgba(56,189,248,.5);color:#7dd3fc;text-transform:uppercase}
+.sc-idea-t{font-size:16px;font-weight:600;line-height:1.35;margin-bottom:6px}
+.sc-idea-done{opacity:.8}
+.sc-idea-why,.sc-idea-plan{font-size:13.5px;line-height:1.55;margin:0 0 8px}
+.sc-idea-plan{opacity:.85}
+.sc-idea-btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.sc-idea-go,.sc-idea-b{font-size:13px;padding:7px 14px;cursor:pointer;border:1px solid var(--color-border,rgba(255,255,255,.2));background:none;color:inherit}
+.sc-idea-go{background:#22c3ee;border-color:#22c3ee;color:#06202b;font-weight:600}
+.sc-idea-go:disabled,.sc-idea-b:disabled{opacity:.5;cursor:default}
+.sc-idea-b:hover{background:rgba(255,255,255,.07)}
+.sc-idea-line{font-size:13.5px;line-height:1.6;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.sc-idea-q{margin-top:14px;padding-top:12px;border-top:1px solid var(--color-border,rgba(255,255,255,.1));font-size:13px}
+.sc-idea-qr{display:flex;gap:8px;margin-top:8px}
+.sc-idea-in{flex:1;min-width:0;box-sizing:border-box;padding:7px 10px;font-size:13px;background:rgba(255,255,255,.05);border:1px solid var(--color-border,rgba(255,255,255,.2));color:inherit}
+.sc-idea-msg{margin-top:10px;font-size:12.5px;opacity:.85}
+.sc-idea-spin{display:inline-block;width:10px;height:10px;border-radius:50%;border:2px solid rgba(255,255,255,.25);border-top-color:#22c3ee;animation:sc-spin 1s linear infinite}
+@keyframes sc-spin{to{transform:rotate(360deg)}}

@@ -2892,6 +2892,12 @@ def stuck_watch_run(dry_run=False):
            "retried": [], "nudged": [], "restarted": [], "escalated": [], "triaged": [], "recovered": [], "waiting": [], "skipped": None,
            "needs_attention": False, "summary": ""}
 
+    if not dry_run:
+        try:
+            _idea_tick()       # the day's idea for the owner, once their morning has started
+        except Exception:
+            pass
+
     def done(skipped=None):
         out["skipped"] = skipped
         parts = []
@@ -5633,7 +5639,7 @@ _TASK_PART_NOTE = ("--- How to work this task ---\n"
                    "saying exactly what is left.")
 
 
-def _create_issue(cid, agent, title, description, priority, part=False):
+def _create_issue(cid, agent, title, description, priority, part=False, note=None):
     with _task_lock:
         now = time.time()
         _task_times[:] = [t for t in _task_times if now - t < 3600]
@@ -5642,7 +5648,7 @@ def _create_issue(cid, agent, title, description, priority, part=False):
                             % CHAT_TASKS_PER_HOUR)
         _task_times.append(now)
     pr = priority if priority in ("low", "medium", "high", "urgent") else "medium"
-    description = description[:6000] + "\n\n" + (_TASK_PART_NOTE if part else _TASK_SIZE_NOTE)
+    description = description[:6000] + "\n\n" + (note if note is not None else (_TASK_PART_NOTE if part else _TASK_SIZE_NOTE))
     try:
         ac = agent.get("adapterConfig") if isinstance(agent.get("adapterConfig"), dict) else {}
         if not _agent_host(ac)[1]:
@@ -5998,6 +6004,328 @@ def _set_issue(issue, status, comment):
                  what="update the task")
     except HTTPException as e:
         raise ToolError(str(e.detail))
+
+
+# ---------------------------------------------------------------------------
+# Today's idea: one suggestion a day for the owner, written by the lead agent from
+# what the system actually knows about the business, with three buttons.
+# The lead gets an ordinary task holding the facts and answers through the
+# post_idea tool, so the card always receives clean fields, never free text.
+# ---------------------------------------------------------------------------
+IDEA_KINDS = {"post": "Post idea", "agent": "Agent to build", "follow_up": "Follow-up", "savings": "Saving"}
+IDEA_MAX_PER_DAY = 3          # requests, counting retries and "another idea"
+IDEA_WAIT_MIN = 45            # after this long with no answer, the request counts as failed
+_idea_lock = threading.Lock()
+
+
+def _ideas_db():
+    con = get_db()
+    con.execute("CREATE TABLE IF NOT EXISTS ideas (id INTEGER PRIMARY KEY AUTOINCREMENT, day TEXT, kind TEXT, title TEXT, "
+                "why TEXT, plan TEXT, agent TEXT, question TEXT, status TEXT, issue_id TEXT, issue_key TEXT, task_key TEXT, "
+                "created_at TEXT, acted_at TEXT)")
+    return con
+
+
+def _idea_prefs():
+    try:
+        d = json.loads(_kv_get("idea_prefs") or "{}")
+    except Exception:
+        d = {}
+    d = d if isinstance(d, dict) else {}
+    return {"enabled": d.get("enabled", True) is not False,
+            "off": [k for k in (d.get("off") or []) if k in IDEA_KINDS],
+            "tz": int(d.get("tz") or 0) if str(d.get("tz") or "0").lstrip("-").isdigit() else 0,
+            "tz_known": bool(d.get("tz_known"))}
+
+
+def _idea_prefs_set(**kw):
+    p = _idea_prefs(); p.update(kw); _kv_set("idea_prefs", json.dumps(p)); return p
+
+
+def _idea_day(p=None):
+    """The owner's local date, from the offset their browser last reported."""
+    p = p or _idea_prefs()
+    return (_now() - datetime.timedelta(minutes=p["tz"])).strftime("%Y-%m-%d")
+
+
+def _idea_rows(day=None, limit=30):
+    with closing(_ideas_db()) as con:
+        q = "SELECT id, day, kind, title, why, plan, agent, question, status, issue_id, issue_key, task_key, created_at, acted_at FROM ideas"
+        rows = con.execute(q + (" WHERE day=?" if day else "") + " ORDER BY id DESC LIMIT ?", ((day, limit) if day else (limit,))).fetchall()
+    keys = ("id", "day", "kind", "title", "why", "plan", "agent", "question", "status", "issue_id", "issue_key", "task_key", "created_at", "acted_at")
+    return [dict(zip(keys, r)) for r in rows]
+
+
+def _idea_facts(cid, agents, prefs):
+    """What the lead is given to work from. Counts and titles only; no secrets."""
+    lines = []
+    try:
+        wk = orchestration_summary(since=(_now() - datetime.timedelta(days=7)).timestamp(), until=0, label="week", _auth=True)
+        if wk.get("ok"):
+            lines.append("This week: " + wk["text"])
+            for x in wk.get("heavy") or []:
+                lines.append("Heavy run: %s, %s, %d min%s" % (x["agent"], x.get("task") or "a task", x["minutes"],
+                                                              (", $%.2f" % x["cost"]) if x.get("cost") else ""))
+    except Exception:
+        pass
+    try:
+        done = [i for i in _list(_pc_get("/api/companies/%s/issues?status=done&sortField=updated&sortDir=desc&limit=25" % cid), "issues")
+                if isinstance(i, dict)]
+        if done:
+            lines.append("Recently finished: " + "; ".join(_clip(i.get("title"), 70) for i in done[:25]))
+    except Exception:
+        pass
+    lines.append("The team: " + ("; ".join("%s (%s)" % (_agent_name(a), _clip(a.get("title") or a.get("role") or "agent", 40))
+                                           for a in agents[:30]) or "no agents yet"))
+    try:
+        bw = bookings_week(_auth=True)
+        if bw.get("account_count"):
+            lines.append("Appointments in the next 7 days: %d" % len(bw.get("starts") or []))
+    except Exception:
+        pass
+    past = [r for r in _idea_rows(limit=14) if r["status"] in ("done", "later", "declined", "ready")]
+    if past:
+        words = {"done": "owner said do it", "later": "owner said not today", "declined": "owner turned this kind off", "ready": "not answered"}
+        lines.append("Ideas already given (do not repeat them): " + "; ".join(
+            "%s [%s, %s]" % (_clip(r["title"], 60), r["kind"], words[r["status"]]) for r in past))
+    return "\n".join("- " + l for l in lines)
+
+
+def _idea_request(manual=False):
+    """File today's idea task with the lead agent. Returns (ok, plain reason)."""
+    with _idea_lock:
+        p = _idea_prefs()
+        if _pc_mode() == "external":
+            return False, "Ideas need the built-in team board, and this install uses an outside one."
+        if not p["enabled"]:
+            return False, "Daily ideas are switched off."
+        kinds = [k for k in IDEA_KINDS if k not in p["off"]]
+        if not kinds:
+            return False, "Every kind of idea is switched off."
+        day = _idea_day(p)
+        rows = _idea_rows(day)
+        if any(r["status"] == "requested" for r in rows):
+            return False, "Today's idea is already being worked on."
+        if len(rows) >= IDEA_MAX_PER_DAY:
+            return False, "That is enough ideas for one day. A new one arrives tomorrow."
+        if not manual and rows:
+            return False, "Today's idea was already requested."
+        try:
+            cid, agents = _tool_agents()
+        except Exception as e:
+            return False, str(e)[:160]
+        lead = _lead_agent(agents)
+        if not lead:
+            return False, "Ideas come from your lead agent (the one with the CEO role), and there is not one yet."
+        prefer = kinds[datetime.date.fromisoformat(day).toordinal() % len(kinds)]
+        thin = len((_business().get("about") or "").strip()) < 120
+        base = ""
+        try:
+            base = _pc_public_base()
+        except Exception:
+            pass
+        desc = (
+            "Write today's idea for the owner. It appears as one card on their dashboard with the buttons "
+            "Do it, Not today and Not for me, so it must be one specific thing they could say yes to.\n\n"
+            "Rules:\n"
+            "- One idea only, and it must come from the facts below or the business profile. State the reason "
+            "in one sentence with a real detail in it. Generic advice (\"post more\", \"use AI for marketing\") is not wanted.\n"
+            "- If nothing here gives you a real reason today, send kind \"none\". An honest \"nothing today\" is better "
+            "than a made-up idea.\n"
+            "- Kinds you may use: %s. Today, lean towards \"%s\" unless another has a clearly stronger reason.\n"
+            "  post = a post or piece of content for today. agent = an agent or automation worth building. "
+            "follow_up = someone or something to follow up on. savings = a way to spend less or save the owner time.\n"
+            "- \"plan\" is what the team will do if the owner presses Do it: who does what, in two or three sentences. "
+            "Nothing is published, sent or bought without the owner approving it separately.\n"
+            "- Plain words. No jargon, ids or file paths.\n"
+            "%s\n"
+            "Send it with the post_idea tool: task (this task's key), kind, title (under 80 characters), why, plan, "
+            "agent (the colleague who should do it, or leave empty)%s. That also closes this task, so stop afterwards.%s\n\n"
+            "--- Facts ---\n%s"
+            % (", ".join(kinds), prefer,
+               ("- The business profile is nearly empty, so also include \"question\": one short question whose answer "
+                "would make future ideas better.\n" if thin else ""),
+               ", question" if thin else "",
+               (" On your own machine: POST %s/api/agent-os/call/post_idea with those fields as JSON." % base) if base else "",
+               _idea_facts(cid, agents, p)))
+        try:
+            key = _create_issue(cid, lead, "Today's idea for the owner (%s)" % day, desc, "low", note=(
+                "--- How to work this task ---\nThis takes a few minutes. Do not split it or hand it off: send the idea "
+                "with post_idea and stop."))
+        except ToolError as e:
+            return False, str(e)[:200]
+        iid = ""
+        try:
+            iid = str((_pc_get("/api/issues/" + str(key)) or {}).get("id") or "")
+        except Exception:
+            pass
+        with closing(_ideas_db()) as con:
+            con.execute("INSERT INTO ideas(day, status, issue_id, issue_key, created_at) VALUES(?,?,?,?,?)",
+                        (day, "requested", iid, str(key), _now().isoformat()))
+            con.commit()
+        return True, "Asked %s for today's idea." % _agent_name(lead)
+
+
+def _idea_tick():
+    """Called from the watch pass: ask for the day's idea once the owner's morning has started."""
+    p = _idea_prefs()
+    if not p["enabled"]:
+        return
+    local = _now() - datetime.timedelta(minutes=p["tz"])
+    if local.hour < (5 if p["tz_known"] else 10):
+        return
+    day = local.strftime("%Y-%m-%d")
+    if _kv_get("idea_asked_day") == day:
+        return
+    _kv_set("idea_asked_day", day)
+    if not _idea_rows(day):
+        _idea_request()
+
+
+def t_post_idea(a):
+    issue = _own_issue(a)
+    with closing(_ideas_db()) as con:
+        row = con.execute("SELECT id, status FROM ideas WHERE issue_id=? OR issue_key=? ORDER BY id DESC LIMIT 1",
+                          (str(issue.get("id")), str(issue.get("identifier") or ""))).fetchone()
+    if not row:
+        raise ToolError("post_idea is only for the daily idea task. This is a different task.")
+    if row[1] != "requested":
+        return "Today's idea was already sent. Stop here."
+    kind = (a.get("kind") or "").strip().lower()
+    off = _idea_prefs()["off"]
+    if kind != "none" and (kind not in IDEA_KINDS or kind in off):
+        raise ToolError("kind must be one of: %s, or none." % ", ".join(k for k in IDEA_KINDS if k not in off))
+    title, why, plan = (_clip((a.get(k) or "").strip(), n) for k, n in (("title", 110), ("why", 400), ("plan", 700)))
+    question = _clip((a.get("question") or "").strip(), 200)
+    if kind != "none":
+        if len(title) < 8 or len(why) < 20 or len(plan) < 20:
+            raise ToolError("Give a title, a one-sentence reason (why) and what the team will do (plan).")
+    with closing(_ideas_db()) as con:
+        con.execute("UPDATE ideas SET kind=?, title=?, why=?, plan=?, agent=?, question=?, status=? WHERE id=?",
+                    (kind, title, why, plan, _clip((a.get("agent") or "").strip(), 60), question,
+                     "empty" if kind == "none" else "ready", row[0]))
+        con.commit()
+    if issue.get("status") not in ("done", "cancelled"):
+        _set_issue(issue, "done", "Completed: " + ("no idea worth sending today." if kind == "none" else "sent today's idea, \"%s\"." % title))
+    return "Saved, and this task is closed. Stop here."
+
+
+def _idea_public():
+    p = _idea_prefs()
+    day = _idea_day(p)
+    out = {"enabled": p["enabled"], "day": day, "state": "none", "idea": None, "off": p["off"],
+           "kinds": IDEA_KINDS, "can_request": False, "lead": None}
+    if not p["enabled"] or len(p["off"]) >= len(IDEA_KINDS):
+        out["state"] = "off"
+        return out
+    rows = _idea_rows(day)
+    out["can_request"] = len(rows) < IDEA_MAX_PER_DAY
+    if not rows:
+        return out
+    r = rows[0]
+    if r["status"] == "requested":
+        at = _ts(r["created_at"])
+        if at and _now() - at > datetime.timedelta(minutes=IDEA_WAIT_MIN):
+            with closing(_ideas_db()) as con:
+                con.execute("UPDATE ideas SET status='failed' WHERE id=?", (r["id"],)); con.commit()
+            r["status"] = "failed"
+    out["state"] = {"requested": "working", "ready": "ready", "empty": "empty", "failed": "failed"}.get(r["status"], "acted")
+    out["idea"] = {"id": r["id"], "kind": r["kind"], "kind_label": IDEA_KINDS.get(r["kind"] or "", ""), "title": r["title"],
+                   "why": r["why"], "plan": r["plan"], "agent": r["agent"], "question": r["question"], "status": r["status"],
+                   "task_key": r["task_key"]}
+    return out
+
+
+class IdeaAct(BaseModel):
+    id: int
+    action: str
+    answer: str = ""
+
+
+@app.get("/orchestration/idea")
+def idea_get(tz: int = 0, _auth=Depends(require_auth)):
+    """`tz` is the browser's offset from UTC in minutes (as JavaScript reports it), so the
+    server knows when the owner's day starts."""
+    if -840 <= tz <= 840:
+        p = _idea_prefs()
+        if p["tz"] != tz or not p["tz_known"]:
+            _idea_prefs_set(tz=tz, tz_known=True)
+    return _idea_public()
+
+
+@app.post("/orchestration/idea/request")
+def idea_request(_auth=Depends(require_auth)):
+    _task_writable()
+    ok, msg = _idea_request(manual=True)
+    return dict(_idea_public(), ok=ok, message=msg)
+
+
+@app.post("/orchestration/idea/settings")
+def idea_settings(b: dict, _auth=Depends(require_auth)):
+    kw = {}
+    if isinstance(b.get("enabled"), bool):
+        kw["enabled"] = b["enabled"]
+        if b["enabled"]:
+            kw["off"] = []          # switching back on brings every kind back
+    if kw:
+        _idea_prefs_set(**kw)
+    return _idea_public()
+
+
+@app.post("/orchestration/idea/act")
+def idea_act(b: IdeaAct, _auth=Depends(require_auth)):
+    rows = [r for r in _idea_rows(limit=30) if r["id"] == b.id]
+    if not rows:
+        raise HTTPException(status_code=404, detail="That idea is no longer here.")
+    r = rows[0]
+    msg = ""
+    if b.action == "answer":
+        ans = (b.answer or "").strip()[:400]
+        if not r["question"] or len(ans) < 2:
+            raise HTTPException(status_code=400, detail="Type an answer first.")
+        biz = _business()
+        about = (biz["about"] + "\n" if biz["about"] else "") + "%s %s" % (r["question"], ans)
+        with closing(get_db()) as con:
+            con.execute("INSERT INTO business_profile(id, name, about, updated_at) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+                        "about=excluded.about, updated_at=excluded.updated_at", (biz["name"], about[:4000], _now().isoformat()))
+            con.commit()
+        with closing(_ideas_db()) as con:
+            con.execute("UPDATE ideas SET question='' WHERE id=?", (r["id"],)); con.commit()
+        return dict(_idea_public(), ok=True, message="Thanks. That is saved to your business profile.")
+    if r["status"] != "ready":
+        raise HTTPException(status_code=409, detail="That idea was already answered.")
+    if b.action == "do":
+        _task_writable()
+        try:
+            cid, agents = _tool_agents()
+            who = _find_agent(agents, r["agent"]) if r["agent"] else None
+            who = who or _lead_agent(agents)
+            if not who:
+                raise ToolError("There is no agent to give this to yet.")
+            desc = ("The owner pressed **Do it** on today's idea from the dashboard.\n\n**The idea:** %s\n\n**Why:** %s\n\n"
+                    "**What to do:** %s\n\nIf a colleague fits this better, pass it on with hand_off_task. Approving the idea "
+                    "is not approval to publish, send or spend: for any of those, ask with need_owner_input and include "
+                    "the draft." % (r["title"], r["why"], r["plan"]))
+            key = _create_issue(cid, who, r["title"], desc, "medium")
+        except ToolError as e:
+            raise HTTPException(status_code=400, detail=str(e)[:200])
+        with closing(_ideas_db()) as con:
+            con.execute("UPDATE ideas SET status='done', task_key=?, acted_at=? WHERE id=?", (str(key), _now().isoformat(), r["id"]))
+            con.commit()
+        msg = "On it. %s has this as task %s." % (_agent_name(who), key)
+    elif b.action in ("later", "never"):
+        if b.action == "never" and r["kind"] in IDEA_KINDS:
+            p = _idea_prefs()
+            _idea_prefs_set(off=sorted(set(p["off"]) | {r["kind"]}))
+        with closing(_ideas_db()) as con:
+            con.execute("UPDATE ideas SET status=?, acted_at=? WHERE id=?",
+                        ("later" if b.action == "later" else "declined", _now().isoformat(), r["id"]))
+            con.commit()
+        msg = "No problem. A new idea arrives tomorrow." if b.action == "later" else \
+              "Understood. No more ideas of that kind."
+    else:
+        raise HTTPException(status_code=400, detail="Unknown action.")
+    return dict(_idea_public(), ok=True, message=msg)
 
 
 def t_complete_task(a):
@@ -7523,6 +7851,18 @@ MCP_TOOLS = {
         _schema({"need": {"type": "string", "description": "The work that has no owner"},
                  "request": {"type": "string", "description": "The owner's request in their words"}},
                 ("need",))),
+    "post_idea": (t_post_idea, "all",
+        "Only for the daily task titled \"Today's idea for the owner\": sends the one idea that appears on the "
+        "owner's dashboard, and closes that task. Use kind \"none\" when nothing has a real reason behind it today.",
+        _schema({"task": {"type": "string", "description": "This task's id or key"},
+                 "agent_id": {"type": "string", "description": "Your Agent ID from the runtime identity"},
+                 "kind": {"type": "string", "description": "post, agent, follow_up, savings or none"},
+                 "title": {"type": "string", "description": "The idea in under 80 characters, plain words"},
+                 "why": {"type": "string", "description": "One sentence with a real detail: why this, why today"},
+                 "plan": {"type": "string", "description": "What the team does if the owner says yes, in 2 or 3 sentences"},
+                 "agent": {"type": "string", "description": "Colleague who should do it (optional)"},
+                 "question": {"type": "string", "description": "Optional: one short question about the business"}},
+                ("task", "agent_id", "kind"))),
     "complete_task": (t_complete_task, "all",
         "For an agent working on an assigned task: call this when the work is finished and your result "
         "is posted on the task. This is what gives the task its final disposition; without it the task "
@@ -7766,7 +8106,7 @@ async def mcp_agent(request: Request):
 # uses one shared token). It does hold its own Paperclip API key, so these routes accept
 # that key, ask Paperclip whose it is, and act only as that agent. The proxy publishes
 # them on the team board's address under /api/agent-os/.
-_REMOTE_TOOL_NAMES = ("list_agents", "complete_task", "need_owner_input", "split_task", "hand_off_task")
+_REMOTE_TOOL_NAMES = ("list_agents", "complete_task", "need_owner_input", "split_task", "hand_off_task", "post_idea")
 _REMOTE_HELP = ("Task tools for an agent working an assigned task: split_task when the job will not fit in "
                 "one run, complete_task when it is finished, hand_off_task to pass it to a colleague, "
                 "need_owner_input when only the owner can decide, list_agents for colleagues' names. You "

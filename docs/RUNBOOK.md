@@ -1122,3 +1122,28 @@ the owner's timezone) and `label` (`today`, `yesterday`, `week`).
   booking apps. Paperclip tasks carry no due date, so the card cannot say what is
   due today.
 - The answer is cached for a minute; the card refreshes every two minutes.
+
+## 35. Today's idea
+
+One suggestion a day on Overview, written by the lead agent. Unlike the summary
+card this one uses an AI model: one small task a day on the lead agent's model.
+
+- **When it is written.** The stuck-agent watch asks for it on its first pass after
+  5 am in the owner's timezone (the browser reports the timezone the first time the
+  card is opened; until then, after 10:00 UTC). If the watch is off, the card shows
+  **Get today's idea**. At most three requests a day, counting retries.
+- **How.** The lead gets a low-priority task, "Today's idea for the owner", holding
+  the facts and the rules, and answers with the `post_idea` tool (also reachable by
+  agents on their own machines at `/api/agent-os/call/post_idea`). The tool only
+  works on that task, for the agent it is assigned to, and closes it. No answer
+  within 45 minutes shows as "did not arrive" with a retry.
+- **Kinds.** `post`, `agent`, `follow_up`, `savings`. One is suggested each day in
+  rotation; the lead may pick another with a stronger reason, or `none`.
+- **Buttons.** Do it files a normal task with the named colleague (or the lead).
+  Not today skips it. Not for me switches that kind off; **Turn off** on the card
+  stops ideas altogether, and switching back on brings every kind back.
+- **Needs.** The built-in team board and an agent with the CEO role. Ideas are kept
+  in the `ideas` table of the connectors database; settings in `kv` (`idea_prefs`).
+- **Quality** follows the business profile (Account). The fuller it is, the more
+  specific the ideas.
+

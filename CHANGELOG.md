@@ -2,6 +2,23 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.57.0] — 2026-11-19
+
+### Added
+- **Today's idea card on Overview.** Once a day the lead agent (the one with the
+  CEO role) suggests one specific thing for the business: a post, an agent worth
+  building, a follow-up, or a saving. Each idea carries its reason and what the
+  team will do, with three buttons: **Do it** (files the task with the right
+  agent), **Not today**, and **Not for me** (stops that kind of idea).
+- The lead works from facts the system already holds (business profile, the
+  week's summary, recently finished work, the team, upcoming appointments, past
+  ideas and how the owner answered them) and answers through a new `post_idea`
+  tool, so the card always gets clean fields. It may answer "nothing today".
+- While the business profile is nearly empty, the card also asks one short
+  question and saves the answer to the profile.
+- Pressing Do it never approves publishing, sending or spending; the agent still
+  asks for those with a decision card.
+
 ## [0.56.0] — 2026-11-19
 
 ### Added

@@ -152,6 +152,74 @@
         h("div", { className: "sc-panel-b" }, body));
     }
 
+    // "Today's idea": one suggestion a day from the lead agent, with three buttons.
+    function IdeaCard() {
+      var a = useState(null), d = a[0], setD = a[1];
+      var b = useState(""), msg = b[0], setMsg = b[1];
+      var c = useState(false), busy = c[0], setBusy = c[1];
+      var e = useState(""), ans = e[0], setAns = e[1];
+      function get() {
+        try {
+          fetch("/api/connectors/orchestration/idea?tz=" + new Date().getTimezoneOffset(), { credentials: "same-origin" })
+            .then(function (x) { return x.ok ? x.json() : null; }).then(function (v) { if (v) setD(v); }).catch(function () {});
+        } catch (err) {}
+      }
+      function post(path, body) {
+        setBusy(true); setMsg("");
+        fetch("/api/connectors/orchestration/idea/" + path, { method: "POST", credentials: "same-origin",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) })
+          .then(function (x) { return x.json().then(function (v) { return { ok: x.ok, v: v }; }); })
+          .then(function (r) {
+            setBusy(false);
+            if (!r.ok) { setMsg((r.v && r.v.detail) || "That did not work. Try again."); return; }
+            setD(r.v); setMsg(r.v.message || "");
+          }).catch(function () { setBusy(false); setMsg("That did not work. Try again."); });
+      }
+      useEffect(function () { get(); var t = setInterval(get, 20000); return function () { clearInterval(t); }; }, []);
+      var q = location.search || "", body, idea = d && d.idea;
+      function act(action, extra) { post("act", Object.assign({ id: idea.id, action: action }, extra || {})); }
+      var again = d && d.can_request
+        ? h("button", { className: "sc-idea-b", disabled: busy, onClick: function () { post("request"); } }, "Get another idea") : null;
+      if (!d) body = h("div", { className: "sc-empty" }, "Loading…");
+      else if (d.state === "off") body = h("div", { className: "sc-idea-line" }, "Daily ideas are switched off. ",
+        h("button", { className: "sc-idea-b", disabled: busy, onClick: function () { post("settings", { enabled: true }); } }, "Switch on"));
+      else if (d.state === "none") body = h("div", { className: "sc-idea-line" },
+        "Each morning your lead agent suggests one thing worth doing, based on your business and what the team has been working on. ",
+        h("button", { className: "sc-idea-go", disabled: busy, onClick: function () { post("request"); } }, busy ? "Asking…" : "Get today's idea"));
+      else if (d.state === "working") body = h("div", { className: "sc-idea-line" }, h("i", { className: "sc-idea-spin" }),
+        "Your lead agent is writing today's idea. This usually takes a few minutes.");
+      else if (d.state === "failed") body = h("div", { className: "sc-idea-line" }, "Today's idea did not arrive. ", again);
+      else if (d.state === "empty") body = h("div", { className: "sc-idea-line" },
+        "Nothing worth suggesting today. Your lead agent would sooner say so than make something up. ", again);
+      else if (d.state === "ready") body = h("div", null,
+        h("div", { className: "sc-idea-t" }, idea.title),
+        h("p", { className: "sc-idea-why" }, idea.why),
+        h("p", { className: "sc-idea-plan" }, h("b", null, "If you say yes: "), idea.plan),
+        h("div", { className: "sc-idea-btns" },
+          h("button", { className: "sc-idea-go", disabled: busy, onClick: function () { act("do"); } }, "Do it"),
+          h("button", { className: "sc-idea-b", disabled: busy, onClick: function () { act("later"); } }, "Not today"),
+          h("button", { className: "sc-idea-b", disabled: busy, title: "Stops this kind of idea (" + (idea.kind_label || "") + ")",
+            onClick: function () { act("never"); } }, "Not for me")),
+        idea.question ? h("div", { className: "sc-idea-q" },
+          h("div", { className: "sc-idea-ql" }, "One question, to make future ideas better: ", h("b", null, idea.question)),
+          h("div", { className: "sc-idea-qr" },
+            h("input", { className: "sc-idea-in", value: ans, maxLength: 400, placeholder: "Your answer",
+              onChange: function (ev) { setAns(ev.target.value); } }),
+            h("button", { className: "sc-idea-b", disabled: busy || ans.trim().length < 2,
+              onClick: function () { act("answer", { answer: ans }); setAns(""); } }, "Save"))) : null);
+      else body = h("div", null,
+        h("div", { className: "sc-idea-t sc-idea-done" }, idea.title || "Today's idea"),
+        h("div", { className: "sc-idea-line" },
+          idea.status === "done" ? h("span", null, "The team is on it. ", h("a", { className: "sc-link", href: "/tasks" + q }, "See task " + (idea.task_key || "") + " →"), " ")
+            : idea.status === "later" ? "Skipped for today. " : "You turned this kind of idea off. ", again));
+      return h("div", { className: "sc-panel sc-idea" },
+        h("div", { className: "sc-panel-h" },
+          h("span", { className: "sc-panel-t" }, "Today's idea",
+            d && d.state === "ready" && idea.kind_label ? h("span", { className: "sc-idea-tag" }, idea.kind_label) : null),
+          d && d.state !== "off" ? h("button", { className: "sc-sum-ref", onClick: function () { post("settings", { enabled: false }); } }, "Turn off") : null),
+        h("div", { className: "sc-panel-b" }, body, msg ? h("div", { className: "sc-idea-msg" }, msg) : null));
+    }
+
     function Overview() {
       var sa = useState(null), status = sa[0], setStatus = sa[1];
       var sb = useState(null), sessions = sb[0], setSessions = sb[1];
@@ -457,7 +525,7 @@
         })(),
 
         h("div", { className: "sc-cols sc-cols-sum" },
-          h("div", { className: "sc-col" }, h(SummaryCard, null)),
+          h("div", { className: "sc-col" }, h(SummaryCard, null), h(IdeaCard, null)),
           h("div", { className: "sc-col" },
             Panel("Waiting on you", "Only decisions. The team handles the rest.", waitingBody()),
             useManaged
