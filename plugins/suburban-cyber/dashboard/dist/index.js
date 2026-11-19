@@ -240,6 +240,7 @@
       var sj = useState(null), updRun = sj[0], setUpdRun = sj[1];      // {pending, waiting_seconds, state} from the server
       var sj2 = useState(""), updMsg = sj2[0], setUpdMsg = sj2[1];
       var sj3 = useState(false), updBusy = sj3[0], setUpdBusy = sj3[1];
+      var sj4 = useState(false), agAll = sj4[0], setAgAll = sj4[1];
 
       useEffect(function () {
         function load() {
@@ -287,7 +288,7 @@
       var version = status ? pick(status, ["version"]) : null;
       var tot = (analytics && analytics.totals) || {};
       var tokens = (+tot.total_input || 0) + (+tot.total_output || 0);
-      var recent = (sessions || []).slice(0, 5);
+      var recent = (sessions || []).slice(0, 6);
       var today = new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
 
       var ATT_KINDS = [["approval", "Approvals"], ["decision", "Decisions"], ["review", "Reviews"], ["failed_run", "Failed runs"], ["budget_alert", "Budget alerts"], ["agent_error_alert", "Agent errors"], ["blocker_attention", "Blockers"], ["join_request", "Join requests"], ["recovery_action", "Recovery actions"], ["productivity_review", "Productivity reviews"], ["issue_thread_interaction", "Messages"]];
@@ -389,6 +390,11 @@
           return h("div", { key: p.id, style: { display: "contents" } }, tile);
         });
       }
+      var agRank = { running: 0, error: 1 };
+      var agentsSorted = (managedAgents || []).slice().sort(function (x, y) {
+        var rx = agRank[String(x.status || "").toLowerCase()], ry = agRank[String(y.status || "").toLowerCase()];
+        return (rx == null ? 2 : rx) - (ry == null ? 2 : ry);
+      });
       var agentTileLabel = useManaged ? "Agents" : "Active agents";
       var agentTileVal = useManaged ? String(managedAgents.length) : (status ? String(activeAgents != null ? activeAgents : 0) : "—");
       var agentsBusy = useManaged ? managedAgents.filter(function (x) { return String(x.status || "").toLowerCase() === "running"; }).length : 0;
@@ -526,22 +532,32 @@
         })(),
 
         h("div", { className: "sc-cols sc-cols-sum" },
-          h("div", { className: "sc-col" }, h(SummaryCard, null), h(IdeaCard, null)),
+          h("div", { className: "sc-col" }, h(SummaryCard, null), h(IdeaCard, null),
+            Panel("Activity log", "Live from your gateway",
+              recent.length === 0
+                ? h("div", { className: "sc-empty" }, sessions == null ? "Loading…" : "No recent sessions yet.")
+                : recent.map(function (s, i) {
+                    var title = pick(s, ["title", "preview", "name", "id"]) || "Session";
+                    return h("div", { className: "sc-log", key: i },
+                      h("span", { className: "sc-log-t" }, timeAgo(pick(s, ["last_active", "updated_at", "created_at", "started_at"])) || "recent"),
+                      h("span", null, String(title).slice(0, 60)));
+                  }))),
           h("div", { className: "sc-col" },
             Panel("Waiting on you", "Only decisions. The team handles the rest.", waitingBody()),
             useManaged
-              ? Panel("Your agents", managedAgents.length + " managed",
+              ? Panel("Your agents", managedAgents.length + " on your team",
                   managedAgents.length === 0
                     ? h("div", { className: "sc-empty" }, h("span", null, "No managed agents yet. ", h("a", { href: orchHref(), className: "sc-link" }, "Create one in Orchestration →")))
-                    : managedAgents.map(function (a, i) {
-                        var model = hermesModelFor(a.name);
-                        return h("div", { className: "sc-agentrow", key: a.id || i },
-                          h("div", null,
-                            h("div", { className: "sc-agentname" }, a.name),
-                            h("div", { className: "sc-agentdesc" }, (a.role ? String(a.role).toUpperCase() : "AGENT") + (a.status ? " · " + a.status : ""))),
-                          h("div", { className: "sc-agentmeta" },
-                            model ? h("span", { className: "sc-tag" }, model) : null));
-                      }))
+                    : h("div", null,
+                        (agAll ? agentsSorted : agentsSorted.slice(0, 8)).map(function (a, i) {
+                          var st = String(a.status || "").toLowerCase();
+                          return h("div", { className: "sc-ag", key: a.id || i },
+                            h("span", { className: "sc-ag-n" },
+                              h("i", { className: "sc-ag-dot " + (st === "running" ? "on" : st === "error" ? "bad" : st === "paused" ? "off" : "") }), a.name),
+                            h("span", { className: "sc-ag-s" }, (a.title || a.role || "agent") + " · " + (st === "running" ? "working" : st === "error" ? "stopped" : st || "idle")));
+                        }),
+                        agentsSorted.length > 8 ? h("button", { className: "sc-ag-more", onClick: function () { setAgAll(!agAll); } },
+                          agAll ? "Show fewer" : "Show all " + agentsSorted.length) : null))
               : Panel("Your agents", agents == null ? "" : agents.length + " configured",
                   agents == null
                     ? h("div", { className: "sc-empty" }, "Loading…")
@@ -558,21 +574,7 @@
                             h("div", { className: "sc-agentmeta" },
                               model ? h("span", { className: "sc-tag" }, model) : null,
                               h("span", { className: "sc-skill" }, (ag.skill_count != null ? ag.skill_count : 0) + " skills")));
-                        }))
-          )
-        ),
-        h("div", { className: "sc-cols sc-cols-low" },
-          h("div", { className: "sc-col" },
-            Panel("Activity log", "Live from your gateway",
-              recent.length === 0
-                ? h("div", { className: "sc-empty" }, sessions == null ? "Loading…" : "No recent sessions yet.")
-                : recent.map(function (s, i) {
-                    var title = pick(s, ["title", "preview", "name", "id"]) || "Session";
-                    return h("div", { className: "sc-log", key: i },
-                      h("span", { className: "sc-log-t" }, timeAgo(pick(s, ["last_active", "updated_at", "created_at", "started_at"])) || "recent"),
-                      h("span", null, String(title).slice(0, 60)));
-                  }))),
-          h("div", { className: "sc-col" },
+                        })),
             h("div", { className: "sc-managed" },
               h("div", { className: "sc-managed-h" }, OPERATOR ? "MANAGED BY " + OPERATOR.toUpperCase() : "YOUR SYSTEM"),
               SUPPORT ? h("div", { className: "sc-managed-row" }, h("span", { className: "sc-muted" }, "Support"), h("span", null, SUPPORT)) : null,

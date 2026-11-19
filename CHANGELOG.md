@@ -2,6 +2,16 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.57.2] — 2026-11-19
+
+### Changed
+- Overview is laid out as two columns that stack on their own, so a tall card no
+  longer leaves a gap beside a short one: summary, idea and activity log on the
+  left; decisions, team and system on the right.
+- The team list is compact (one line per agent, working and stopped agents first)
+  and shows eight, with "Show all".
+- The page uses more of a wide screen (up to 1480px).
+
 ## [0.57.1] — 2026-11-19
 
 ### Changed
