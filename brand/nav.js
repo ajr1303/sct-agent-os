@@ -155,21 +155,13 @@
   // Owners stay with the main assistant, which hands work to the others, so the
   // "switch profile" box at the top of the menu is hidden. It comes back with
   // Operator tools switched on (Account), for whoever maintains the server.
-  var bounced = false;
+  // No page reload here. Hermes puts "?profile=<name>" back on the address by itself
+  // on every load, so removing it and reloading (0.55.0) reloaded the page forever.
   function oneProfile() {
     var op = operatorOn(), sw = document.getElementById("hermes-profile-switcher");
     if (sw) {
       var box = sw.closest("div[title]") || sw.parentElement;
       if (box) box.style.display = op ? "" : "none";
-    }
-    // A link or bookmark that names another profile would leave the owner inside it
-    // with no way back, so drop the name and load the main one.
-    if (!op && !bounced && /[?&]profile=/.test(location.search)) {
-      bounced = true;
-      try {
-        var u = new URL(location.href); u.searchParams.delete("profile");
-        location.replace(u.pathname + (u.search || "") + u.hash);
-      } catch (e) {}
     }
   }
 

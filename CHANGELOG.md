@@ -2,6 +2,13 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.55.1] — 2026-11-19
+
+### Fixed
+- The dashboard reloaded forever after updating to 0.55.0. The menu removed
+  `?profile=` from the address and reloaded, and Hermes put it straight back.
+  The reload is gone; the profile box is still hidden unless Operator tools is on.
+
 ## [0.55.0] — 2026-11-19
 
 - **New AI models page.** A simpler page in the Agent OS style: see your main model,

@@ -1093,6 +1093,7 @@ Hermes's own Models page in the menu.
   **Operator tools > Advanced models**.
 
 **Profile switcher.** The "managing profile" box at the top of the menu is hidden.
-Owners stay with the main assistant, which hands work to the others. A link that
-names another profile (`?profile=`) is opened on the main one. With **Operator
-tools** switched on (Account), the box and profile links work as before.
+Owners stay with the main assistant, which hands work to the others. With **Operator
+tools** switched on (Account), the box comes back. Addresses that carry `?profile=`
+are left alone: Hermes adds that itself on every page (0.55.0 removed it and
+reloaded, which looped; fixed in 0.55.1).
