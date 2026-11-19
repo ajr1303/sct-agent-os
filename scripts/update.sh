@@ -116,6 +116,14 @@ docker compose build connectors
 ./scripts/sync-branding.sh
 # Chat tools: write the MCP entry + routing skill before Hermes restarts below.
 ./scripts/sync-chat-tools.sh || echo "  ! chat tools setup reported problems"
+# A release that moves the memory service to a new version changes the memory
+# database on first start. Save a copy first, and go back to it if the new version
+# does not come up (scripts/upgrade-memory.sh).
+./scripts/upgrade-memory.sh prepare || echo "  ! memory upgrade check reported problems"
+if [ -f data/backup/memory-upgrade.state ]; then
+  docker compose up -d || true    # a memory service that fails to start is dealt with on the next line
+  ./scripts/upgrade-memory.sh verify || echo "  ! memory upgrade check reported problems"
+fi
 docker compose up -d
 docker compose restart hermes
 docker compose restart proxy

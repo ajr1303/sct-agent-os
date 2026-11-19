@@ -29,7 +29,7 @@ jobs:
             license: MIT
           - name: honcho
             repo: plastic-labs/honcho
-            ref: 323f7e79923ffef968669fe4069d8cebed3ec8c3
+            ref: 70c67624169683b9e265517aec95a51b8077cabc
             license: AGPL-3.0-only
     steps:
       - uses: docker/setup-buildx-action@v3
