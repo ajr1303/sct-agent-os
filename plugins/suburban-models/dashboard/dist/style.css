@@ -59,3 +59,26 @@
 .sx-row-w{font-size:12px;opacity:.6}
 .sx-foot{padding:11px 16px;font-size:12.5px;opacity:.85}
 .sx-foot-out{padding:0;opacity:.7}
+
+/* Model advice */
+.sx-adv{padding:13px 16px;border-bottom:1px solid var(--color-border,rgba(255,255,255,.08))}
+.sx-adv:last-child{border-bottom:0}
+.sx-adv-top{display:flex;justify-content:space-between;align-items:center;gap:16px}
+.sx-adv-l{min-width:0}
+.sx-adv-n{font-size:14.5px;font-weight:650}
+.sx-adv-role{font-weight:400;font-size:12px;opacity:.6;margin-left:8px}
+.sx-adv-m{font-size:13px;margin-top:3px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow-wrap:anywhere}
+.sx-adv-to{color:#8fe3bd;font-weight:600}
+.sx-adv-to.up{color:#f7c66a}
+.sx-adv-save{font-family:inherit;font-size:12px;margin-left:10px;padding:2px 7px;border:1px solid rgba(62,207,142,.5);color:#8fe3bd;white-space:nowrap}
+.sx-adv-why{font-size:13px;line-height:1.5;opacity:.8;margin-top:4px}
+.sx-adv-act{flex:none}
+.sx-adv-job{font-size:13px;margin-top:9px;opacity:.9}
+.sx-adv-job.ok{color:#8fe3bd}.sx-adv-job.bad{color:var(--color-destructive,#ff7a73)}
+.sx-adv-cmd{margin-top:10px}
+.sx-adv-cmdh{font-size:13px;line-height:1.5;margin-bottom:6px}
+.sx-adv-note{font-size:12px;opacity:.7;margin-left:8px}
+.sx-linkb{background:none;border:0;padding:0;margin-left:10px;font:inherit;font-size:12.5px;color:var(--color-primary,#25c9ee);cursor:pointer}
+.sx-adv-rest{border-top:1px solid var(--color-border,rgba(255,255,255,.08))}
+.sx-adv-rest>.sx-linkb{margin:12px 16px;display:inline-block}
+.sx-pre{margin:0;padding:11px 13px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.55;background:rgba(0,0,0,.32);border:1px solid var(--color-border,rgba(255,255,255,.1));overflow:auto;white-space:pre}

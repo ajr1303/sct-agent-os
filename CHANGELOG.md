@@ -2,6 +2,25 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.60.0] — 2026-11-19
+
+### Added
+- **Model advice** on the AI models page. From each agent's last 7 days of runs it
+  suggests moving short, routine work to a cheaper model, or moving an agent whose
+  runs keep failing to a stronger one, with the reason and an estimated saving.
+  **Switch** applies it where this server can; otherwise **Show the steps** gives
+  the exact commands for that agent's machine. The lead agent is never moved down.
+  Only model pairs checked by hand are suggested (`MODEL_TIERS`; MiniMax-M3 and
+  MiniMax-M3.1-Flash for now).
+
+### Fixed
+- Changing a model on an agent's own machine now works when Hermes was installed
+  through the npm bridge (not on the PATH) and when the config keeps the model under
+  `model: model:` instead of `model: default:`. It changes the key that is there,
+  and still restores the old settings if the gateway does not come back.
+- A model checked by hand can be chosen even when that machine's Hermes is too old
+  to list it, as long as the provider is set up there.
+
 ## [0.59.0] — 2026-11-19
 
 ### Added

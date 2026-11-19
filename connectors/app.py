@@ -1647,19 +1647,31 @@ _REMOTE_SET_MODEL = r"""
 set -u
 MODEL="$1"; PROVIDER="$2"; SVC="$3"; SCOPE="$4"; H="${5:-}"
 [ -x "$H" ] || H=$(command -v hermes 2>/dev/null || true); [ -x "$H" ] || H="$HOME/.local/bin/hermes"
+# Installs that came through the npm bridge keep Hermes inside ~/.hermes, off the PATH.
+[ -x "$H" ] || H="$HOME/.hermes/node_modules/hermes-agent/runtime/hermes-agent/venv/bin/hermes"
+[ -x "$H" ] || H=$(ps -eo args= 2>/dev/null | awk '$2 ~ /\/hermes$/ && $3 == "gateway" {print $2; exit}')
 [ -x "$H" ] || { echo "ERR The hermes command was not found on that machine."; exit 10; }
 CFG="$HOME/.hermes/config.yaml"; ENVF="$HOME/.hermes/.env"; BAK="$CFG.bak-agent-os"
 val() { awk -F= -v k="$1" '$0 ~ "^"k"=" {print substr($0, index($0, "=") + 1)}' "$ENVF" | head -1 | tr -d "\"'\r"; }
 KEY=$(val API_SERVER_KEY); PORT=$(val API_SERVER_PORT); PORT=${PORT:-8443}
-cur() { curl -s -m 20 -H "Authorization: Bearer $KEY" "http://127.0.0.1:$PORT/api/model/options?include_unconfigured=false" \
-  | python3 -c 'import sys,json; d=json.load(sys.stdin); print((d.get("provider") or "")+"|"+(d.get("model") or ""))' 2>/dev/null; }
+# Older configs keep the model under "model: model:", newer ones under "model: default:".
+# Hermes reads either, so change the one that is there and never leave two that disagree.
+MKEY=default
+awk '/^model:[[:space:]]*$/{m=1;next} m&&/^[^[:space:]#]/{m=0} m&&/^[[:space:]]+default:/{d=1} m&&/^[[:space:]]+model:/{o=1} END{exit !(o&&!d)}' "$CFG" 2>/dev/null && MKEY=model
+fromcfg() { awk -v k="$1" '/^model:[[:space:]]*$/{m=1;next} m&&/^[^[:space:]#]/{m=0} m&&$1==k":"{print $2; exit}' "$CFG" | tr -d "\"'\r"; }
+cur() { local o; o=$(curl -s -m 20 -H "Authorization: Bearer $KEY" "http://127.0.0.1:$PORT/api/model/options?include_unconfigured=false" \
+  | python3 -c 'import sys,json; d=json.load(sys.stdin); print((d.get("provider") or "")+"|"+(d.get("model") or ""))' 2>/dev/null)
+  # A gateway too old to report its model: go by its config, as long as it is answering.
+  if [ -z "$o" ] || [ "$o" = "|" ]; then
+    [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:$PORT/health")" = 200 ] && o="$(fromcfg provider)|$(fromcfg "$MKEY")"
+  fi; echo "$o"; }
 restart() { if [ "$SCOPE" = user ]; then systemctl --user restart "$SVC"; else sudo -n systemctl restart "$SVC"; fi; }
 up() { for _ in $(seq 1 36); do sleep 5; [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:$PORT/health")" = 200 ] && return 0; done; return 1; }
 BEFORE=$(cur); [ -n "$BEFORE" ] || { echo "ERR The gateway on that machine did not answer, so nothing was changed."; exit 11; }
 WANT_P="${PROVIDER:-${BEFORE%%|*}}"
 cp -p "$CFG" "$BAK" || { echo "ERR Could not back up the Hermes config, so nothing was changed."; exit 12; }
 undo() { cp -p "$BAK" "$CFG"; }
-"$H" config set model.default "$MODEL" >/dev/null 2>&1 || { undo; echo "ERR This Hermes version could not set the model from a command. Nothing was changed."; exit 13; }
+"$H" config set "model.$MKEY" "$MODEL" >/dev/null 2>&1 || { undo; echo "ERR This Hermes version could not set the model from a command. Nothing was changed."; exit 13; }
 if [ -n "$PROVIDER" ] && [ "$PROVIDER" != "${BEFORE%%|*}" ]; then
   "$H" config set model.provider "$PROVIDER" >/dev/null 2>&1 || { undo; echo "ERR This Hermes version could not set the provider from a command. Nothing was changed."; exit 13; }
 fi
@@ -1786,7 +1798,9 @@ def team_model_set(aid: str, m: ModelChange, _auth=Depends(require_auth)):
     cur = _agent_models().get(aid) or {}
     prov = provider or (cur.get("provider") or "")
     match = [o for o in opts if o.get("slug") == prov and model in o.get("models", [])]
-    if not match:
+    tier = MODEL_TIERS.get(prov.lower().replace("-oauth", "")) or {}
+    checked = model in (tier.get("strong"), tier.get("light")) and any(o.get("slug") == prov for o in opts)
+    if not match and not checked:
         raise HTTPException(status_code=400, detail="That machine did not list this model for this provider. "
                             "Pick one of the choices shown, or add the provider's key on the machine first.")
     with _MODEL_JOBS_LOCK:
@@ -1810,7 +1824,9 @@ def _local_model_set(aid, d, m):
     model, provider = (m.model or "").strip(), (m.provider or "").strip()
     if not _MODEL_RE.match(model) or not provider or not _MODEL_RE.match(provider):
         raise HTTPException(status_code=400, detail="Choose a provider and a model.")
-    if not [o for o in _agent_model_options(aid) if o.get("slug") == provider and model in o.get("models", [])]:
+    _tier = MODEL_TIERS.get(provider.lower().replace("-oauth", "")) or {}
+    _checked = model in (_tier.get("strong"), _tier.get("light")) and any(o.get("slug") == provider for o in _agent_model_options(aid))
+    if not _checked and not [o for o in _agent_model_options(aid) if o.get("slug") == provider and model in o.get("models", [])]:
         raise HTTPException(status_code=400, detail="This server did not list that model for that provider. Pick one of "
                             "the choices shown, or add the provider's key under Settings, Keys first.")
     cur = _local_models().get(aid)
@@ -6712,6 +6728,125 @@ def files_delete(fid: int, _auth=Depends(require_auth)):
         con.execute("DELETE FROM team_files WHERE id=?", (fid,))
         con.commit()
     return files_list(_auth=True)
+
+
+# ---------------------------------------------------------------------------
+# Model advice: which agents could run on a cheaper model, and which need a stronger
+# one, judged from a week of their own runs. Advice only: the owner presses Switch.
+# MODEL_TIERS lists pairs we have checked by hand (ids and prices as of Nov 2026);
+# an agent on a model that is not in the table simply gets no suggestion.
+# ---------------------------------------------------------------------------
+MODEL_TIERS = {
+    "minimax": {"strong": "MiniMax-M3", "light": "MiniMax-M3.1-Flash", "light_label": "Flash", "saves": 0.5},
+}
+ADVICE_MIN_RUNS = 5
+
+
+def _tier_for(provider, model):
+    t = MODEL_TIERS.get(str(provider or "").lower().replace("-oauth", ""))
+    if not t or not model:
+        return None, None
+    return t, ("strong" if model == t["strong"] else "light" if model == t["light"] else None)
+
+
+def _manual_model_commands(old, new):
+    """Terminal steps for a machine this server cannot change itself. Works for both config layouts."""
+    return ("CFG=~/.hermes/config.yaml\n"
+            "cp $CFG $CFG.before-change\n"
+            "sed -i -E 's/^([[:space:]]+(default|model):[[:space:]]*)%s[[:space:]]*$/\\1%s/' $CFG\n"
+            "diff $CFG.before-change $CFG        # should show one changed line\n"
+            "SVC=$(systemctl list-units --type=service --no-legend | grep -i -E 'hgw|hermes' | awk '{print $1}' | head -1)\n"
+            "sudo systemctl restart $SVC && systemctl is-active $SVC\n"
+            "# to undo:  cp $CFG.before-change $CFG && sudo systemctl restart $SVC"
+            % (re.sub(r"([.\[\]*^$\\/+?(){}|])", r"\\\1", old), new.replace("/", "\\/").replace("&", "\\&")))
+
+
+@app.get("/orchestration/model-advice")
+def model_advice(_auth=Depends(require_auth)):
+    out = {"ok": False, "agents": [], "suggestions": 0, "note": ""}
+    if not _pc_up() or not _pc_key():
+        out["note"] = "Your team's board is not connected yet."
+        return out
+    try:
+        cid, agents = _tool_agents()
+    except ToolError as e:
+        out["note"] = str(e)[:160]
+        return out
+    now = _now(); since = now - datetime.timedelta(days=7)
+    stats = {}
+    try:
+        for r in _list(_pc_get("/api/companies/%s/heartbeat-runs?limit=1000&summary=true" % cid), "runs"):
+            if not isinstance(r, dict):
+                continue
+            st = _ts(r.get("startedAt") or r.get("createdAt"))
+            if not st or st < since:
+                continue
+            s = stats.setdefault(r.get("agentId"), {"runs": 0, "failed": 0, "mins": [], "cost": 0.0, "tokens": 0.0})
+            s["runs"] += 1
+            status = str(r.get("status") or "")
+            s["failed"] += 1 if status in ("failed", "timed_out") else 0
+            en = _ts(r.get("finishedAt"))
+            if en:
+                s["mins"].append(max(0.0, (en - st).total_seconds() / 60.0))
+            try: s["cost"] += float(r.get("costUsd") or 0)
+            except Exception: pass
+            try: s["tokens"] += float(r.get("totalTokens") or 0)
+            except Exception: pass
+    except Exception:
+        pass
+    models = _agent_models()
+    lead = _lead_agent(agents)
+    for a in agents:
+        aid = str(a.get("id"))
+        m = models.get(aid) or {}
+        s = stats.get(a.get("id")) or {"runs": 0, "failed": 0, "mins": [], "cost": 0.0, "tokens": 0.0}
+        med = _median(s["mins"])
+        fail = (s["failed"] / s["runs"]) if s["runs"] else 0.0
+        role = a.get("title") or {"ceo": "Lead agent", "general": ""}.get(str(a.get("role") or ""), a.get("role") or "")
+        row = {"id": aid, "name": _agent_name(a), "role": role, "model": m.get("model"),
+               "provider": m.get("provider"), "runs": s["runs"], "failed": s["failed"], "median_min": round(med, 1),
+               "cost": round(s["cost"], 2) if s["cost"] else None, "tokens": int(s["tokens"]),
+               "advice": "keep", "to": None, "why": "", "saving": None, "can_switch": False, "commands": None}
+        tier, level = _tier_for(m.get("provider"), m.get("model"))
+        if not m.get("model"):
+            row["advice"], row["why"] = "unknown", "This agent has not reported which model it uses yet."
+        elif not tier or not level:
+            row["why"] = "No cheaper or stronger option has been checked for this model yet."
+        elif lead and str(lead.get("id")) == aid:
+            row["why"] = "Your lead agent plans, reviews and writes the daily idea, so it stays on the stronger model."
+        elif s["runs"] < ADVICE_MIN_RUNS:
+            row["why"] = "Only %s this week, which is too few to judge." % _plural(s["runs"], "run")
+        elif level == "strong" and fail <= 0.15 and med <= 8:
+            row["advice"], row["to"] = "cheaper", tier["light"]
+            row["why"] = "Short, routine work: %s this week, usually about %d min, %s. %s costs about half as much." % (
+                _plural(s["runs"], "run"), max(1, round(med)), "none failed" if not s["failed"] else _plural(s["failed"], "failure"),
+                tier["light_label"])
+            if s["cost"]:
+                row["saving"] = round(s["cost"] * tier["saves"], 2)
+        elif level == "light" and fail >= 0.3:
+            row["advice"], row["to"] = "stronger", tier["strong"]
+            row["why"] = "%d of %d runs failed this week. A stronger model may finish more of them." % (s["failed"], s["runs"])
+        elif level == "strong":
+            row["why"] = ("Its runs are long (about %d min), so the stronger model is earning its cost." % round(med)) if med > 8 \
+                else "%d of %d runs failed this week, so a cheaper model is not a safe bet yet." % (s["failed"], s["runs"])
+        else:
+            row["why"] = "Already on the cheaper model and finishing its work."
+        if row["to"]:
+            ac = a.get("adapterConfig") if isinstance(a.get("adapterConfig"), dict) else {}
+            _, entry = _agent_ssh(ac)
+            _, local = _agent_host(ac)
+            has_provider = any(o.get("slug") == m.get("provider") for o in _agent_model_options(aid))
+            row["can_switch"] = bool(_pc_mode() != "external" and (local or (entry and entry.get("can_set") and entry.get("can_restart")))
+                                     and (has_provider or local))
+            if not row["can_switch"] and not local:
+                row["commands"] = _manual_model_commands(m.get("model"), row["to"])
+            out["suggestions"] += 1
+        out["agents"].append(row)
+    rank = {"stronger": 0, "cheaper": 1, "keep": 2, "unknown": 3}
+    out["agents"].sort(key=lambda r: (rank.get(r["advice"], 9), r["name"].lower()))
+    out["saving"] = round(sum(r["saving"] or 0 for r in out["agents"]), 2) or None
+    out["ok"] = True
+    return out
 
 
 def t_complete_task(a):

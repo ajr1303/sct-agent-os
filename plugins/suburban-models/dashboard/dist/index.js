@@ -41,6 +41,70 @@
       return (pr.input || "?") + " in · " + (pr.output || "?") + " out, per million tokens";
     }
 
+    // Model advice: which agents could run on a cheaper model or need a stronger one, from a week of runs.
+    function Advice() {
+      var a = useState(null), d = a[0], setD = a[1];
+      var b = useState({}), jobs = b[0], setJobs = b[1];        // agent id -> { state, message }
+      var c = useState(null), open = c[0], setOpen = c[1];      // agent id whose manual steps are shown
+      var e = useState(false), all = e[0], setAll = e[1];
+      var f = useState(""), note = f[0], setNote = f[1];
+      function get(path, opts) {
+        opts = opts || {}; opts.credentials = "same-origin"; opts.headers = { "Content-Type": "application/json" };
+        return fetch("/api/connectors" + path, opts).then(function (r) { return r.text().then(function (t) {
+          var j = {}; try { j = t ? JSON.parse(t) : {}; } catch (er) {}
+          if (!r.ok) throw new Error((j && (j.error || j.detail)) || "That didn't work. Please try again."); return j; }); });
+      }
+      function load() { get("/orchestration/model-advice").then(setD).catch(function () {}); }
+      useEffect(load, []);
+      function setJob(id, j) { setJobs(function (o) { var n = Object.assign({}, o); n[id] = j; return n; }); }
+      function watch(id, tries) {
+        get("/orchestration/team/" + encodeURIComponent(id) + "/model").then(function (m) {
+          var j = m.job || {};
+          if (j.state === "running" && tries < 120) { setTimeout(function () { watch(id, tries + 1); }, 5000); return; }
+          setJob(id, { state: j.state === "done" ? "done" : "failed", message: j.message || (m.own_model ? "Switched. It applies to this agent's next task." : "The change did not finish.") });
+          if (j.state === "done" || m.own_model) load();
+        }).catch(function (er) { setJob(id, { state: "failed", message: er.message }); });
+      }
+      function apply(r) {
+        setJob(r.id, { state: "running", message: "Switching and restarting this agent. This can take a few minutes…" });
+        get("/orchestration/team/" + encodeURIComponent(r.id) + "/model", { method: "POST", body: JSON.stringify({ model: r.to, provider: r.provider }) })
+          .then(function (v) {
+            if (v && v.job && v.job.state === "running") watch(r.id, 0);
+            else { setJob(r.id, { state: "done", message: "Switched. It applies to this agent's next task." }); load(); }
+          }).catch(function (er) { setJob(r.id, { state: "failed", message: er.message }); });
+      }
+      function copy(t) { try { navigator.clipboard.writeText(t).then(function () { setNote("Copied."); }, function () { setNote("Select the text and copy it."); }); } catch (er) { setNote("Select the text and copy it."); } }
+      if (!d || !d.ok) return null;
+      var sug = d.agents.filter(function (r) { return r.to; }), rest = d.agents.filter(function (r) { return !r.to; });
+      function row(r) {
+        var j = jobs[r.id], isOpen = open === r.id;
+        return h("div", { className: "sx-adv", key: r.id },
+          h("div", { className: "sx-adv-top" },
+            h("div", { className: "sx-adv-l" },
+              h("div", { className: "sx-adv-n" }, r.name, r.role ? h("span", { className: "sx-adv-role" }, r.role) : null),
+              h("div", { className: "sx-adv-m" }, r.model ? r.model : "Model not reported",
+                r.to ? h("span", { className: "sx-adv-to" + (r.advice === "stronger" ? " up" : "") }, " → " + r.to) : null,
+                r.saving ? h("span", { className: "sx-adv-save" }, "saves about $" + r.saving.toFixed(2) + " a week") : null),
+              h("div", { className: "sx-adv-why" }, r.why)),
+            r.to ? h("div", { className: "sx-adv-act" },
+              j && j.state === "done" ? null
+                : r.can_switch ? h("button", { type: "button", className: "sx-btn", disabled: j && j.state === "running", onClick: function () { apply(r); } }, j && j.state === "running" ? "Switching…" : "Switch")
+                : h("button", { type: "button", className: "sx-btn sx-quiet", onClick: function () { setNote(""); setOpen(isOpen ? null : r.id); } }, isOpen ? "Hide the steps" : "Show the steps")) : null),
+          j ? h("div", { className: "sx-adv-job" + (j.state === "failed" ? " bad" : j.state === "done" ? " ok" : "") }, j.message) : null,
+          isOpen && r.commands ? h("div", { className: "sx-adv-cmd" },
+            h("div", { className: "sx-adv-cmdh" }, "This server can't change that machine by itself yet. Run these on " + r.name + "'s machine, then send it one small task to check it answers.",
+              h("button", { type: "button", className: "sx-linkb", onClick: function () { copy(r.commands); } }, "Copy"), note ? h("span", { className: "sx-adv-note" }, note) : null),
+            h("pre", { className: "sx-pre" }, r.commands)) : null);
+      }
+      return h("div", { className: "sx-panel" },
+        h("div", { className: "sx-panel-h" }, "Model advice",
+          h("span", { className: "sx-panel-r" }, sug.length ? sug.length + (sug.length === 1 ? " suggestion" : " suggestions") + (d.saving ? " · about $" + d.saving.toFixed(2) + " a week" : "") + ", from the last 7 days of work" : "From the last 7 days of work")),
+        sug.length ? sug.map(row) : h("div", { className: "sx-empty" }, "No changes suggested. Each agent's model fits the work it did this week."),
+        rest.length ? h("div", { className: "sx-adv-rest" },
+          h("button", { type: "button", className: "sx-linkb", onClick: function () { setAll(!all); } }, all ? "Hide the others" : "Why the other " + rest.length + " stay as they are"),
+          all ? rest.map(row) : null) : null);
+    }
+
     function Models() {
       var s;
       s = useState(null);  var opts = s[0], setOpts = s[1];        // {providers, model, provider}
@@ -205,6 +269,8 @@
             picking ? null : h("button", { type: "button", className: "sx-btn", onClick: startPick }, opts.model ? "Change" : "Choose a model")),
           cur && !cur.authenticated && !picking ? h("div", { className: "sx-warn sx-warn-in" }, label(cur) + " is not connected, so this model will not answer. Connect it below or choose another model.") : null,
           picking ? picker() : null),
+
+        h(Advice, null),
 
         h("div", { className: "sx-panel" },
           h("div", { className: "sx-panel-h" }, "AI providers", h("span", { className: "sx-panel-r" }, "Connect a provider with the API key from your account there")),

@@ -1191,3 +1191,24 @@ start using the tool.
 - Files made before this version, and anything an agent wrote only to its own disk,
   are not on the page.
 
+## 38. Model advice
+
+**AI models** shows a Model advice panel when the team board is connected.
+
+- **What it looks at.** Each agent's runs from the last 7 days: how many, how long
+  they usually take, how many failed, and what they cost where the board records it.
+- **Cheaper.** An agent on the stronger model of a checked pair, with at least 5 runs,
+  a usual run of 8 minutes or less and no more than 15% failed.
+- **Stronger.** An agent on the cheaper model with 30% or more of its runs failed.
+- **Never moved down:** the lead agent. Agents with fewer than 5 runs get no advice.
+- **Pairs.** Only models listed in `MODEL_TIERS` in `connectors/app.py` are ever
+  suggested. Add a provider there after checking its model ids and prices.
+- **Switch** uses the same change as the Agents page: on this server it applies to
+  the agent's next task; on the agent's own machine it backs up the config, changes
+  it, restarts the gateway and puts everything back if the gateway does not answer
+  with the new model. That needs `scripts/agent-ssh.sh add <user>@<host>` to have
+  been run for the machine, and the restart to be allowed without a password.
+- **Show the steps** appears when that is not set up, with commands to run by hand.
+- The saving is half of that agent's recorded cost for the week, shown only when
+  the board recorded a cost. It is an estimate.
+
