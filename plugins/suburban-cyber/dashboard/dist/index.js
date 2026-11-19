@@ -391,7 +391,8 @@
       }
       var agentTileLabel = useManaged ? "Agents" : "Active agents";
       var agentTileVal = useManaged ? String(managedAgents.length) : (status ? String(activeAgents != null ? activeAgents : 0) : "—");
-      var agentTileSub = useManaged ? "Managed by Paperclip" : "Running right now";
+      var agentsBusy = useManaged ? managedAgents.filter(function (x) { return String(x.status || "").toLowerCase() === "running"; }).length : 0;
+      var agentTileSub = useManaged ? (agentsBusy + " working right now") : "Running right now";
 
       function updDismissed(ver) { try { return localStorage.getItem("sc-upd-dismissed") === ver; } catch (e) { return false; } }
       function dismissUpd(ver) { try { localStorage.setItem("sc-upd-dismissed", ver); } catch (e) {} setUpdBump(updBump + 1); }

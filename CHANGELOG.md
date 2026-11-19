@@ -2,6 +2,12 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.57.1] — 2026-11-19
+
+### Changed
+- Overview: the Agents tile no longer says "Managed by Paperclip". It shows how
+  many agents are working right now.
+
 ## [0.57.0] — 2026-11-19
 
 ### Added
