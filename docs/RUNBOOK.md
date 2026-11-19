@@ -1265,7 +1265,7 @@ while the board restarts is report back, which the same retry covers.
   (flagged at two or fewer), backups (flagged when none, failed, older than 36 hours,
   or kept on this server only), the team's monthly spending limit, updates.
 - **Help** is the last entry under Settings. The support line comes from the operator
-  name and contact given at install (`AOS_OPERATOR_NAME`, `AOS_OPERATOR_SUPPORT` in
+  name and contact given at install (`OPERATOR_NAME`, `SUPPORT_CONTACT` in
   `.env`; re-run `scripts/sync-branding.sh` after changing them).
 - **Install as an app.** iPhone: open the dashboard in Safari, Share, Add to Home
   Screen. Android and desktop Chrome or Edge: the browser menu, Install app. It is
