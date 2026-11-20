@@ -5,7 +5,7 @@
   "icon": "FolderOpen",
   "version": "0.1.0",
   "tab": {
-    "path": "/files"
+    "path": "/team-files"
   },
   "entry": "dist/index.js",
   "css": "dist/style.css"

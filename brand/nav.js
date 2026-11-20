@@ -21,7 +21,7 @@
 
   // path -> [group, position]. Anything not listed lands at the end of Advanced.
   var GROUPS = [
-    { id: "main", label: "", items: ["/chat", "/projects", "/plan", "/files", "/memory"] },                    // Overview is added in front of Chat
+    { id: "main", label: "", items: ["/chat", "/projects", "/plan", "/team-files", "/memory"] },                    // Overview is added in front of Chat
     { id: "team", label: "Your team", items: ["/tasks", "/team", "/orchestration", "/automations", "/usage"] },
     { id: "conn", label: "Connections", items: ["/bookings", "/mailboxes", "/website", "/channels", "/pairing", "/backups"] },
     { id: "set", label: "Settings", items: ["/security", "/ai-models", "/env", "/skills", "/sessions", "/help"] },
@@ -168,9 +168,15 @@
   var pending = null;
   function schedule() {
     if (pending) return;
-    pending = setTimeout(function () { pending = null; try { oneProfile(); } catch (e) {} try { arrange(); } catch (e) {} }, 60);
+    pending = setTimeout(function () { pending = null; try { pageTag(); } catch (e) {} try { oneProfile(); } catch (e) {} try { arrange(); } catch (e) {} }, 60);
+  }
+  // Which page is showing, for page-specific styles in sct.css (html[data-sct-page="/channels"]).
+  function pageTag() {
+    var p = "/" + ((location.pathname || "/").split("/")[1] || "");
+    if (document.documentElement.getAttribute("data-sct-page") !== p) document.documentElement.setAttribute("data-sct-page", p);
   }
   function start() {
+    try { pageTag(); } catch (e) {}
     try { oneProfile(); } catch (e) {}
     try { arrange(); } catch (e) {}
     try { new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true }); } catch (e) {}

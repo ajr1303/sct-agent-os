@@ -2,6 +2,29 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.65.2] — 2026-11-20
+
+### Fixed
+- **Plan, Files and Help never appeared in the menu.** The three pages added in
+  0.58.0, 0.59.0 and 0.64.0 were missing the two small files (`plugin.yaml`,
+  `__init__.py`) Hermes needs before it will load a plugin, so it skipped them.
+  Files also used the address `/files`, which belongs to a built-in Hermes page; it
+  is now `/team-files`. A new check (`scripts/check-plugins.py`, run on every change)
+  fails if a page is incomplete, unlisted, or reuses a Hermes address.
+- Overview, AI usage: the header total is added up from the same per-provider
+  figures as the rows, so a row can no longer exceed the total.
+
+### Changed
+- **Hermes' own pages use the dashboard's fonts.** Messaging, Sessions, Keys, Skills
+  and the rest no longer mix in Hermes' display fonts (Mondwest, Rules Compressed,
+  Courier); headings, badges and code use IBM Plex.
+- **Messaging page** (Hermes' Channels): buttons are quiet outlined buttons in
+  sentence case like the rest of the dashboard, channel names read as row titles,
+  and the intro line no longer shows a file path on the server.
+- Overview, AI usage: providers that have a key but no agent and no use share one
+  closing line instead of a row each; the Claude subscription plugin is shown as
+  "Claude (your plan)".
+
 ## [0.65.1] — 2026-11-19
 
 ### Fixed

@@ -490,7 +490,7 @@
               return h("div", { className: "st-file", key: f.id },
                 h("a", { className: "st-file-n", href: "/api/connectors/files/" + f.id, title: "Download" }, f.name),
                 f.summary ? h("span", { className: "st-file-s" }, f.summary) : null);
-            }), h("a", { className: "st-file-all", href: "/files" + (location.search || "") }, "Read them in Files →"))) : null,
+            }), h("a", { className: "st-file-all", href: "/team-files" + (location.search || "") }, "Read them in Files →"))) : null,
           dels.length ? h("div", { className: "st-sec" },
             h("div", { className: "st-section-h" }, "Files"),
             h("div", { className: "st-dels" }, dels.map(function (w, i) {

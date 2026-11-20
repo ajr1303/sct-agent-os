@@ -71,3 +71,36 @@ nav.sct-adv-open .sct-navh-btn::after{content:"\2212"}
   header.z-1:not(.fixed){padding-top:6px!important;padding-bottom:6px!important}
 }
 @media (max-width:700px){.sg-wrap,.sa-wrap,.sbk-wrap,.sb-wrap,.so-wrap,.sm-wrap,.su-wrap,.ss-wrap,.sw-wrap,.st-wrap{padding:14px 14px 22px!important}}
+
+/* ---- Hermes' own pages: the dashboard's fonts instead of Hermes' display fonts ----
+   Hermes sets page chrome in Mondwest, Rules Compressed and Courier. They come from
+   these variables, so pointing them at the theme's fonts changes every built-in page
+   (Messaging, Sessions, Keys, Skills...) without touching its markup. */
+html:root{
+  --font-mondwest:var(--theme-font-sans,'IBM Plex Sans',system-ui,sans-serif);
+  --font-rules-compressed:var(--theme-font-sans,'IBM Plex Sans',system-ui,sans-serif);
+  --font-rules-expanded:var(--theme-font-display,'Chakra Petch','IBM Plex Sans',sans-serif);
+}
+.font-courier{font-family:var(--theme-font-mono,'IBM Plex Mono',ui-monospace,monospace)!important}
+.font-compressed{font-size:10.5px;font-weight:600;letter-spacing:.07em!important}
+
+/* ---- Messaging (Hermes' Channels page), matched to our own pages ----
+   nav.js writes the current page's address on <html> as data-sct-page. */
+html[data-sct-page="/channels"] button.bg-midground,
+html[data-sct-page="/pairing"] button.bg-midground{
+  background:transparent!important;color:var(--color-foreground,#eaf4fb)!important;
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--color-foreground,#eaf4fb) 26%,transparent)!important}
+html[data-sct-page="/channels"] button.bg-midground:hover,
+html[data-sct-page="/pairing"] button.bg-midground:hover{background:color-mix(in srgb,var(--color-foreground,#eaf4fb) 8%,transparent)!important}
+html[data-sct-page="/channels"] button.text-display,
+html[data-sct-page="/pairing"] button.text-display{
+  font-family:var(--theme-font-sans,'IBM Plex Sans',system-ui,sans-serif)!important;
+  text-transform:none!important;letter-spacing:.01em!important;font-size:13px!important;font-weight:600!important}
+/* each channel's name reads as a row title, like our panels */
+html[data-sct-page="/channels"] .font-mondwest.font-medium{font-size:15px;font-weight:650}
+/* the intro names a file path on the server; say what the owner needs instead */
+html[data-sct-page="/channels"] p.text-xs.text-muted-foreground:has(> code.font-courier){font-size:0!important}
+html[data-sct-page="/channels"] p.text-xs.text-muted-foreground:has(> code.font-courier)::before{
+  content:"Switch a channel on and fill in its details. It connects the next time the gateway restarts: use Restart gateway at the top.";
+  font-size:13.5px;line-height:1.5;color:var(--color-foreground,#eaf4fb);opacity:.72}
+

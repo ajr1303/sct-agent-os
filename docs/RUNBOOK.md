@@ -1272,6 +1272,20 @@ while the board restarts is report back, which the same retry covers.
   the same site in its own window; it does not work offline and there are no
   notifications. The name and colors are in `brand/manifest.json`.
 
+## 41a. Adding a dashboard page
+
+A page is a folder in `plugins/`. Hermes leaves it out of the menu, without an error
+the owner would see, unless all of this is true (`python3 scripts/check-plugins.py`
+checks it, and so do the automated checks):
+
+- `plugin.yaml` and `__init__.py` at the top of the folder (copy another page's);
+- `dashboard/manifest.json`, with the `entry` and `css` files it names;
+- the folder is listed in `scripts/enable-plugins.sh` and `scripts/sync-branding.sh`;
+- its `tab.path` is not used by another page or by a built-in Hermes page (`/files`,
+  `/models`, `/sessions` and the rest are taken).
+
+Then give it a place in the menu in `brand/nav.js` (`GROUPS`).
+
 ## 42. Agents on their own machines: checking and changing the model by hand
 
 Learned the hard way on 2026-11-19. Use this when the dashboard cannot change a

@@ -15,7 +15,7 @@
       ["/sc-chat", "Chat", "Talk to your assistant. Ask it for anything; it hands work to the right agent."],
       ["/tasks", "Tasks", "Everything the team is working on. Decisions that need you are at the top, with buttons to approve or decline."],
       ["/plan", "Plan", "The one-page business plan your team works from. Ask your lead agent to change it, or edit it yourself."],
-      ["/files", "Files", "Reports, drafts and lists your agents have handed over."],
+      ["/team-files", "Files", "Reports, drafts and lists your agents have handed over."],
       ["/projects", "Projects", "Keep the files, notes and tasks for one piece of work together."],
       ["/memory", "Memory", "What your assistant has learned about you, and a way to remove anything that is wrong."],
       ["/team", "Agents", "Your agents: what each one does, its instructions and its AI model."],

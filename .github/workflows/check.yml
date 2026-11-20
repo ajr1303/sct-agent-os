@@ -32,6 +32,8 @@ jobs:
           for f in plugins/*/dashboard/dist/index.js brand/*.js; do
             node -e "new Function(require('fs').readFileSync('$f','utf8'))" || { echo "syntax error in $f"; exit 1; }
           done
+      - name: dashboard pages are complete
+        run: python3 scripts/check-plugins.py
       - name: version files agree
         run: |
           v=$(cat VERSION)

@@ -395,11 +395,15 @@
         for (var i = 0; i < ps.length; i++) seen[ps[i].id] = 1;
         var extra = []; for (k in st) if (!seen[k] && st[k].tokens > 0) extra.push({ id: k, label: provLabel(k), agents: [] });
         extra.sort(function (a, b) { return st[b.id].tokens - st[a.id].tokens; });
-        ps = ps.concat(extra).slice(0, 10);
-        return ps.map(function (p) {
+        ps = ps.concat(extra);
+        // Providers with a key but no agent and no use are noise as rows: they share one line at the end.
+        var idle = ps.filter(function (p) { return !(p.agents || []).length && !(st[p.id] && st[p.id].tokens > 0); });
+        ps = ps.filter(function (p) { return idle.indexOf(p) < 0; }).slice(0, 10);
+        var out = ps.map(function (p) {
           var u = p.usage, w = u && u.ok && u.groups && u.groups[0] && u.groups[0].weekly;
           var ag = p.agents || [], n = ag.length, away = ag.filter(function (a) { return !a.local; }).length;
           var who = n ? n + (n === 1 ? " agent" : " agents") : "No agent uses it yet", s14 = st[p.id];
+          var onPlan = String(p.id).indexOf("claude-subscription") === 0, label = onPlan ? "Claude (your plan)" : p.label;
           var main, note = "", bar = null, warn = false;
           if (w) {
             var hrs = Math.round((w.resets_in_seconds || 0) / 3600), left = Math.max(0, Math.min(100, Number(w.remaining_percent) || 0));
@@ -412,15 +416,18 @@
             main = paid ? fmtCost(s14.cost) : fmtNum(s14.tokens) + " tokens";
             note = (paid ? fmtNum(s14.tokens) + " tokens · " : "") + "on this server";
           } else if (n) {
-            main = away === n ? "Not counted here" : "No use in 14 days";
-            note = away === n ? "Its agents run on their own machines" : "";
+            main = onPlan ? "Counts against your Claude plan" : away === n ? "Not counted here" : "No use in 14 days";
+            note = onPlan ? "See usage in your Claude account" : away === n ? "Its agents run on their own machines" : "";
           } else { main = "Ready"; note = "Key added"; }
           return h("div", { className: "sc-prov", key: p.id },
-            h("span", { className: "sc-prov-n" }, p.label),
+            h("span", { className: "sc-prov-n" }, label),
             h("span", { className: "sc-prov-w" }, who),
             h("span", { className: "sc-prov-m" + (warn ? " warn" : "") }, bar, main),
             h("span", { className: "sc-prov-note" }, note));
         });
+        if (idle.length) out.push(h("div", { className: "sc-prov-idle", key: "_idle" },
+          idle.length + (idle.length === 1 ? " more is" : " more are") + " connected and not in use: " + idle.map(function (p) { return p.label; }).join(", ")));
+        return out;
       }
       var agRank = { running: 0, error: 1 };
       var agentsSorted = (managedAgents || []).slice().sort(function (x, y) {
@@ -558,7 +565,10 @@
         (function () {
           var rows = llmRows();
           if (!rows.length) return null;
-          var total = analytics ? fmtNum(tokens) + " tokens" + (tot.total_estimated_cost >= 0.005 ? " · " + fmtCost(tot.total_estimated_cost) + (useManaged ? " estimated" : "") : "") : "";
+          // Add up the same per-provider numbers the rows show, so the header can never disagree with them.
+          var pt = 0, pc = 0, k2; for (k2 in (byProv || {})) { pt += +byProv[k2].tokens || 0; pc += +byProv[k2].cost || 0; }
+          var tk = pt > 0 ? pt : tokens, cst = pt > 0 ? pc : (+tot.total_estimated_cost || 0);
+          var total = (pt > 0 || analytics) ? fmtNum(tk) + " tokens" + (cst >= 0.005 ? " · " + fmtCost(cst) + (useManaged ? " estimated" : "") : "") : "";
           return h("div", { className: "sc-panel sc-provs" },
             h("div", { className: "sc-panel-h" },
               h("span", { className: "sc-panel-t" }, "AI usage, last 14 days"),
