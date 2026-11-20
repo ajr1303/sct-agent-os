@@ -2,6 +2,17 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.65.3] — 2026-11-20
+
+### Fixed
+- **Messaging page intro still showed the raw settings-file path.** 0.65.2's
+  rewrite of that sentence hid the real text but not the `<code>` path next to
+  it, so both appeared: the friendly sentence followed by the actual path
+  (e.g. `/opt/data/.env`). The path is now hidden directly (not by hiding the
+  whole line), and only that one piece is swapped for "its settings file" — the
+  real counts ("N of M channels configured") and "next restart" wording are
+  untouched.
+
 ## [0.65.2] — 2026-11-20
 
 ### Fixed

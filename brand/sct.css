@@ -98,9 +98,14 @@ html[data-sct-page="/pairing"] button.text-display{
   text-transform:none!important;letter-spacing:.01em!important;font-size:13px!important;font-weight:600!important}
 /* each channel's name reads as a row title, like our panels */
 html[data-sct-page="/channels"] .font-mondwest.font-medium{font-size:15px;font-weight:650}
-/* the intro names a file path on the server; say what the owner needs instead */
-html[data-sct-page="/channels"] p.text-xs.text-muted-foreground:has(> code.font-courier){font-size:0!important}
-html[data-sct-page="/channels"] p.text-xs.text-muted-foreground:has(> code.font-courier)::before{
-  content:"Switch a channel on and fill in its details. It connects the next time the gateway restarts: use Restart gateway at the top.";
-  font-size:13.5px;line-height:1.5;color:var(--color-foreground,#eaf4fb);opacity:.72}
+/* the intro names a file path on the server; swap just that fragment for plain
+   words, keep the real sentence (counts, "next restart") intact around it.
+   font-size:0 goes directly on the <code> (not display:none, which would also
+   erase its own ::before) with the class in the selector so it outranks any
+   host reset that sets a font-size on bare <code> elements. */
+html[data-sct-page="/channels"] p.text-xs.text-muted-foreground code.font-courier{
+  font-size:0!important}
+html[data-sct-page="/channels"] p.text-xs.text-muted-foreground code.font-courier::before{
+  content:"its settings file";
+  font-size:13.5px!important;color:var(--color-foreground,#eaf4fb);opacity:.72}
 
