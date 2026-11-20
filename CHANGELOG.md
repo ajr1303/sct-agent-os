@@ -12,6 +12,13 @@ All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 - The server-driven model change writes `model.default` again in every case (Hermes
   reads it first), instead of guessing the key from the file's layout.
 
+### Documentation
+- Runbook 42: checking and changing the model on an agent's own machine by hand,
+  including the `llm:` block Hermes does not read, differing service names, and how
+  to prove which model really ran.
+- Runbook 43: running an agent on a Claude subscription through the official
+  experimental plugin, with its limits and the API-credit alternative.
+
 ## [0.65.0] — 2026-11-19
 
 ### Changed

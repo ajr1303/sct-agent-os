@@ -1272,3 +1272,135 @@ while the board restarts is report back, which the same retry covers.
   the same site in its own window; it does not work offline and there are no
   notifications. The name and colors are in `brand/manifest.json`.
 
+## 42. Agents on their own machines: checking and changing the model by hand
+
+Learned the hard way on 2026-11-19. Use this when the dashboard cannot change a
+machine itself (Model advice shows **Show the steps**), or to check what an agent is
+really running.
+
+**Find Hermes.** It is often not on the PATH. Installs made through the npm bridge
+keep it inside `~/.hermes`:
+
+```bash
+H=$(command -v hermes || echo ~/.hermes/node_modules/hermes-agent/runtime/hermes-agent/venv/bin/hermes)
+$H --version
+```
+
+**See what it is set to, and what it really used.** The setting and the truth can
+differ, so check both:
+
+```bash
+$H config get model.provider
+$H config get model.default
+grep 'API call' ~/.hermes/logs/agent.log | tail -1
+```
+
+The log line names the model and provider of the last call. It only moves when the
+agent runs a task, and its times are UTC. "Config key not set" means Hermes is using
+its own default, whatever the file appears to say.
+
+**Do not edit `config.yaml` by hand.** Some machines have a block like this:
+
+```yaml
+llm:
+  provider: minimax
+  model: MiniMax-M3
+  baseUrl: https://api.minimax.io/v1
+```
+
+Hermes does not read an `llm:` block (checked in the 0.23.1 source). Changing it does
+nothing, and `diff` will still show a tidy one-line change. Always use Hermes' own
+command, which writes the `model:` section it does read:
+
+```bash
+cp ~/.hermes/config.yaml ~/.hermes/config.yaml.before-change
+$H config set model.default MiniMax-M3.1-Flash
+$H config get model.default
+```
+
+**Use the provider's own model name.** For MiniMax called directly that is
+`MiniMax-M3.1-Flash`, not the lowercase `minimax/minimax-m3.1-flash` form that model
+marketplaces use.
+
+**Restart the gateway. Its service name differs between machines** (`hgw.service` on
+some, `hermes-gateway.service` on others), and it may be a system service or a user
+one:
+
+```bash
+SVC=$(systemctl list-units --type=service --no-legend | grep -i -E 'hgw|hermes' | awk '{print $1}' | head -1)
+if systemctl cat "$SVC" >/dev/null 2>&1; then
+  sudo systemctl restart "$SVC" && systemctl is-active "$SVC"
+else
+  systemctl --user restart "$SVC" && systemctl --user is-active "$SVC"
+fi
+```
+
+**Prove it.** Give the agent one small task with no side effects ("Reply in one
+sentence saying what you are responsible for"), wait for it to finish, and run the
+`grep 'API call'` line again. Only a log line with the new model and a fresh time
+counts.
+
+**Never paste the service's settings into a chat or ticket.**
+`systemctl cat <service>` prints `API_SERVER_KEY`, the key the team board uses to reach
+that agent. If it is exposed, replace it in both places: the service on the machine,
+and the agent's gateway key on the team board.
+
+**To undo:** `cp ~/.hermes/config.yaml.before-change ~/.hermes/config.yaml`, then
+restart the service.
+
+## 43. Running an agent on a Claude subscription (experimental)
+
+An agent on its own machine can use the owner's Claude Pro or Max plan instead of an
+API key, through Nous Research's official plugin **Claude Subscription DirectSDK
+(Experimental)**. The plugin runs Anthropic's own unmodified Claude Code program for
+each request; Hermes never holds the login. First run on Iris on 2026-11-19, on a Max
+plan, with Sonnet.
+
+**Read before using it**
+
+- It is experimental; the plugin's own page calls it a review build.
+- The agent shares the owner's plan limits (the five-hour and weekly limits that the
+  Claude apps and Claude Code also use). A busy agent can lock the owner out.
+- The plugin's page measured this path at roughly 1.7 times the rate of interactive
+  use. Each call from Iris carried about 34,000 tokens.
+- The agent's background calls (approvals, titles) go through the plan too.
+- Anthropic's terms say plan limits assume ordinary, individual use and that it may
+  enforce without notice. One or two agents on the owner's own account is one thing;
+  a whole always-on team is a different question. Ask Anthropic if in doubt.
+- The owner's own account only. Never a client's agents on your plan: each client
+  needs their own plan or API key.
+- Turn off extra usage on the Claude account first, so reaching a limit stops the
+  agent and does not bill.
+- Do not use community patches that make Hermes pose as Claude Code. That is the
+  route Anthropic prohibits.
+
+**The no-risk alternative.** Max, Ultra and Team plans include monthly API credits
+($100 on Max). Link a Claude Console organization under Settings, Billing on
+claude.ai, make an API key there, and add it under AI models. That is ordinary API
+use and does not touch the plan's chat limits. Credits do not roll over.
+
+**Setup, on the agent's machine, as the user its gateway runs under.** Needs Hermes
+0.21.4 or newer.
+
+```bash
+H=$(command -v hermes || echo ~/.hermes/node_modules/hermes-agent/runtime/hermes-agent/venv/bin/hermes)
+npm install -g @anthropic-ai/claude-code
+$H plugins install claude-subscription-directsdk
+claude auth login            # prints a link; sign in on your own computer, paste the code back
+claude auth status           # "loggedIn": true, "subscriptionType": "max"
+which claude                 # must be in a folder on the gateway service's PATH
+cp ~/.hermes/config.yaml ~/.hermes/config.yaml.before-claude
+$H config set model.provider claude-subscription-directsdk-experimental
+$H config set model.default sonnet
+```
+
+Restart the gateway and prove it as in section 42. The log line should read
+`model=sonnet provider=claude-subscription-directsdk-experimental`. Claude Code does
+not leave session files in `~/.claude/projects` on this path, so do not look there.
+
+The login expires (about a month on the first run); `claude auth status` shows when.
+When it does, the agent's runs fail until `claude auth login` is run again.
+
+**Not supported yet:** agents that run on the main server. Hermes there lives in a
+container without Claude Code.
+
