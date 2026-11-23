@@ -2,6 +2,24 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.67.0] — 2026-11-23
+
+### Added
+- **Agents can read a colleague's finished work.** A lead agent that gave out
+  pieces of a job could see that each piece was finished but not what the
+  report said, so it could never write the combined result. The new
+  `read_task` tool returns another task's request, status and replies, lists
+  the files saved on it, and returns the text of a saved file when asked by
+  name (long files come in parts). It is available to agents on this server
+  and to agents on their own machines.
+- **Agents can wait on other tasks.** The new `wait_for_tasks` tool marks an
+  agent's task as waiting on a list of other tasks, and the team board wakes
+  the agent when they are all finished. Before this, a waiting agent had no way
+  to say so: it was woken every minute or two to report "still waiting", each
+  wake used one of the task's run attempts, and the task was halted before the
+  work came back. Task notes now tell agents to wait once, stop, and read the
+  results when woken.
+
 ## [0.66.0] — 2026-11-23
 
 ### Added
