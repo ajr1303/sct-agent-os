@@ -2930,7 +2930,7 @@ def stuck_watch_run(dry_run=False):
         if out["restarted"]:
             parts.append("Restarted the gateway for: " + ", ".join(out["restarted"]) + ".")
         if out.get("revived"):
-            parts.append("Put %d task%s back to work after the agent was unavailable: %s." % (
+            parts.append("Put %d task%s back to work (agent was unavailable, or it stopped without a next step): %s." % (
                 len(out["revived"]), "" if len(out["revived"]) == 1 else "s", ", ".join(r["key"] for r in out["revived"])))
         if out["nudged"]:
             parts.append("Nudged %d stuck task%s: %s." % (len(out["nudged"]), "" if len(out["nudged"]) == 1 else "s",
@@ -4534,6 +4534,8 @@ _DEC_ALERT_KINDS = {"failed_run": "Failed run", "agent_error_alert": "Agent erro
 _BTN_APPROVE = {"id": "approve", "label": "Approve", "style": "primary"}
 _BTN_DECLINE = {"id": "decline", "label": "Decline"}
 _BTN_MORE = {"id": "more", "label": "Tell me more"}
+_BTN_REPLY = {"id": "reply", "label": "Reply"}     # the dashboard opens a text box; the text goes to the agent
+OPT_BUTTONS_MAX = 6                                  # choices shown as buttons; more than that, the owner replies in words
 WATCH_MAX_TRIAGE_PER_RUN = 5
 
 
@@ -4562,6 +4564,14 @@ _STUCK_PLAIN = (
 )
 _BTN_RETRY = {"id": "retry", "label": "Put it back to work", "style": "primary"}
 REVIVE_PER_RUN = 4          # tasks put back to work in one pass of the watch
+_ASKFIX_NOTE = ("**Back to you: this task stopped without a next step.** It reached the owner with nothing to "
+                "answer, so it has been sent back. Do exactly one of these now:\n"
+                "- finished: close it with complete_task and a one-line result;\n"
+                "- only the owner can decide: call need_owner_input with a 2 to 4 sentence summary, one yes-or-no "
+                "question and your recommendation;\n"
+                "- waiting on other tasks: call wait_for_tasks with their keys;\n"
+                "- someone else's job: call hand_off_task.\n"
+                "Do not leave it blocked or in review with only a comment. The owner does not read reports to find a question.")
 _REVIVE_NOTE = ("**Back in the queue.** Your agent was not available when this task was due (for example during an "
                 "update). Nothing is wrong with the task. Pick it up and continue; close it with complete_task when "
                 "it is finished, or if it is no longer needed.")
@@ -4585,6 +4595,14 @@ def _run_budget_clear(issue_id, key=""):
         pass
 
 
+def _open_interactions(issue_id):
+    try:
+        rows = _pc_get("/api/issues/" + _safe_id(str(issue_id)) + "/interactions")
+    except Exception:
+        return True          # unsure: leave it alone
+    return any(isinstance(r, dict) and str(r.get("status") or "") == "pending" for r in _list(rows, "interactions", "items"))
+
+
 def _revive_unavailable(cid, usable, by_id, dry_run=False):
     """Tasks the board parked only because their agent was unavailable for a moment go back
     to work by themselves once the agent is back, instead of landing on the owner. Once
@@ -4596,6 +4614,11 @@ def _revive_unavailable(cid, usable, by_id, dry_run=False):
     except Exception:
         return done
     asks = _asks_open()
+    try:                 # a task with a decision still open for the owner is waiting on the owner, not stuck
+        decided = {str(x.get("originIssueId")) for x in _list(_pc_get("/api/companies/" + str(cid) + "/decisions?status=open"), "decisions", "items")
+                   if isinstance(x, dict) and x.get("originIssueId")}
+    except Exception:
+        return done
     with closing(get_db()) as con:
         tried = {r[0] for r in con.execute("SELECT ref FROM stuck_watch WHERE kind = 'revive'")}
     looked = 0
@@ -4603,7 +4626,7 @@ def _revive_unavailable(cid, usable, by_id, dry_run=False):
         if len(done) >= REVIVE_PER_RUN or looked >= 20:
             break
         iid, aid = str(i["id"]), str(i.get("assigneeAgentId") or "")
-        if iid in tried or iid in asks or aid not in usable or str((by_id.get(aid) or {}).get("status")).lower() == "error":
+        if iid in tried or iid in asks or iid in decided or aid not in usable or str((by_id.get(aid) or {}).get("status")).lower() == "error":
             continue
         looked += 1
         try:
@@ -4611,14 +4634,23 @@ def _revive_unavailable(cid, usable, by_id, dry_run=False):
         except Exception:
             continue
         last = cm[0] if cm and isinstance(cm[0], dict) else {}
-        text = str(last.get("body") or last.get("content") or "")
-        if last.get("authorAgentId") or last.get("authorUserId") or "not invokable" not in text.lower():
+        text = str(last.get("body") or last.get("content") or "").lower()
+        by_agent = str(last.get("authorAgentId") or "") == aid
+        system = not last.get("authorAgentId") and not last.get("authorUserId")
+        if system and "not invokable" in text:
+            note = _REVIVE_NOTE
+        elif (system and "disposition" in text) or (by_agent and "waiting on" not in text[:200]):
+            # The agent ended its run with a report or nothing at all, and asked the owner nothing.
+            if i.get("blockedByIssueIds") or _open_interactions(iid):
+                continue
+            note = _ASKFIX_NOTE
+        else:
             continue
         key = i.get("identifier") or iid
         if not dry_run:
             try:
                 _run_budget_clear(iid, key)
-                _pc_send("PATCH", "/api/issues/" + _safe_id(iid), {"status": "todo", "comment": _REVIVE_NOTE}, what="put the task back to work")
+                _pc_send("PATCH", "/api/issues/" + _safe_id(iid), {"status": "todo", "comment": note}, what="put the task back to work")
                 with closing(get_db()) as con:
                     con.execute("INSERT INTO stuck_watch(kind, ref, attempts, last_action_at, escalated) VALUES('revive',?,1,?,0) "
                                 "ON CONFLICT(kind, ref) DO UPDATE SET attempts = attempts + 1, last_action_at = excluded.last_action_at",
@@ -4626,8 +4658,48 @@ def _revive_unavailable(cid, usable, by_id, dry_run=False):
                     con.commit()
             except Exception:
                 continue
-        done.append({"key": key, "agent": (by_id.get(aid) or {}).get("name") or "Agent"})
+        done.append({"key": key, "agent": (by_id.get(aid) or {}).get("name") or "Agent",
+                     "why": "unavailable" if note is _REVIVE_NOTE else "no next step"})
     return done
+
+
+def _pending_interaction(issue_id, interaction_id):
+    """The open question an agent asked on a task, or None."""
+    try:
+        rows = _pc_get("/api/issues/" + _safe_id(str(issue_id)) + "/interactions")
+    except Exception:
+        return None
+    for r in _list(rows, "interactions", "items"):
+        if isinstance(r, dict) and str(r.get("id")) == str(interaction_id) and str(r.get("status") or "pending") == "pending":
+            return r
+    return None
+
+
+def _question_parts(inter):
+    """Turn an agent's question into what a card shows: the text, and the choices as buttons
+    when there is one question with one answer to pick. Anything more is answered in words."""
+    pl = inter.get("payload") if isinstance(inter.get("payload"), dict) else {}
+    qs = [q for q in (pl.get("questions") or []) if isinstance(q, dict) and q.get("id")]
+    lines, buttons, qid = [], [], None
+    for q in qs[:6]:
+        lines.append("**" + _clip(q.get("prompt") or "Question", 300) + "**" + ((" " + _clip(q.get("helpText"), 300)) if q.get("helpText") else ""))
+        for o in (q.get("options") or [])[:12]:
+            if isinstance(o, dict) and not o.get("freeText"):
+                lines.append("- " + _clip(o.get("label"), 160) + ((": " + _clip(o.get("description"), 200)) if o.get("description") else ""))
+    if len(qs) == 1 and qs[0].get("selectionMode", "single") == "single":
+        opts = [o for o in (qs[0].get("options") or []) if isinstance(o, dict) and o.get("id") and not o.get("freeText")]
+        if 1 <= len(opts) <= OPT_BUTTONS_MAX:
+            qid = str(qs[0]["id"])
+            buttons = [{"id": "opt:" + str(o["id"])[:160], "label": _clip(o.get("label"), 60)} for o in opts]
+    return "\n".join(lines), buttons, qid
+
+
+def _decision_detail(decision_id):
+    try:
+        d = _pc_get("/api/decisions/" + _safe_id(str(decision_id)))
+    except Exception:
+        return None
+    return d if isinstance(d, dict) and str(d.get("status") or "open") == "open" else None
 
 
 def _triage_text(lead_name):
@@ -4706,7 +4778,7 @@ def _decisions(fresh=False):
         c.update({"id": "ask:" + iid, "kind": "decision", "tag": "Decision", "at": a.get("at"),
                   "agent": c["agent"] or names.get(a.get("agent_id") or ""), "key": c["key"] or a.get("key") or "",
                   "summary": a["summary"], "question": a["question"], "recommendation": a["recommendation"],
-                  "buttons": [_BTN_APPROVE, _BTN_DECLINE, _BTN_MORE], "ref": ("issue", iid, "ask")})
+                  "buttons": [_BTN_APPROVE, _BTN_DECLINE, _BTN_MORE, _BTN_REPLY], "ref": ("issue", iid, "ask")})
         cards.append(c); seen.add(iid)
 
     # 2. What Paperclip itself says needs a person.
@@ -4747,7 +4819,7 @@ def _decisions(fresh=False):
             cards.append({"id": "approval:" + sid, "kind": "approval", "tag": "Approval", "issue_id": None, "key": "",
                           "title": _clip(subj.get("title") or "Approval request", 160), "agent": it.get("originAgentName"),
                           "at": at, "summary": _clip(det.get("summaryExcerpt") or it.get("whyNow"), 900), "question": "",
-                          "recommendation": "", "buttons": [_BTN_APPROVE, _BTN_DECLINE, dict(_BTN_MORE, label="Ask for changes")],
+                          "recommendation": "", "buttons": [_BTN_APPROVE, _BTN_DECLINE, dict(_BTN_MORE, label="Ask for changes"), _BTN_REPLY],
                           "ref": ("approval", sid, "")})
             continue
         if kind == "issue_thread_interaction":
@@ -4756,12 +4828,18 @@ def _decisions(fresh=False):
                 continue
             c = issue_bits(riid, rel)
             yes_no = det.get("kind") == "confirmation"
+            summary = _clip(det.get("promptExcerpt") or det.get("firstQuestionText") or det.get("firstTaskTitle") or it.get("whyNow"), 900)
+            question, btns, qid = "", [], None
+            if not yes_no:
+                inter = _pending_interaction(riid, sid)
+                if inter and str(inter.get("kind")) == "ask_user_questions":
+                    question, btns, qid = _question_parts(inter)
+            if yes_no:
+                btns = [_BTN_APPROVE, _BTN_DECLINE, _BTN_MORE]
             c.update({"id": "interaction:" + riid + ":" + sid, "kind": "interaction", "tag": "Question" if not yes_no else "Decision",
                       "agent": c["agent"] or it.get("originAgentName"), "at": at,
-                      "summary": _clip(det.get("promptExcerpt") or det.get("firstQuestionText") or det.get("firstTaskTitle") or it.get("whyNow"), 900),
-                      "question": "", "recommendation": "",
-                      "buttons": [_BTN_APPROVE, _BTN_DECLINE, _BTN_MORE] if yes_no else [_BTN_MORE],
-                      "open_in_board": not yes_no, "ref": ("interaction", riid, sid if yes_no else "")})
+                      "summary": summary if not question else "", "question": question, "recommendation": "",
+                      "buttons": btns + [_BTN_REPLY], "ref": ("interaction", riid, sid), "_qid": qid})
             cards.append(c); seen.add(riid)
             continue
         if kind in ("blocker_attention", "review"):
@@ -4774,7 +4852,7 @@ def _decisions(fresh=False):
                 c.update({"id": "review:" + sid, "kind": "review", "tag": "Review", "at": at,
                           "summary": _clip(det.get("summaryExcerpt") or it.get("whyNow") or "Finished work is waiting for your review.", 900),
                           "question": "", "recommendation": "",
-                          "buttons": [_BTN_APPROVE, dict(_BTN_DECLINE, label="Send back"), _BTN_MORE], "ref": ("issue", sid, "review")})
+                          "buttons": [_BTN_APPROVE, dict(_BTN_DECLINE, label="Send back"), _BTN_MORE, _BTN_REPLY], "ref": ("issue", sid, "review")})
                 cards.append(c)
                 continue
             # A stuck task with no clear question. With triage on, the lead agent gets it
@@ -4790,7 +4868,7 @@ def _decisions(fresh=False):
             btns = [dict(_BTN_RETRY)]
             if lead is not None and not mine and sid not in triaged:
                 btns.append({"id": "lead", "label": "Hand to " + (lead.get("name") or "lead")})
-            btns += [{"id": "close", "label": "Close it"}, _BTN_MORE]
+            btns += [{"id": "close", "label": "Close it"}, _BTN_MORE, _BTN_REPLY]
             age = (_now() - (_ts(at) or _now())).days
             c.update({"id": "stuck:" + sid, "kind": "stuck", "tag": "Stopped task", "at": at,
                       "summary": _clip(_stuck_plain(it.get("whyNow")), 600),
@@ -4801,13 +4879,22 @@ def _decisions(fresh=False):
             cards.append(c)
             continue
         if kind == "decision":
-            riid = str(rel.get("id") or "")
+            meta = subj.get("metadata") if isinstance(subj.get("metadata"), dict) else {}
+            riid = str(rel.get("id") or meta.get("originIssueId") or "")
             c = issue_bits(riid, rel) if riid else {"issue_id": None, "key": "", "title": "", "agent": None}
-            c.update({"id": "pcdecision:" + sid, "kind": "interaction", "tag": "Question",
+            dd = _decision_detail(sid) or {}
+            needs_input = any(isinstance(x, dict) and x.get("required") for x in (dd.get("inputs") or []))
+            opts = [o for o in (dd.get("options") or []) if isinstance(o, dict) and o.get("id")]
+            btns = [] if needs_input else [dict({"id": "opt:" + str(o["id"])[:120], "label": _clip(o.get("label"), 60)},
+                                                **({"style": "primary"} if o.get("style") == "primary" else {})) for o in opts[:OPT_BUTTONS_MAX]]
+            choices = "\n".join("- **%s**%s" % (_clip(o.get("label"), 80), (": " + _clip(o.get("description"), 200)) if o.get("description") else "")
+                                for o in opts[:OPT_BUTTONS_MAX] if o.get("description"))
+            c.update({"id": "pcdecision:" + sid, "kind": "interaction", "tag": "Decision",
                       "title": _clip(subj.get("title") or c.get("title") or "A decision is waiting", 160),
                       "agent": c.get("agent") or it.get("originAgentName"), "at": at,
-                      "summary": _clip(det.get("summaryExcerpt") or it.get("whyNow"), 900), "question": "", "recommendation": "",
-                      "buttons": [_BTN_MORE] if riid else [], "open_in_board": True, "ref": ("interaction", riid, "")})
+                      "summary": _clip(dd.get("body") or det.get("summaryExcerpt") or it.get("whyNow"), 900),
+                      "question": choices, "recommendation": "",
+                      "buttons": btns + [_BTN_REPLY], "ref": ("decision", sid, riid)})
             cards.append(c)
     cards.sort(key=lambda c: ({"decision": 0, "approval": 0, "interaction": 1, "review": 2, "problem": 2, "stuck": 3}.get(c["kind"], 4), -(_ts(c.get("at")) or _now()).timestamp()))
     out["decisions"] = cards[:120]
@@ -4818,7 +4905,7 @@ def _decisions(fresh=False):
 
 
 def _dec_public(d):
-    return {"decisions": [{k: v for k, v in c.items() if k != "ref"} for c in d["decisions"]], "alerts": d["alerts"],
+    return {"decisions": [{k: v for k, v in c.items() if k != "ref" and not k.startswith("_")} for c in d["decisions"]], "alerts": d["alerts"],
             "with_lead": d["with_lead"], "lead": d["lead"], "triage": d["triage"], "can_act": _pc_mode() != "external"}
 
 
@@ -5113,6 +5200,45 @@ def decisions_act(b: DecisionAct, _auth=Depends(require_auth)):
     extra = ("\n\nNote from the owner: " + note) if note else ""
     typ, rid, sub = card["ref"]
     said = ""
+    if act == "reply" and not note:
+        raise HTTPException(status_code=400, detail="Type your reply first.")
+    reply_md = "**Reply from the owner:**\n\n" + note
+    if typ == "decision":
+        if act.startswith("opt:"):
+            _pc_send("POST", "/api/decisions/" + _safe_id(rid) + "/decide", {"optionId": act[4:]}, what="record your decision")
+            if note and sub:
+                _pc_send("POST", "/api/issues/" + _safe_id(sub) + "/comments", {"body": reply_md}, what="send your note")
+            said = "Done: %s." % next((x["label"] for x in card["buttons"] if x["id"] == act), "chosen")
+        else:        # reply in words: the decision is set aside and the agent gets the owner's answer
+            _pc_send("POST", "/api/decisions/" + _safe_id(rid) + "/dismiss", {"reason": "Answered in words by the owner: " + note[:1400]},
+                     what="send your reply")
+            if sub:
+                _pc_send("POST", "/api/issues/" + _safe_id(sub) + "/comments",
+                         {"body": reply_md + "\n\nCarry on with this answer. If it still needs a decision, ask with "
+                                  "need_owner_input (summary, one yes-or-no question, your recommendation)."}, what="send your reply")
+            said = "Reply sent."
+        _DEC_CACHE.clear()
+        return {"ok": True, "message": said}
+    if typ == "interaction" and sub and (act.startswith("opt:") or act == "reply"):
+        if act.startswith("opt:"):
+            qid = card.get("_qid")
+            if not qid:
+                raise HTTPException(status_code=400, detail="Reply in words to this one.")
+            _pc_send("POST", "/api/issues/%s/interactions/%s/respond" % (_safe_id(rid), _safe_id(sub)),
+                     {"answers": [{"questionId": qid, "optionIds": [act[4:]]}],
+                      **({"summaryMarkdown": "Note from the owner: " + note} if note else {})}, what="send your answer")
+            said = "Answered: %s." % next((x["label"] for x in card["buttons"] if x["id"] == act), "sent")
+        else:
+            _pc_send("POST", "/api/issues/%s/interactions/%s/skip" % (_safe_id(rid), _safe_id(sub)),
+                     {"reason": "The owner answered in words: " + note[:3800]}, what="send your reply")
+            _pc_send("POST", "/api/issues/" + _safe_id(rid) + "/comments", {"body": reply_md}, what="send your reply")
+            said = "Reply sent."
+        _DEC_CACHE.clear()
+        return {"ok": True, "message": said}
+    if typ == "approval" and act == "reply":
+        _pc_send("POST", "/api/approvals/" + _safe_id(rid) + "/request-revision", {"decisionNote": note}, what="send your reply")
+        _DEC_CACHE.clear()
+        return {"ok": True, "message": "Reply sent. It comes back here once the agent has answered."}
     if typ == "agent":
         if act == "pause":
             _pc_send("POST", "/api/agents/" + _safe_id(rid) + "/pause", {}, what="pause the agent")
@@ -5180,6 +5306,12 @@ def decisions_act(b: DecisionAct, _auth=Depends(require_auth)):
         elif act == "close":
             patch = {"status": "done", "comment": "Closed by the owner." + extra}
             said = "Closed."
+        elif act == "reply":
+            patch["comment"] = (reply_md + "\n\nDo what the owner says. Close the task with complete_task when it is "
+                                "finished. If it still needs a decision, ask with need_owner_input (summary, one "
+                                "yes-or-no question, your recommendation).")
+            _run_budget_clear(rid, card.get("key"))
+            said = "Reply sent. It comes back here only if the agent needs you again."
         elif act == "retry":
             _run_budget_clear(rid, card.get("key"))
             patch["comment"] = ("**Owner decision: put this back to work.**" + extra + "\n\nPick it up and continue. Close it "
@@ -5731,13 +5863,16 @@ def _require_bundled():
 # A run is cut off after a few minutes, and a task that tries to do everything in one
 # run ends as an error with nothing delivered. So every task says how to handle size,
 # and a job that is plainly many jobs is filed as a short planning task first.
+_END_RULE = (" Every run ends with exactly one of: complete_task, split_task, hand_off_task, wait_for_tasks, "
+             "or need_owner_input. Never leave a task blocked or in review with only a comment: the owner does not "
+             "read reports to find a question.")
 _TASK_SIZE_NOTE = ("--- How to work this task ---\n"
                    "Finish in one sitting of a few minutes. If the job covers many items or will not fit, do "
                    "not push on until you are cut off: do the first part, post what you did, then call "
                    "split_task to file the rest as smaller tasks. Close this one with complete_task. If you "
                    "gave pieces of this job to colleagues and must combine what they send back, call "
                    "wait_for_tasks with their task keys and stop; when you are woken, read each one with "
-                   "read_task, write the combined result, then close this task.")
+                   "read_task, write the combined result, then close this task." + _END_RULE)
 _TASK_PLAN_NOTE = ("PLAN FIRST. This job is too big for one run. In this task do only this: work out the "
                    "parts (at most 8, each small enough to finish in a few minutes, for example 10 items "
                    "per part), then call split_task with those parts. Do not start the work itself here.\n\n"
@@ -5767,7 +5902,7 @@ def _looks_big(title, description):
 _TASK_PART_NOTE = ("--- How to work this task ---\n"
                    "This is one part of a bigger job. Finish it in one sitting of a few minutes. It cannot be "
                    "split again: if you cannot finish, post what you did and close it with complete_task, "
-                   "saying exactly what is left.")
+                   "saying exactly what is left." + _END_RULE)
 
 
 def _create_issue(cid, agent, title, description, priority, part=False, note=None):

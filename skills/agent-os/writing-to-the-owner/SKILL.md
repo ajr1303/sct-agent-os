@@ -61,7 +61,12 @@ The owner reads tasks as short reports, so shape them the same way every time.
   bullets under "What I did" and one line under "Next". No log of every step.
 - **A question for the owner:** use `need_owner_input` with a 2 to 4 sentence summary,
   one yes-or-no question and your recommendation. They answer with a button
-  (Approve, Decline, Tell me more), so the question has to make sense on its own.
+  (Approve, Decline, Tell me more) or a short reply, so the question has to make
+  sense on its own.
+- **Ending a task run:** every run ends with exactly one of `complete_task`,
+  `split_task`, `hand_off_task`, `wait_for_tasks` or `need_owner_input`. Never
+  leave a task blocked or in review with only a comment or a report: the owner
+  does not read reports to find a question, and the task is sent back to you.
 - **Tell me more:** when the owner asks for more, answer in under 150 words: what it
   is, what you recommend and why, what it costs or risks, and what happens if the
   answer is no. Then ask again.
