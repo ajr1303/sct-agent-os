@@ -660,6 +660,19 @@ through the Agent OS tool server. Nothing to install: connect a mailbox and they
 
 ## 20. Passing a task between agents
 
+**Combining colleagues' work.** An agent that gave pieces of a job to colleagues has
+two tools for the wait and the read:
+
+- `wait_for_tasks` marks its task as waiting on the others. The team board wakes the
+  agent when they are all finished. It should call it once and stop. Without it the
+  agent is woken repeatedly with nothing to do, and each wake uses one of the task's
+  run attempts (section 9) until the task is halted.
+- `read_task` returns another task's request, status, replies and file names, and the
+  text of one saved file when a file name is given (long files come in parts).
+
+If a task was halted while waiting, press **Release** on it on the Tasks page, then
+reply on the task so its agent is woken.
+
 Agents on this server have `hand_off_task`: the agent holding a task can pass it to a
 named colleague with a reason. The task stays open and moves to that agent.
 
@@ -726,8 +739,9 @@ not carry the "how to work this task" lines; the agent's instructions have to co
 ## 22a. Task tools for agents on their own servers
 
 An invited agent runs on its own machine and cannot reach the tool endpoint used by
-agents on this server. It gets the same four task tools (`split_task`,
-`complete_task`, `hand_off_task`, `need_owner_input`, plus `list_agents`) on the team
+agents on this server. It gets the same task tools (`split_task`,
+`complete_task`, `hand_off_task`, `need_owner_input`, `read_task`, `wait_for_tasks`,
+`save_file`, plus `list_agents`) on the team
 board's public address:
 
 - `GET  https://<paperclip address>/api/agent-os/` lists the tools and their fields.
