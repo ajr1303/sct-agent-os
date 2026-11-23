@@ -2,6 +2,24 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.66.0] — 2026-11-23
+
+### Added
+- **Droid avatars on the Agents page.** Every agent now has a small droid next
+  to its name, in the list and at the top of its details. The droid's body
+  comes from the agent's job (its role, then words in its title): a commander
+  for the CEO, a vault for finance, a sentinel for network and security, a
+  tinker for engineering and automation, a courier for help desk and support,
+  an oracle for analysis and research, a warden for compliance and review, and
+  a herald for marketing and social. Its colour comes from the agent's name,
+  so the same agent always looks the same. An agent with no matching job still
+  gets a droid. The droids are drawn in the page itself, so there are no image
+  files to load.
+- **"Working right now" strip on the Agents page.** A row above the list shows
+  the agents that are on a task at this moment, each with its droid. Selecting
+  one opens that agent. A working droid bobs gently (not when the device asks
+  for reduced motion), and a paused agent's droid is dimmed.
+
 ## [0.65.3] — 2026-11-20
 
 ### Fixed
