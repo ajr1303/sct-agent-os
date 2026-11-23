@@ -2929,6 +2929,9 @@ def stuck_watch_run(dry_run=False):
             parts.append("Retried the connection for: " + ", ".join(out["retried"]) + ".")
         if out["restarted"]:
             parts.append("Restarted the gateway for: " + ", ".join(out["restarted"]) + ".")
+        if out.get("revived"):
+            parts.append("Put %d task%s back to work after the agent was unavailable: %s." % (
+                len(out["revived"]), "" if len(out["revived"]) == 1 else "s", ", ".join(r["key"] for r in out["revived"])))
         if out["nudged"]:
             parts.append("Nudged %d stuck task%s: %s." % (len(out["nudged"]), "" if len(out["nudged"]) == 1 else "s",
                          "; ".join("%s (%s)" % (n["key"], n["agent"]) for n in out["nudged"])))
@@ -2979,6 +2982,10 @@ def stuck_watch_run(dry_run=False):
     lead = _lead_agent(agents)
     lead_ok = bool(_team_triage() and lead and str(lead.get("id")) in usable)
     lead_name = (lead.get("name") or "the lead agent") if lead else ""
+    try:
+        out["revived"] = _revive_unavailable(cid, usable, by_id, dry_run)
+    except Exception:
+        out["revived"] = []
 
     with closing(get_db()) as con:
         con.execute("DELETE FROM stuck_watch WHERE last_action_at < ?", ((now - datetime.timedelta(days=7)).isoformat(),))
@@ -4539,6 +4546,90 @@ def _lead_agent(agents):
     return None
 
 
+# A stuck task reaches the owner with the team board's own wording, which is written for
+# an operator ("the original assignee is not invokable"). The owner needs to know what
+# happened and what the choice is, so the known notices are put in plain words.
+_STUCK_PLAIN = (
+    (re.compile(r"not invokable", re.I),
+     "Its agent was not available when this task was due, for example during an update or while the agent was "
+     "paused or in error. Nobody is working on it now."),
+    (re.compile(r"disposition|recovery owner|exhausted the bounded", re.I),
+     "The agent stopped without saying what happens next, and two automatic reminders did not get it moving."),
+    (re.compile(r"never started|not started", re.I),
+     "It was given to an agent that never started it."),
+    (re.compile(r"no activity|stalled|idle", re.I),
+     "The agent stopped working on it part way through."),
+)
+_BTN_RETRY = {"id": "retry", "label": "Put it back to work", "style": "primary"}
+REVIVE_PER_RUN = 4          # tasks put back to work in one pass of the watch
+_REVIVE_NOTE = ("**Back in the queue.** Your agent was not available when this task was due (for example during an "
+                "update). Nothing is wrong with the task. Pick it up and continue; close it with complete_task when "
+                "it is finished, or if it is no longer needed.")
+
+
+def _stuck_plain(why):
+    for rx, text in _STUCK_PLAIN:
+        if rx.search(why or ""):
+            return text
+    return "This task stopped and nobody is working on it."
+
+
+def _run_budget_clear(issue_id, key=""):
+    """Give a task its run attempts back, so putting it back to work is not refused."""
+    try:
+        with closing(get_db()) as con:
+            con.execute("DELETE FROM run_budget WHERE issue_key IN (?, ?) OR session_key LIKE ?",
+                        (str(issue_id), str(key or issue_id), "%:issue:" + str(issue_id)))
+            con.commit()
+    except Exception:
+        pass
+
+
+def _revive_unavailable(cid, usable, by_id, dry_run=False):
+    """Tasks the board parked only because their agent was unavailable for a moment go back
+    to work by themselves once the agent is back, instead of landing on the owner. Once
+    per task; a task that stops again is shown to the owner."""
+    done = []
+    try:
+        issues = [i for i in _list(_pc_get("/api/companies/" + str(cid) + "/issues?status=blocked&sortField=updated&sortDir=desc&limit=100"), "issues")
+                  if isinstance(i, dict) and i.get("id")]
+    except Exception:
+        return done
+    asks = _asks_open()
+    with closing(get_db()) as con:
+        tried = {r[0] for r in con.execute("SELECT ref FROM stuck_watch WHERE kind = 'revive'")}
+    looked = 0
+    for i in issues:
+        if len(done) >= REVIVE_PER_RUN or looked >= 20:
+            break
+        iid, aid = str(i["id"]), str(i.get("assigneeAgentId") or "")
+        if iid in tried or iid in asks or aid not in usable or str((by_id.get(aid) or {}).get("status")).lower() == "error":
+            continue
+        looked += 1
+        try:
+            cm = _list(_pc_get("/api/issues/" + _safe_id(iid) + "/recent-comments"), "comments")
+        except Exception:
+            continue
+        last = cm[0] if cm and isinstance(cm[0], dict) else {}
+        text = str(last.get("body") or last.get("content") or "")
+        if last.get("authorAgentId") or last.get("authorUserId") or "not invokable" not in text.lower():
+            continue
+        key = i.get("identifier") or iid
+        if not dry_run:
+            try:
+                _run_budget_clear(iid, key)
+                _pc_send("PATCH", "/api/issues/" + _safe_id(iid), {"status": "todo", "comment": _REVIVE_NOTE}, what="put the task back to work")
+                with closing(get_db()) as con:
+                    con.execute("INSERT INTO stuck_watch(kind, ref, attempts, last_action_at, escalated) VALUES('revive',?,1,?,0) "
+                                "ON CONFLICT(kind, ref) DO UPDATE SET attempts = attempts + 1, last_action_at = excluded.last_action_at",
+                                (iid, _now().isoformat()))
+                    con.commit()
+            except Exception:
+                continue
+        done.append({"key": key, "agent": (by_id.get(aid) or {}).get("name") or "Agent"})
+    return done
+
+
 def _triage_text(lead_name):
     return ("**Sent to %s to sort out.** This task is stuck and may be holding up other work. %s: read the "
             "thread, then do one of these: finish it, pass it to the right agent with hand_off_task, break it up "
@@ -4692,14 +4783,21 @@ def _decisions(fresh=False):
                 out["with_lead"] += 1
                 continue
             mine = lead is not None and str((waiting.get(sid) or {}).get("assigneeAgentId") or "") == str(lead.get("id"))
-            btns = []
-            if lead is not None and not mine and sid not in triaged:
-                btns.append({"id": "lead", "label": "Hand to " + (lead.get("name") or "lead"), "style": "primary"})
-            btns += [{"id": "close", "label": "Close it"}, _BTN_MORE]
             blk = det.get("blockingIssue") if isinstance(det.get("blockingIssue"), dict) else {}
-            c.update({"id": "stuck:" + sid, "kind": "stuck", "tag": "Stuck task", "at": at,
-                      "summary": _clip((it.get("whyNow") or "This task is stuck.") + (" Waiting on %s." % _clip(blk.get("title"), 90) if blk.get("title") else ""), 600),
-                      "question": "", "recommendation": "", "buttons": btns, "ref": ("issue", sid, "stuck")})
+            blk_st = str(blk.get("status") or "").lower()
+            if blk.get("title") and blk_st and blk_st not in ("done", "cancelled"):
+                continue        # it is waiting on other work that is still open: nothing for the owner to decide
+            btns = [dict(_BTN_RETRY)]
+            if lead is not None and not mine and sid not in triaged:
+                btns.append({"id": "lead", "label": "Hand to " + (lead.get("name") or "lead")})
+            btns += [{"id": "close", "label": "Close it"}, _BTN_MORE]
+            age = (_now() - (_ts(at) or _now())).days
+            c.update({"id": "stuck:" + sid, "kind": "stuck", "tag": "Stopped task", "at": at,
+                      "summary": _clip(_stuck_plain(it.get("whyNow")), 600),
+                      "question": "Put it back to work, or close it?",
+                      "recommendation": ("It has been stopped for %d days. Close it if you no longer need it." % age) if age >= 3
+                                        else "Put it back to work. If it stops again, close it or ask for more detail.",
+                      "buttons": btns, "ref": ("issue", sid, "stuck")})
             cards.append(c)
             continue
         if kind == "decision":
@@ -5082,6 +5180,12 @@ def decisions_act(b: DecisionAct, _auth=Depends(require_auth)):
         elif act == "close":
             patch = {"status": "done", "comment": "Closed by the owner." + extra}
             said = "Closed."
+        elif act == "retry":
+            _run_budget_clear(rid, card.get("key"))
+            patch["comment"] = ("**Owner decision: put this back to work.**" + extra + "\n\nPick it up and continue. Close it "
+                                "with complete_task when it is finished. If you cannot finish it, say exactly what you "
+                                "need with need_owner_input (summary, one yes-or-no question, your recommendation).")
+            said = "Back to work. If it stops again it comes back here."
         elif act == "lead":
             agents = [a for a in _list(_pc_get("/api/companies/" + str(_pc_company_id()) + "/agents"), "agents") if isinstance(a, dict)]
             lead = _lead_agent(agents)
