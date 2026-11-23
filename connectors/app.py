@@ -3300,7 +3300,8 @@ def stuck_watch_run(dry_run=False):
                         _pc_send("POST", "/api/issues/" + _safe_id(iid) + "/comments",
                                  {"body": "Automatic check: this task %s, and two reminders did not get it moving. "
                                           "It is now waiting on the owner." % why}, what="comment")
-                        _pc_send("PATCH", "/api/issues/" + _safe_id(iid), {"status": "blocked"}, what="mark the task")
+                        _pc_send("PATCH", "/api/issues/" + _safe_id(iid), {"status": "blocked", "unblockDescriptor": _owner_hold(
+                            "Owner to decide: put it back to work, or close it.")}, what="mark the task")
                     except Exception:
                         pass
                     bump("task", iid, escalated=True); _watch_log(con, "escalated", key, msg)
@@ -3333,7 +3334,9 @@ def stuck_watch_run(dry_run=False):
                     out["escalated"].append({"key": key, "agent": name,
                                              "message": "%s (%s) needs a fresh start: its last run stopped part way through." % (key, name)})
                     try:
-                        _pc_send("PATCH", "/api/issues/" + _safe_id(iid), {"status": "blocked", "comment": _FRESH_NOTE}, what="mark the task")
+                        _pc_send("PATCH", "/api/issues/" + _safe_id(iid), {"status": "blocked", "comment": _FRESH_NOTE,
+                                                                              "unblockDescriptor": _owner_hold("Owner to decide: start it fresh, or close it.")},
+                                 what="mark the task")
                     except Exception:
                         pass
                     bump("task", iid, escalated=True); _watch_log(con, "needs a fresh start", key, name)
@@ -6493,10 +6496,18 @@ def _own_issue(a):
     return issue
 
 
-def _set_issue(issue, status, comment):
+def _owner_hold(action):
+    """What the team board needs to accept "blocked" with no blocking task: who unblocks it and how.
+    Without it the board refuses the change (422), which left agents unable to ask the owner anything."""
+    return {"owner": "board", "action": (re.sub(r"\s+", " ", str(action or "")).strip() or "Owner decision needed")[:1900]}
+
+
+def _set_issue(issue, status, comment, unblock=None):
+    body = {"status": status, "comment": comment[:6000]}
+    if status == "blocked":
+        body["unblockDescriptor"] = _owner_hold(unblock)
     try:
-        _pc_send("PATCH", "/api/issues/" + _safe_id(str(issue["id"])), {"status": status, "comment": comment[:6000]},
-                 what="update the task")
+        _pc_send("PATCH", "/api/issues/" + _safe_id(str(issue["id"])), body, what="update the task")
     except HTTPException as e:
         raise ToolError(str(e.detail))
 
@@ -7672,7 +7683,12 @@ def t_complete_task(a):
     issue = _own_issue(a)
     if issue.get("status") in ("done", "cancelled"):
         return "That task is already closed. Stop here."
-    _set_issue(issue, "done", "Completed: " + summary)
+    try:
+        _set_issue(issue, "done", "Completed: " + summary)
+    except ToolError as e:
+        raise ToolError("The team board did not accept closing this task (%s). Do not retry: post your result as "
+                        "a comment on the task and stop. Agent OS shows the owner a card to close it." % str(e)[:300])
+    _ask_close(str(issue["id"]))
     return "Task marked done. You are finished; stop here."
 
 
@@ -7740,7 +7756,7 @@ def t_need_owner_input(a):
         return "That task is already closed. Stop here."
     summary, q, rec = summary[:1200], q[:600], rec[:600]
     _set_issue(issue, "blocked", "**Decision needed from the owner**\n\n**Summary:** %s\n\n**Question:** %s\n\n"
-                                 "**Recommendation:** %s" % (summary, q, rec))
+                                 "**Recommendation:** %s" % (summary, q, rec), unblock="Owner to answer: " + q)
     try:
         with closing(_asks_db()) as con:
             con.execute("INSERT INTO owner_asks(issue_id, key, agent_id, summary, question, recommendation, asked_at, open) "
@@ -8778,6 +8794,38 @@ def t_search_project(a):
     return _PROJ_NOTICE + "\n\n".join("%s (near character %d):\n...%s..." % (n, at, sn) for _, n, at, sn in hits[:8])
 
 
+def t_create_project(a):
+    """Start a project (a folder of notes, files and tasks) on the owner's Projects page, or reuse one with the same name."""
+    name = re.sub(r"\s+", " ", str(a.get("name") or "")).strip()[:80]
+    desc = _proj_scrub(str(a.get("description") or "").strip())[:600]
+    if len(name) < 3 or len(desc) < 10:
+        raise ToolError("Give the project a name and a one or two sentence description of what it is for.")
+    instr = _proj_scrub(str(a.get("instructions") or "").strip())[:8000]
+    now = _now().isoformat()
+    with closing(_proj_db()) as con:
+        old = con.execute("SELECT id, name FROM projects WHERE name=? COLLATE NOCASE", (name,)).fetchone()
+        if old:
+            pid, made, name = old[0], False, old[1]
+        else:
+            if con.execute("SELECT count(*) FROM projects").fetchone()[0] >= 200:
+                raise ToolError("The Projects page is full. Ask the owner to archive or delete old projects.")
+            pid = con.execute("INSERT INTO projects(name, description, instructions, status, created_at, updated_at) "
+                              "VALUES(?,?,?,?,?,?)", (name, desc, instr, "active", now, now)).lastrowid
+            made = True
+        con.commit()
+    linked = ""
+    if str(a.get("task") or "").strip():
+        try:
+            t = _pc_get("/api/issues/" + _safe_id(str(a["task"]).strip()))
+            if isinstance(t, dict) and t.get("id"):
+                linked = _proj_link_task({"project": str(pid)}, t.get("identifier") or t["id"], t.get("title"))
+        except Exception:
+            pass
+    return ("Project '%s' %s. Add notes to it with save_project_note (project: \"%s\").%s" % (
+        name, "created on the owner's Projects page" if made else "already existed, so it was reused (its "
+        "description and the owner's notes were left as they were)", name, linked))
+
+
 def t_save_project_note(a):
     pid, pname = _proj_pick(a)
     title, text = _proj_clean_name(a.get("title")), str(a.get("text") or "").strip()
@@ -8785,7 +8833,14 @@ def t_save_project_note(a):
         raise ToolError("A note needs a short title and the text to keep.")
     if len(text) > 60000:
         raise ToolError("That note is too long. Keep it under 60,000 characters or split it.")
-    who = _proj_clean_name(a.get("saved_by"), 60) or "the assistant"
+    who = _proj_clean_name(a.get("saved_by"), 60)
+    if not who and a.get("agent_id"):
+        try:
+            _cid, agents = _tool_agents()
+            who = next((_agent_name(x) for x in agents if str(x.get("id")) == str(a["agent_id"])), "")
+        except Exception:
+            who = ""
+    who = who or "the assistant"
     text = _proj_scrub(text)
     try:
         _, replaced = _proj_add_file(pid, title, text.encode(), "text/plain", who, kind="note", text=text)
@@ -9481,6 +9536,14 @@ MCP_TOOLS = {
     "search_project": (t_search_project, "all",
         "Find where a project's files mention a word or phrase. Returns short passages with the file name.",
         _schema({"project": _S, "query": _S}, ("query",))),
+    "create_project": (t_create_project, "all",
+        "Start a project on the owner's Projects page: a folder for one piece of work that holds notes, files "
+        "and tasks. If a project with that name exists it is reused. Then keep findings in it with save_project_note.",
+        _schema({"name": {"type": "string", "description": "Project name, under 80 characters"},
+                 "description": {"type": "string", "description": "One or two plain sentences: what this project is for"},
+                 "instructions": {"type": "string", "description": "Optional standing notes for anyone working on it"},
+                 "task": {"type": "string", "description": "Optional: a task key to list under the project"}},
+                ("name", "description"))),
     "save_project_note": (t_save_project_note, "all",
         "Keep something in a project for later: a decision, a finding, a summary, a finished draft. "
         "Saving a note with an existing title replaces it. Never put passwords, keys or codes in a note.",
@@ -9612,7 +9675,9 @@ async def mcp_agent(request: Request):
 # that key, ask Paperclip whose it is, and act only as that agent. The proxy publishes
 # them on the team board's address under /api/agent-os/.
 _REMOTE_TOOL_NAMES = ("list_agents", "complete_task", "need_owner_input", "split_task", "hand_off_task", "post_idea",
-                      "get_business_plan", "update_business_plan", "save_file", "read_task", "wait_for_tasks")
+                      "get_business_plan", "update_business_plan", "save_file", "read_task", "wait_for_tasks",
+                      "list_projects", "get_project", "read_project_file", "search_project", "create_project",
+                      "save_project_note")
 _REMOTE_HELP = ("Task tools for an agent working an assigned task: split_task when the job will not fit in "
                 "one run, complete_task when it is finished, hand_off_task to pass it to a colleague, "
                 "need_owner_input when only the owner can decide, list_agents for colleagues' names. You "
