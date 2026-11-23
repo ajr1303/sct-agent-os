@@ -33,6 +33,7 @@ import time
 import hashlib
 import subprocess
 import threading
+import uuid
 
 import httpx
 from dateutil import parser as dtparse
@@ -2805,6 +2806,40 @@ def _list(d, *names):
     return []
 
 
+def _wake_task(issue_id, agent_id, reason="Agent OS is putting this task back to work."):
+    """Start the assigned agent on a task, and say whether that was accepted.
+
+    A comment or a status change is not enough on its own. When a task's last run
+    ended badly (an agent that was unavailable, a refused or failed gateway call),
+    the team board holds every new wake-up for that task "until execution recovery",
+    and that recovery never comes by itself: the task sits in To do with nobody
+    working on it. The board's own Retry is what releases it, so that comes first;
+    a task that never ran gets a plain wake-up instead."""
+    iid, aid = str(issue_id or ""), str(agent_id or "")
+    if not iid or not aid:
+        return False
+    try:
+        runs = _list(_pc_get("/api/issues/" + _safe_id(iid) + "/runs"), "runs", "items")
+        latest = runs[0] if runs and isinstance(runs[0], dict) else None
+    except Exception:
+        latest = None
+    if latest and latest.get("id") and str(latest.get("agentId") or aid) == aid:
+        try:
+            r = _pc_send("POST", "/api/issues/" + _safe_id(iid) + "/retry",
+                         {"idempotencyKey": str(uuid.uuid4()), "observedRunId": str(latest["id"])}, what="put the task back to work")
+            if isinstance(r, dict) and r.get("accepted"):
+                return True
+        except Exception:
+            pass
+    try:
+        _pc_send("POST", "/api/agents/" + _safe_id(aid) + "/wakeup",
+                 {"source": "on_demand", "triggerDetail": "system", "reason": reason[:300], "payload": {"issueId": iid}},
+                 what="wake the agent")
+        return True
+    except Exception:
+        return False
+
+
 def _issue_last_activity(issue):
     """Newest sign of life on a task: its own timestamp, its latest comment, its latest run."""
     best = _ts(issue.get("updatedAt")) or _ts(issue.get("createdAt"))
@@ -2929,6 +2964,9 @@ def stuck_watch_run(dry_run=False):
             parts.append("Retried the connection for: " + ", ".join(out["retried"]) + ".")
         if out["restarted"]:
             parts.append("Restarted the gateway for: " + ", ".join(out["restarted"]) + ".")
+        if out.get("routed"):
+            parts.append("Gave %d unowned task%s to %s to route: %s." % (
+                len(out["routed"]), "" if len(out["routed"]) == 1 else "s", lead_name, ", ".join(r["key"] for r in out["routed"])))
         if out.get("revived"):
             parts.append("Put %d task%s back to work (agent was unavailable, or it stopped without a next step): %s." % (
                 len(out["revived"]), "" if len(out["revived"]) == 1 else "s", ", ".join(r["key"] for r in out["revived"])))
@@ -3142,6 +3180,7 @@ def stuck_watch_run(dry_run=False):
                             _pc_send("PATCH", "/api/issues/" + _safe_id(iid),
                                      {"status": "todo", "assigneeAgentId": lead["id"], "comment": _triage_text(lead_name)},
                                      what="hand the task to the lead agent")
+                            _wake_task(iid, lead["id"], "Agent OS handed you a stuck task to sort out.")
                         except Exception:
                             pass
                         bump("triage", iid); con.execute("DELETE FROM stuck_watch WHERE kind='task' AND ref=?", (iid,))
@@ -3184,6 +3223,7 @@ def stuck_watch_run(dry_run=False):
                                          "API key lists the task tools you can call over HTTP."
                                          % (_pc_public_base() or "<your Paperclip API address>"))},
                              what="nudge the task")
+                    _wake_task(iid, issue.get("assigneeAgentId"), "Agent OS: this task %s." % why)
                 except Exception:
                     pass
                 bump("task", iid); _watch_log(con, "nudged", key, "%s, %s, idle %d min" % (name, why, mins))
@@ -3219,11 +3259,44 @@ def stuck_watch_run(dry_run=False):
                     body["assigneeAgentId"] = lead["id"]
                 try:
                     _pc_send("PATCH", "/api/issues/" + _safe_id(iid), body, what="hand the task to the lead agent")
+                    _wake_task(iid, lead["id"], "Agent OS handed you a stuck task to sort out.")
                 except Exception:
                     continue
                 bump("triage", iid); _watch_log(con, "sent to lead", key, lead_name)
             if sent and not dry_run:
                 _DEC_CACHE.clear()
+
+        # 4. Work nobody owns. A task in To do with no agent on it is never picked up, so
+        # the lead agent routes it: to the right colleague, or closed. Once per task.
+        if lead_ok:
+            routed = 0
+            for issue in queued:
+                if routed >= 3:
+                    break
+                iid = str(issue.get("id") or "")
+                if not iid or issue.get("assigneeAgentId") or issue.get("assigneeUserId"):
+                    continue
+                made = _ts(issue.get("createdAt")) or now
+                if now - made < datetime.timedelta(minutes=30):
+                    continue
+                if con.execute("SELECT 1 FROM stuck_watch WHERE kind='route' AND ref=?", (iid,)).fetchone():
+                    continue
+                key = issue.get("identifier") or iid[:8]
+                routed += 1
+                out.setdefault("routed", []).append({"key": key, "to": lead_name})
+                if dry_run:
+                    continue
+                try:
+                    _pc_send("PATCH", "/api/issues/" + _safe_id(iid),
+                             {"assigneeAgentId": lead["id"],
+                              "comment": "**Nobody owned this task, so it came to you.** Give it to the colleague whose "
+                                         "job it is with hand_off_task, do it yourself if it is yours, or close it with "
+                                         "complete_task if it is no longer needed."},
+                             what="give the task to the lead agent")
+                    _wake_task(iid, lead["id"], "Agent OS gave you a task nobody owned.")
+                except Exception:
+                    continue
+                bump("route", iid); _watch_log(con, "routed unowned task", key, lead_name)
         if not dry_run:
             con.commit()
     return done()
@@ -4651,6 +4724,7 @@ def _revive_unavailable(cid, usable, by_id, dry_run=False):
             try:
                 _run_budget_clear(iid, key)
                 _pc_send("PATCH", "/api/issues/" + _safe_id(iid), {"status": "todo", "comment": note}, what="put the task back to work")
+                _wake_task(iid, aid)
                 with closing(get_db()) as con:
                     con.execute("INSERT INTO stuck_watch(kind, ref, attempts, last_action_at, escalated) VALUES('revive',?,1,?,0) "
                                 "ON CONFLICT(kind, ref) DO UPDATE SET attempts = attempts + 1, last_action_at = excluded.last_action_at",
@@ -5335,6 +5409,13 @@ def decisions_act(b: DecisionAct, _auth=Depends(require_auth)):
                 pass
         _pc_send("PATCH", "/api/issues/" + _safe_id(rid), patch, what="record your decision")
         _ask_close(rid)
+        if patch.get("status") == "todo":
+            try:
+                who = patch.get("assigneeAgentId") or (_pc_get("/api/issues/" + _safe_id(rid)) or {}).get("assigneeAgentId")
+            except Exception:
+                who = None
+            if who and not _wake_task(rid, who, "The owner answered on this task."):
+                said += " The agent could not be started just now; the watch will try again."
     _DEC_CACHE.clear()
     return {"ok": True, "message": said}
 

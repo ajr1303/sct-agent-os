@@ -660,6 +660,15 @@ through the Agent OS tool server. Nothing to install: connect a mailbox and they
 
 ## 20. Passing a task between agents
 
+**How agents get work.** Agents do not poll for tasks. The team board starts an
+agent when a task is assigned to it or someone comments on its task. If that start
+fails (the agent is unavailable, out of allowance or its gateway errors), the task
+waits in To do. The stuck-agent watch (every ten minutes) is what picks those up: it
+starts one waiting task per idle agent per pass, using the board's Retry so a task
+held for "execution recovery" is released, and gives tasks nobody owns to the lead
+agent. A large backlog on one agent therefore clears at about six tasks an hour;
+close tasks that are no longer needed to clear it faster.
+
 **Combining colleagues' work.** An agent that gave pieces of a job to colleagues has
 two tools for the wait and the read:
 
