@@ -2,6 +2,24 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.68.0] — 2026-11-23
+
+### Fixed
+- **Stopped tasks no longer land on the owner with nothing to decide.** When
+  an agent was unavailable for a moment (an update pauses the team, or an
+  agent is in error), the team board parked every task that came due and
+  asked "the board" to choose what happens next. Each one then appeared under
+  Waiting on you with the board's own wording and no real choice. Now the
+  watch puts those tasks back to work by itself once the agent is available
+  again, a few at a time, and gives each its run attempts back. A task that
+  stops a second time is shown to the owner.
+- **Every stopped-task card now says what happened and what the choice is.**
+  The card explains the cause in plain words, asks one question ("Put it back
+  to work, or close it?"), gives a recommendation, and has a **Put it back to
+  work** button beside **Close it** and **Tell me more**. A note can be added
+  to any of them. A task that is only waiting on other open work is no longer
+  shown as needing the owner.
+
 ## [0.67.0] — 2026-11-23
 
 ### Added
