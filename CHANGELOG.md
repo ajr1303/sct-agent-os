@@ -2,6 +2,22 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.70.0] — 2026-11-23
+
+### Fixed
+- **Tasks put back to work now actually start.** When a task's last run had
+  ended badly (the agent was unavailable, or its gateway refused or failed the
+  call), the team board held every later wake-up for that task "until
+  execution recovery", and that recovery never came. Putting a task back to
+  work, replying on it, the watch's reminders and hand-offs to the lead all
+  changed the task or left a comment, which the board held, so the task sat
+  in To do with nobody working on it. Each of them now also starts the agent
+  the way the board's own Retry does, and wakes the agent directly for a task
+  that never ran.
+- **Tasks nobody owns are routed.** A task in To do with no agent on it was
+  never picked up. After 30 minutes the watch gives it to the lead agent to
+  pass to the right colleague, do, or close. Three per pass, once per task.
+
 ## [0.69.0] — 2026-11-23
 
 ### Added
