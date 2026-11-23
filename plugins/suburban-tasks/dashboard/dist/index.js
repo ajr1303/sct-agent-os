@@ -142,6 +142,7 @@
       s = useState({});    var picked = s[0], setPicked = s[1];    // key -> true
       s = useState(false); var bulkBusy = s[0], setBulkBusy = s[1];
       s = useState(null);  var bulkMsg = s[0], setBulkMsg = s[1];
+      s = useState(false); var replyMode = s[0], setReplyMode = s[1];   // the open text box is a reply, not a note
       s = useState(null);  var dec = s[0], setDec = s[1];          // {decisions, alerts, with_lead, lead}
       s = useState(null);  var dBusy = s[0], setDBusy = s[1];      // "<card id>:<action>" while a button is working
       s = useState({});    var dMsg = s[0], setDMsg = s[1];        // card id -> what happened
@@ -170,12 +171,15 @@
       }
       function decide(card, action) {
         if (dBusy) return;
+        // Reply opens a text box first; the second press sends what was typed.
+        if (action === "reply" && !(noteFor === card.id && replyMode)) { setNoteFor(card.id); setNote(""); setReplyMode(true); return; }
+        if (action === "reply" && !note.trim()) return;
         setDBusy(card.id + ":" + action);
         var body = { id: card.id, action: action, note: noteFor === card.id ? note.trim() : "" };
         api("/orchestration/decisions/act", { method: "POST", body: JSON.stringify(body) })
           .then(function (r) {
             var m = {}; for (var k in dMsg) m[k] = dMsg[k]; m[card.id] = { ok: true, text: r.message || "Done." }; setDMsg(m);
-            setDBusy(null); setNoteFor(null); setNote("");
+            setDBusy(null); setNoteFor(null); setNote(""); setReplyMode(false);
             return Promise.all([loadDec(), loadList(), sel ? loadDetail(sel) : null]);
           })
           .catch(function (e) {
@@ -357,9 +361,15 @@
           c.summary ? Md(c.summary, "st-card-sum") : null,
           c.question ? h("div", { className: "st-card-q" }, h("span", { className: "st-card-l" }, "Question"), Md(c.question)) : null,
           c.recommendation ? h("div", { className: "st-card-rec" }, h("span", { className: "st-card-l" }, "Recommended"), Md(c.recommendation)) : null,
-          noteFor === c.id ? h("textarea", { className: "st-reply-in st-card-note", rows: 2, maxLength: 1500, value: note, autoFocus: true,
-            placeholder: "Add a note for the agent, then press a button (optional)", onChange: function (e) { setNote(e.target.value); } }) : null,
-          canAct ? h("div", { className: "st-card-acts" },
+          noteFor === c.id ? h("textarea", { className: "st-reply-in st-card-note", rows: replyMode ? 3 : 2, maxLength: 1500, value: note, autoFocus: true,
+            "aria-label": replyMode ? "Your reply to " + (c.agent || "the agent") : "Note for the agent",
+            placeholder: replyMode ? "Type your answer to " + (c.agent || "the agent") + ", then press Send reply"
+              : "Add a note for the agent, then press a button (optional)", onChange: function (e) { setNote(e.target.value); } }) : null,
+          canAct && noteFor === c.id && replyMode ? h("div", { className: "st-card-acts" },
+            h("button", { type: "button", disabled: !!dBusy || !note.trim(), className: "st-btn st-dbtn st-primary", onClick: function () { decide(c, "reply"); } },
+              dBusy === c.id + ":reply" ? "Sending…" : "Send reply"),
+            h("button", { type: "button", className: "st-linkbtn", onClick: function () { setNoteFor(null); setNote(""); setReplyMode(false); } }, "Cancel")) : null,
+          canAct && !(noteFor === c.id && replyMode) ? h("div", { className: "st-card-acts" },
             (c.buttons || []).map(function (b) {
               var busy = dBusy === c.id + ":" + b.id;
               return h("button", { key: b.id, type: "button", disabled: !!dBusy,
@@ -367,7 +377,8 @@
                 onClick: function () { decide(c, b.id); } }, busy ? "Working…" : b.label);
             }),
             (c.buttons || []).length && noteFor !== c.id
-              ? h("button", { type: "button", className: "st-linkbtn", onClick: function () { setNoteFor(c.id); setNote(""); } }, "Add a note") : null,
+              && (c.buttons || []).some(function (b) { return b.id !== "reply"; })
+              ? h("button", { type: "button", className: "st-linkbtn", onClick: function () { setNoteFor(c.id); setNote(""); setReplyMode(false); } }, "Add a note") : null,
             c.open_in_board && c.key ? h("a", { className: "st-link", href: pcTaskUrl(c.key), target: "_blank", rel: "noopener" }, "Answer on the team board ↗") : null) : null,
           msg ? h("div", { className: "st-card-msg" + (msg.ok ? "" : " st-err") }, msg.text) : null);
       }

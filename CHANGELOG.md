@@ -2,6 +2,28 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.69.0] — 2026-11-23
+
+### Added
+- **Every card under Waiting on you can be answered in place.** Each one has a
+  **Reply** button that opens a text box; what the owner types goes to the
+  agent and the task carries on. An agent's question with a short list of
+  choices shows each choice as a button, and a board decision shows its
+  options as buttons. Nothing sends the owner to the team board to answer
+  any more.
+
+### Fixed
+- **A task an agent stops without a next step goes back to the agent, not to
+  the owner.** When an agent ended its run with a report or a comment and
+  left the task blocked, asking the owner nothing, the task used to sit under
+  Waiting on you. The watch now sends it back to the agent once, with a note
+  to finish it, ask one yes-or-no question, wait on other tasks, or hand it
+  on. Tasks with an open question, an open decision or open blockers are left
+  alone. If the same task stops again it is shown to the owner.
+- **Agents are told how a run must end.** Task notes and the writing guide now
+  say every run ends with complete_task, split_task, hand_off_task,
+  wait_for_tasks or need_owner_input, never with only a comment.
+
 ## [0.68.0] — 2026-11-23
 
 ### Fixed
