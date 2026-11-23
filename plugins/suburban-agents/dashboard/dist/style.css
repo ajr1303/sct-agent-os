@@ -73,3 +73,20 @@
 .sg-tpl-ti{font-weight:400;opacity:.6;margin-left:8px;font-size:12px}
 .sg-tpl-note{opacity:.7;min-width:0}
 .sg-tpl-foot{font-size:12.5px;opacity:.7;line-height:1.5;margin:6px 0 4px}
+/* Droid avatars */
+.sg-bot{display:inline-block;flex:none;line-height:0}
+.sg-bot svg{display:block}
+.sg-bot-sm{width:36px;height:36px}.sg-bot-md{width:48px;height:48px}.sg-bot-lg{width:64px;height:64px}
+.sg-bot-off{opacity:.45}
+.sg-bot-run{animation:sg-hover 1.8s ease-in-out infinite}
+@keyframes sg-hover{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+@media (prefers-reduced-motion:reduce){.sg-bot-run{animation:none}}
+.sg-row .sg-row-main{flex:1}
+.sg-dwho{display:flex;align-items:center;gap:14px;min-width:0}
+.sg-now{display:flex;flex-direction:column;gap:10px;border:1px solid var(--color-border,rgba(255,255,255,.12));background:var(--color-card,rgba(255,255,255,.02));padding:14px 16px}
+.sg-now-h{font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;opacity:.7}
+.sg-now-none{font-size:13px;opacity:.7}
+.sg-now-list{display:flex;flex-wrap:wrap;gap:10px}
+.sg-now-card{display:flex;align-items:center;gap:12px;min-width:200px;max-width:280px;text-align:left;font:inherit;color:inherit;background:rgba(37,201,238,.06);border:1px solid var(--color-border,rgba(255,255,255,.12));padding:10px 14px;cursor:pointer}
+.sg-now-card:hover{background:rgba(37,201,238,.12)}
+.sg-now-card:focus-visible{outline:2px solid var(--color-primary,#25c9ee);outline-offset:2px}

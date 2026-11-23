@@ -43,6 +43,51 @@
                error: ["sg-warn", "Needs attention"], pending_approval: ["sg-warn", "Awaiting approval"] };
     function st(a) { return ST[String(a.status || "").toLowerCase()] || ["sg-off", a.status || "Unknown"]; }
     function roleLabel(r) { for (var i = 0; i < ROLES.length; i++) if (ROLES[i][0] === r) return ROLES[i][1]; return r || "General"; }
+    // --- Droid avatars ---------------------------------------------------------------
+    // Every agent gets a small droid: its body comes from the job it does and its
+    // colour from its name, so the same agent always looks the same. Drawn here as
+    // plain shapes, so there are no image files to ship or load.
+    var DROIDS = {
+      commander: "<ellipse cx=\"32\" cy=\"61\" rx=\"13\" ry=\"2\" fill=\"@C@\" opacity=\".25\"/><rect x=\"30\" y=\"2\" width=\"4\" height=\"10\" rx=\"2\" fill=\"@C@\"/><rect x=\"23.5\" y=\"5\" width=\"3\" height=\"7\" rx=\"1.5\" fill=\"@C@\" opacity=\".7\"/><rect x=\"37.5\" y=\"5\" width=\"3\" height=\"7\" rx=\"1.5\" fill=\"@C@\" opacity=\".7\"/><rect x=\"6\" y=\"32\" width=\"8\" height=\"15\" rx=\"4\" fill=\"@C@\" opacity=\".55\"/><rect x=\"50\" y=\"32\" width=\"8\" height=\"15\" rx=\"4\" fill=\"@C@\" opacity=\".55\"/><rect x=\"13\" y=\"10\" width=\"38\" height=\"46\" rx=\"19\" fill=\"@C@\"/><path d=\"M13 29a19 19 0 0 1 38 0v1H13z\" fill=\"#FFFFFF\" opacity=\".26\"/><rect x=\"16\" y=\"23\" width=\"32\" height=\"13\" rx=\"6.5\" fill=\"@K@\"/><circle cx=\"25\" cy=\"29.5\" r=\"2.8\" fill=\"@C@\"/><circle cx=\"39\" cy=\"29.5\" r=\"2.8\" fill=\"@C@\"/><path d=\"M25 43l7 3 7-3\" fill=\"none\" stroke=\"#FFFFFF\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><path d=\"M25 48l7 3 7-3\" fill=\"none\" stroke=\"@K@\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" opacity=\".55\"/>",
+      vault: "<rect x=\"18\" y=\"56\" width=\"28\" height=\"4\" rx=\"2\" fill=\"@C@\" opacity=\".4\"/><rect x=\"22\" y=\"5\" width=\"20\" height=\"11\" rx=\"5\" fill=\"@C@\" opacity=\".75\"/><circle cx=\"28\" cy=\"10.5\" r=\"1.9\" fill=\"@K@\"/><circle cx=\"36\" cy=\"10.5\" r=\"1.9\" fill=\"@K@\"/><rect x=\"6\" y=\"28\" width=\"6\" height=\"12\" rx=\"3\" fill=\"@C@\" opacity=\".55\"/><rect x=\"52\" y=\"28\" width=\"6\" height=\"12\" rx=\"3\" fill=\"@C@\" opacity=\".55\"/><rect x=\"11\" y=\"15\" width=\"42\" height=\"38\" rx=\"10\" fill=\"@C@\"/><rect x=\"11\" y=\"15\" width=\"42\" height=\"12\" rx=\"10\" fill=\"#FFFFFF\" opacity=\".2\"/><circle cx=\"32\" cy=\"35\" r=\"11\" fill=\"@K@\"/><circle cx=\"32\" cy=\"35\" r=\"7\" fill=\"none\" stroke=\"#FFFFFF\" stroke-width=\"1.8\"/><line x1=\"32\" y1=\"35\" x2=\"36.5\" y2=\"30.5\" stroke=\"@C@\" stroke-width=\"2.2\" stroke-linecap=\"round\"/><circle cx=\"32\" cy=\"35\" r=\"1.8\" fill=\"#FFFFFF\"/><circle cx=\"17\" cy=\"21\" r=\"1.5\" fill=\"@K@\" opacity=\".5\"/><circle cx=\"47\" cy=\"21\" r=\"1.5\" fill=\"@K@\" opacity=\".5\"/><circle cx=\"17\" cy=\"47\" r=\"1.5\" fill=\"@K@\" opacity=\".5\"/><circle cx=\"47\" cy=\"47\" r=\"1.5\" fill=\"@K@\" opacity=\".5\"/>",
+      sentinel: "<line x1=\"46\" y1=\"13\" x2=\"51\" y2=\"5\" stroke=\"@C@\" stroke-width=\"2.2\" stroke-linecap=\"round\"/><path d=\"M46 3.5a6 6 0 0 1 9 5z\" fill=\"#FFFFFF\"/><rect x=\"7\" y=\"11\" width=\"50\" height=\"23\" rx=\"11.5\" fill=\"@C@\"/><rect x=\"7\" y=\"11\" width=\"50\" height=\"10\" rx=\"10\" fill=\"#FFFFFF\" opacity=\".2\"/><rect x=\"12\" y=\"18\" width=\"40\" height=\"9\" rx=\"4.5\" fill=\"@K@\"/><rect x=\"30\" y=\"20.5\" width=\"12\" height=\"4\" rx=\"2\" fill=\"#FFFFFF\"/><circle cx=\"18\" cy=\"22.5\" r=\"1.6\" fill=\"@C@\"/><circle cx=\"23\" cy=\"22.5\" r=\"1.6\" fill=\"@C@\" opacity=\".5\"/><rect x=\"28\" y=\"34\" width=\"8\" height=\"5\" fill=\"@K@\" opacity=\".6\"/><path d=\"M19 39h26l5 14H14z\" fill=\"@C@\"/><path d=\"M27 43h10v6H27z\" fill=\"@K@\" opacity=\".55\"/><circle cx=\"32\" cy=\"46\" r=\"1.7\" fill=\"#FFFFFF\"/><rect x=\"10\" y=\"53\" width=\"44\" height=\"8\" rx=\"4\" fill=\"@K@\" stroke=\"@C@\" stroke-width=\"1.8\"/><circle cx=\"17\" cy=\"57\" r=\"1.7\" fill=\"@C@\"/><circle cx=\"27\" cy=\"57\" r=\"1.7\" fill=\"@C@\"/><circle cx=\"37\" cy=\"57\" r=\"1.7\" fill=\"@C@\"/><circle cx=\"47\" cy=\"57\" r=\"1.7\" fill=\"@C@\"/>",
+      tinker: "<rect x=\"29\" y=\"2\" width=\"6\" height=\"6\" rx=\"1.5\" fill=\"@C@\" opacity=\".7\"/><rect x=\"15\" y=\"7\" width=\"34\" height=\"25\" rx=\"8\" fill=\"@C@\"/><rect x=\"15\" y=\"7\" width=\"34\" height=\"10\" rx=\"8\" fill=\"#FFFFFF\" opacity=\".2\"/><circle cx=\"25\" cy=\"20\" r=\"6.5\" fill=\"@K@\" stroke=\"#FFFFFF\" stroke-width=\"1.8\"/><circle cx=\"39\" cy=\"20\" r=\"6.5\" fill=\"@K@\" stroke=\"#FFFFFF\" stroke-width=\"1.8\"/><circle cx=\"25\" cy=\"20\" r=\"2.4\" fill=\"@C@\"/><circle cx=\"39\" cy=\"20\" r=\"2.4\" fill=\"@C@\"/><rect x=\"29\" y=\"32\" width=\"6\" height=\"4\" fill=\"@K@\" opacity=\".6\"/><path d=\"M45 42l9-7\" fill=\"none\" stroke=\"@C@\" stroke-width=\"3.2\" stroke-linecap=\"round\"/><path d=\"M52 29.5a5 5 0 1 0 6 6\" fill=\"none\" stroke=\"#FFFFFF\" stroke-width=\"2.4\" stroke-linecap=\"round\"/><path d=\"M19 42l-7 5\" fill=\"none\" stroke=\"@C@\" stroke-width=\"3.2\" stroke-linecap=\"round\"/><rect x=\"17\" y=\"36\" width=\"30\" height=\"18\" rx=\"6\" fill=\"@C@\"/><rect x=\"23\" y=\"41\" width=\"18\" height=\"3\" rx=\"1.5\" fill=\"@K@\" opacity=\".55\"/><rect x=\"23\" y=\"46.5\" width=\"11\" height=\"3\" rx=\"1.5\" fill=\"@K@\" opacity=\".55\"/><circle cx=\"23\" cy=\"57\" r=\"4.5\" fill=\"@K@\" stroke=\"@C@\" stroke-width=\"1.8\"/><circle cx=\"41\" cy=\"57\" r=\"4.5\" fill=\"@K@\" stroke=\"@C@\" stroke-width=\"1.8\"/>",
+      courier: "<ellipse cx=\"32\" cy=\"58.5\" rx=\"15\" ry=\"3.2\" fill=\"none\" stroke=\"@C@\" stroke-width=\"1.8\" opacity=\".7\"/><line x1=\"17.5\" y1=\"21\" x2=\"17.5\" y2=\"8\" stroke=\"@C@\" stroke-width=\"2.2\" stroke-linecap=\"round\"/><circle cx=\"17.5\" cy=\"7\" r=\"2.4\" fill=\"#FFFFFF\"/><rect x=\"14\" y=\"18\" width=\"7\" height=\"11\" rx=\"3.5\" fill=\"@C@\" opacity=\".7\"/><rect x=\"43\" y=\"18\" width=\"7\" height=\"11\" rx=\"3.5\" fill=\"@C@\" opacity=\".7\"/><rect x=\"19\" y=\"8\" width=\"26\" height=\"46\" rx=\"13\" fill=\"@C@\"/><rect x=\"19\" y=\"8\" width=\"26\" height=\"14\" rx=\"13\" fill=\"#FFFFFF\" opacity=\".2\"/><rect x=\"22.5\" y=\"15\" width=\"19\" height=\"15\" rx=\"7.5\" fill=\"@K@\"/><circle cx=\"28\" cy=\"22.5\" r=\"2.3\" fill=\"#FFFFFF\"/><circle cx=\"36\" cy=\"22.5\" r=\"2.3\" fill=\"#FFFFFF\"/><rect x=\"25\" y=\"36\" width=\"14\" height=\"10\" rx=\"2\" fill=\"#FFFFFF\"/><path d=\"M26 37.5l6 4.5 6-4.5\" fill=\"none\" stroke=\"@K@\" stroke-width=\"1.6\" stroke-linejoin=\"round\"/>",
+      oracle: "<path d=\"M12 44l-6 7 9-2z\" fill=\"@C@\" opacity=\".6\"/><path d=\"M52 44l6 7-9-2z\" fill=\"@C@\" opacity=\".6\"/><path d=\"M32 5l20 11.5v23L32 51 12 39.5v-23z\" fill=\"@C@\"/><path d=\"M32 5l20 11.5v6H12v-6z\" fill=\"#FFFFFF\" opacity=\".2\"/><circle cx=\"32\" cy=\"28\" r=\"12.5\" fill=\"@K@\"/><circle cx=\"32\" cy=\"28\" r=\"8.5\" fill=\"none\" stroke=\"#FFFFFF\" stroke-width=\"1.8\"/><circle cx=\"32\" cy=\"28\" r=\"4.2\" fill=\"@C@\"/><circle cx=\"35.5\" cy=\"24.5\" r=\"1.7\" fill=\"#FFFFFF\"/><path d=\"M17 60l8-4 6 2.5 8-6 8 2.5\" fill=\"none\" stroke=\"@C@\" stroke-width=\"2.2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><circle cx=\"47\" cy=\"55\" r=\"2\" fill=\"#FFFFFF\"/>",
+      warden: "<ellipse cx=\"32\" cy=\"61\" rx=\"12\" ry=\"2\" fill=\"@C@\" opacity=\".25\"/><path d=\"M32 5l21 7v17c0 13-9 22-21 28C20 51 11 42 11 29V12z\" fill=\"@C@\"/><path d=\"M32 5l21 7v6H11v-6z\" fill=\"#FFFFFF\" opacity=\".2\"/><rect x=\"18\" y=\"19\" width=\"28\" height=\"11\" rx=\"5.5\" fill=\"@K@\"/><circle cx=\"26\" cy=\"24.5\" r=\"2.4\" fill=\"@C@\"/><circle cx=\"38\" cy=\"24.5\" r=\"2.4\" fill=\"@C@\"/><path d=\"M24 39l6 6 11-12\" fill=\"none\" stroke=\"#FFFFFF\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+      herald: "<rect x=\"19\" y=\"48\" width=\"22\" height=\"11\" rx=\"5.5\" fill=\"@C@\" opacity=\".7\"/><line x1=\"30\" y1=\"9\" x2=\"30\" y2=\"3.5\" stroke=\"@C@\" stroke-width=\"2.2\" stroke-linecap=\"round\"/><circle cx=\"30\" cy=\"3.5\" r=\"2.3\" fill=\"#FFFFFF\"/><circle cx=\"30\" cy=\"28\" r=\"20\" fill=\"@C@\"/><path d=\"M10 28a20 20 0 0 1 40 0z\" fill=\"#FFFFFF\" opacity=\".2\"/><rect x=\"15\" y=\"22\" width=\"30\" height=\"12\" rx=\"6\" fill=\"@K@\"/><circle cx=\"24\" cy=\"28\" r=\"2.4\" fill=\"#FFFFFF\"/><circle cx=\"36\" cy=\"28\" r=\"2.4\" fill=\"#FFFFFF\"/><path d=\"M53 19a13 13 0 0 1 0 18\" fill=\"none\" stroke=\"@C@\" stroke-width=\"2.4\" stroke-linecap=\"round\"/><path d=\"M58 14a20 20 0 0 1 0 28\" fill=\"none\" stroke=\"@C@\" stroke-width=\"2.4\" stroke-linecap=\"round\" opacity=\".55\"/><rect x=\"25\" y=\"52\" width=\"10\" height=\"3\" rx=\"1.5\" fill=\"@K@\" opacity=\".55\"/>"
+    };
+    var DROID_INK = "#06101B";
+    var DROID_COLORS = ["#29C5F6", "#4ADE9B", "#FF9F5A", "#B9A6FF", "#FF7A8A", "#5EEAD4", "#F9A8D4", "#A3E635", "#93C5FD"];
+    // Job first (the role, then words in the title), so a team reads at a glance.
+    var DROID_BY_ROLE = { ceo: "commander", cfo: "vault", cto: "tinker", engineer: "tinker", devops: "sentinel", security: "sentinel",
+                          cmo: "herald", designer: "herald", researcher: "oracle", qa: "warden", pm: "courier" };
+    var DROID_BY_WORD = [
+      [/financ|account|bookkeep|treasur|billing|payroll/, "vault"],
+      [/complian|regulat|legal|audit|quality|review/, "warden"],
+      [/network|secur|infrastructure|storage|backup|monitor/, "sentinel"],
+      [/analy|research|trading|data|insight|forecast/, "oracle"],
+      [/social|market|brand|content|design|sales/, "herald"],
+      [/help ?desk|support|intake|triage|lead|customer|success|reception/, "courier"],
+      [/automat|engineer|tool|develop|build|deploy/, "tinker"]
+    ];
+    var DROID_KINDS = ["tinker", "courier", "oracle", "sentinel", "herald", "warden", "vault"];
+    function droidHash(t) { var n = 0, x = String(t || ""); for (var i = 0; i < x.length; i++) n = (n * 31 + x.charCodeAt(i)) >>> 0; return n; }
+    function droidFor(a) {
+      var role = String(a.role || "").toLowerCase(), words = (String(a.title || "") + " " + String(a.name || "")).toLowerCase();
+      var seed = droidHash(a.name || a.id), kind = null;
+      if (role === "ceo") return { kind: "commander", color: "#F2C14E" };
+      for (var i = 0; i < DROID_BY_WORD.length && !kind; i++) if (DROID_BY_WORD[i][0].test(words)) kind = DROID_BY_WORD[i][1];
+      if (!kind) kind = DROID_BY_ROLE[role] || DROID_KINDS[seed % DROID_KINDS.length];
+      return { kind: kind, color: DROID_COLORS[seed % DROID_COLORS.length] };
+    }
+    function Droid(props) {
+      var a = props.agent || {}, d = droidFor(a), state = String(a.status || "").toLowerCase();
+      var art = (DROIDS[d.kind] || DROIDS.tinker).replace(/@C@/g, d.color).replace(/@K@/g, DROID_INK);
+      return h("span", { className: "sg-bot sg-bot-" + (props.size || "sm") + (state === "running" ? " sg-bot-run" : "") + (state === "paused" ? " sg-bot-off" : ""), "aria-hidden": "true",
+        dangerouslySetInnerHTML: { __html: '<svg viewBox="0 0 64 64" width="100%" height="100%" focusable="false">' + art + "</svg>" } });
+    }
+
     function pcBase() { var L = window.__SCT_LINKS__; if (L && L.paperclip) return L.paperclip.replace(/\/+$/, ""); return location.protocol + "//" + location.hostname + ":3100"; }
 
     // Team templates: save this team's shape to a file, or install one made on another server.
@@ -241,6 +286,20 @@
         var t = q.trim().toLowerCase();
         return !t || (a.name + " " + (a.title || "") + " " + (a.runs_on || "")).toLowerCase().indexOf(t) >= 0;
       });
+      var busyNow = agents.filter(function (a) { return String(a.status || "").toLowerCase() === "running"; });
+      function nowStrip() {
+        if (!agents.length) return null;
+        return h("div", { className: "sg-now", "aria-live": "polite" },
+          h("div", { className: "sg-now-h" }, "Working right now"),
+          busyNow.length === 0 ? h("div", { className: "sg-now-none" }, "Nobody is on a task at the moment.")
+            : h("div", { className: "sg-now-list" }, busyNow.slice(0, 12).map(function (a) {
+                return h("button", { type: "button", key: a.id, className: "sg-now-card", onClick: function () { open(a.id); } },
+                  h(Droid, { agent: a, size: "md" }),
+                  h("span", { className: "sg-row-main" },
+                    h("span", { className: "sg-row-name" }, a.name),
+                    h("span", { className: "sg-row-sub" }, a.title || roleLabel(a.role))));
+              })));
+      }
       var dirty = !!(det && f && JSON.stringify(f) !== JSON.stringify(toForm(det)));
 
       function set(k) { return function (e) { var n = Object.assign({}, f); n[k] = e.target.value; setF(n); setMsg(null); }; }
@@ -268,6 +327,7 @@
       function row(a) {
         var x = st(a);
         return h("button", { type: "button", key: a.id, className: "sg-row " + x[0] + (sel === a.id ? " on" : ""), onClick: function () { open(a.id); } },
+          h(Droid, { agent: a }),
           h("span", { className: "sg-row-main" },
             h("span", { className: "sg-row-name" }, a.name),
             h("span", { className: "sg-row-sub" }, (a.title || roleLabel(a.role)) + " · " + (a.model || a.runs_on))),
@@ -311,10 +371,12 @@
         var mgrs = agents.filter(function (a) { return a.id !== det.id; });
         return h("form", { className: "sg-detail", onSubmit: save },
           h("div", { className: "sg-dhead " + x[0] },
-            h("div", null,
-              h("div", { className: "sg-dname" }, det.name),
-              h("div", { className: "sg-dsub" }, h("span", { className: "sg-dot" }), x[1],
-                det.pause_reason ? " (" + String(det.pause_reason).replace(/_/g, " ") + ")" : "")),
+            h("div", { className: "sg-dwho" },
+              h(Droid, { agent: det, size: "lg" }),
+              h("div", null,
+                h("div", { className: "sg-dname" }, det.name),
+                h("div", { className: "sg-dsub" }, h("span", { className: "sg-dot" }), x[1],
+                  det.pause_reason ? " (" + String(det.pause_reason).replace(/_/g, " ") + ")" : ""))),
             h("div", { className: "sg-dacts" },
               canEdit ? h("button", { type: "button", className: "sg-btn", disabled: busy, onClick: toggle },
                 String(det.status).toLowerCase() === "paused" ? "▶ Resume" : "Pause") : null,
@@ -366,6 +428,7 @@
         up === false ? h("div", { className: "sg-note" }, "Team management isn't running yet, so there are no agents to show. If the system was just installed or restarted, give it a few minutes.") : null,
         data && data.connected === false ? h("div", { className: "sg-note" }, "Your team isn't linked yet. ",
           h("a", { href: "/orchestration" + (location.search || "") }, "Finish setup on the Orchestration page"), ", then come back here.") : null,
+        data && data.connected !== false && up !== false ? nowStrip() : null,
         h("div", { className: "sg-cols" },
           h("div", { className: "sg-list" },
             data == null ? h("div", { className: "sg-empty" }, err ? "Couldn't load your agents. Try again in a minute." : "Loading…")
