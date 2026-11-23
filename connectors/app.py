@@ -2806,38 +2806,116 @@ def _list(d, *names):
     return []
 
 
-def _wake_task(issue_id, agent_id, reason="Agent OS is putting this task back to work."):
-    """Start the assigned agent on a task, and say whether that was accepted.
+def _execution_hold(issue_id):
+    """The team board's hold on a task whose last run broke off part way through.
 
-    A comment or a status change is not enough on its own. When a task's last run
-    ended badly (an agent that was unavailable, a refused or failed gateway call),
-    the team board holds every new wake-up for that task "until execution recovery",
-    and that recovery never comes by itself: the task sits in To do with nobody
-    working on it. The board's own Retry is what releases it, so that comes first;
-    a task that never ran gets a plain wake-up instead."""
+    When a run is cut off (a refused or failed model call, an agent that went away),
+    the board cannot tell which of its steps already happened, so it will not run the
+    task again by itself: every later wake-up is held "until execution recovery".
+    Retry clears that only when the board says the same agent can retry. Otherwise the
+    task has to start fresh, which needs the owner's say-so because a step may repeat."""
+    try:
+        issue = _pc_get("/api/issues/" + _safe_id(str(issue_id)))
+    except Exception:
+        return None, None
+    if not isinstance(issue, dict):
+        return None, None
+    b = issue.get("executionBlocker")
+    return issue, (b if isinstance(b, dict) and b.get("recoveryActionId") else None)
+
+
+def _wake_task(issue_id, agent_id, reason="Agent OS is putting this task back to work."):
+    """Start the assigned agent on a task. Returns "started", "fresh_needed" (the board
+    holds the task until it is started fresh) or "failed".
+
+    A comment or a status change is not enough: the board holds wake-ups for a task
+    whose last run broke off. Its own Retry comes first; a task that never ran gets a
+    plain wake-up."""
     iid, aid = str(issue_id or ""), str(agent_id or "")
     if not iid or not aid:
-        return False
+        return "failed"
+    _, hold = _execution_hold(iid)
+    if hold and not hold.get("canRetry"):
+        return "fresh_needed"
     try:
         runs = _list(_pc_get("/api/issues/" + _safe_id(iid) + "/runs"), "runs", "items")
         latest = runs[0] if runs and isinstance(runs[0], dict) else None
     except Exception:
         latest = None
-    if latest and latest.get("id") and str(latest.get("agentId") or aid) == aid:
+    run_id = str((latest or {}).get("runId") or (latest or {}).get("id") or "")
+    if run_id and str((latest or {}).get("agentId") or aid) == aid:
         try:
             r = _pc_send("POST", "/api/issues/" + _safe_id(iid) + "/retry",
-                         {"idempotencyKey": str(uuid.uuid4()), "observedRunId": str(latest["id"])}, what="put the task back to work")
+                         {"idempotencyKey": str(uuid.uuid4()), "observedRunId": run_id}, what="put the task back to work")
             if isinstance(r, dict) and r.get("accepted"):
-                return True
+                return "started"
         except Exception:
             pass
+    if hold:
+        return "fresh_needed"     # Retry was not accepted and a plain wake-up would be held too
     try:
         _pc_send("POST", "/api/agents/" + _safe_id(aid) + "/wakeup",
                  {"source": "on_demand", "triggerDetail": "system", "reason": reason[:300], "payload": {"issueId": iid}},
                  what="wake the agent")
-        return True
+        return "started"
+    except Exception:
+        return "failed"
+
+
+_FRESH_HEAD = ("**Restarted as a fresh task.** The earlier task, %s, stopped part way through its last run, so "
+               "the team board would not run it again. Read it first with read_task %s to see what was already "
+               "done, and do not repeat a step that already happened (for example sending the same message twice).")
+
+
+def _restart_fresh(issue_id, extra=""):
+    """Start a task over as a new task for the same agent, and cancel the old one.
+    Only on the owner's say-so. Returns the new task's key."""
+    old = _pc_get("/api/issues/" + _safe_id(str(issue_id)))
+    if not isinstance(old, dict) or not old.get("id"):
+        raise HTTPException(status_code=404, detail="That task was not found.")
+    cid = old.get("companyId") or _pc_company_id()
+    key = old.get("identifier") or str(old["id"])[:8]
+    desc = _FRESH_HEAD % (key, key)
+    if extra:
+        desc += "\n\n**From the owner:** " + extra[:1500]
+    desc += "\n\n---\n\n" + str(old.get("description") or "")[:9000]
+    body = {"title": str(old.get("title") or "Task")[:200], "description": desc[:12000], "status": "todo",
+            "priority": old.get("priority") if old.get("priority") in ("low", "medium", "high", "urgent") else "medium"}
+    for k in ("assigneeAgentId", "projectId", "parentId", "goalId"):
+        if old.get(k):
+            body[k] = old[k]
+    new = _pc_send("POST", "/api/companies/" + _safe_id(str(cid)) + "/issues", body, what="start the task fresh")
+    nk = (new or {}).get("identifier") or (new or {}).get("id") or "a new task"
+    try:
+        _pc_send("PATCH", "/api/issues/" + _safe_id(str(old["id"])),
+                 {"status": "cancelled", "comment": "Restarted fresh as %s, because its last run stopped part way "
+                                                    "through and the team board would not run it again." % nk},
+                 what="close the old task")
+    except Exception:
+        pass
+    _ask_close(str(old["id"]))
+    return nk
+
+
+_OWNER_GO = ("**Owner decision: put this back to work.**", "**Reply from the owner:**")
+_FRESH_NOTE = ("**Needs a fresh start.** This task stopped part way through its last run, so the team board will "
+               "not run it again by itself (a step may already have happened). It is waiting for the owner to start "
+               "it fresh or close it.")
+
+
+def _owner_said_go(issue_id):
+    """True when the owner already asked for this task to carry on (Put it back to work, or a reply)."""
+    try:
+        cm = _list(_pc_get("/api/issues/" + _safe_id(str(issue_id)) + "/recent-comments"), "comments")
     except Exception:
         return False
+    for c in cm[:8]:
+        body = str((c or {}).get("body") or "")
+        if body.startswith(_FRESH_NOTE[:24]):
+            return False          # asked the owner since then; wait for that answer
+        if any(body.startswith(m) for m in _OWNER_GO):
+            return True
+    return False
 
 
 def _issue_last_activity(issue):
@@ -2964,6 +3042,9 @@ def stuck_watch_run(dry_run=False):
             parts.append("Retried the connection for: " + ", ".join(out["retried"]) + ".")
         if out["restarted"]:
             parts.append("Restarted the gateway for: " + ", ".join(out["restarted"]) + ".")
+        if out.get("fresh"):
+            parts.append("Started %d task%s fresh that the owner had put back to work: %s." % (
+                len(out["fresh"]), "" if len(out["fresh"]) == 1 else "s", ", ".join("%s as %s" % (f["key"], f["new"]) for f in out["fresh"])))
         if out.get("routed"):
             parts.append("Gave %d unowned task%s to %s to route: %s." % (
                 len(out["routed"]), "" if len(out["routed"]) == 1 else "s", lead_name, ", ".join(r["key"] for r in out["routed"])))
@@ -3152,6 +3233,32 @@ def stuck_watch_run(dry_run=False):
         for iid in live_issue:   # an agent working on it again starts the count over
             con.execute("DELETE FROM stuck_watch WHERE kind='task' AND ref=?", (iid,))
 
+        fresh_budget = 3
+        # Tasks the owner already sent back to work, held by the board after a broken
+        # run: start them fresh a few at a time, whichever agent they are on.
+        if not dry_run:
+            looked = 0
+            for issue in queued:
+                if fresh_budget <= 0 or looked >= 12:
+                    break
+                iid = str(issue.get("id") or "")
+                if not iid or str(issue.get("assigneeAgentId") or "") not in usable or iid in live_issue:
+                    continue
+                looked += 1
+                hold = _execution_hold(iid)[1]
+                if not hold or hold.get("canRetry") or not _owner_said_go(iid):
+                    continue
+                key = issue.get("identifier") or iid[:8]
+                name = (by_id.get(str(issue.get("assigneeAgentId"))) or {}).get("name") or "agent"
+                fresh_budget -= 1
+                try:
+                    nk = _restart_fresh(iid)
+                except Exception:
+                    continue
+                out.setdefault("fresh", []).append({"key": key, "new": nk, "agent": name})
+                con.execute("DELETE FROM stuck_watch WHERE kind='task' AND ref=?", (iid,))
+                _watch_log(con, "started fresh", key, "%s as %s" % (name, nk))
+                candidates = [c for c in candidates if str(c[0].get("id")) != iid]
         for issue, why in candidates:
             iid = str(issue.get("id"))
             last = _ts(issue.get("updatedAt")) or _ts(issue.get("createdAt"))
@@ -3193,7 +3300,8 @@ def stuck_watch_run(dry_run=False):
                         _pc_send("POST", "/api/issues/" + _safe_id(iid) + "/comments",
                                  {"body": "Automatic check: this task %s, and two reminders did not get it moving. "
                                           "It is now waiting on the owner." % why}, what="comment")
-                        _pc_send("PATCH", "/api/issues/" + _safe_id(iid), {"status": "blocked"}, what="mark the task")
+                        _pc_send("PATCH", "/api/issues/" + _safe_id(iid), {"status": "blocked", "unblockDescriptor": _owner_hold(
+                            "Owner to decide: put it back to work, or close it.")}, what="mark the task")
                     except Exception:
                         pass
                     bump("task", iid, escalated=True); _watch_log(con, "escalated", key, msg)
@@ -3210,6 +3318,29 @@ def stuck_watch_run(dry_run=False):
                     if not dry_run:
                         ok = _restart_gateway(entry)
                         bump("restart", str(a.get("id"))); _watch_log(con, "restarted" if ok else "restart failed", name, host)
+            hold = None if dry_run else _execution_hold(iid)[1]
+            if hold and not hold.get("canRetry"):
+                if fresh_budget > 0 and _owner_said_go(iid):
+                    fresh_budget -= 1
+                    try:
+                        nk = _restart_fresh(iid)
+                        out.setdefault("fresh", []).append({"key": key, "new": nk, "agent": name})
+                        con.execute("DELETE FROM stuck_watch WHERE kind='task' AND ref=?", (iid,))
+                        _watch_log(con, "started fresh", key, "%s as %s" % (name, nk))
+                    except Exception:
+                        pass
+                    continue
+                if not _owner_said_go(iid):
+                    out["escalated"].append({"key": key, "agent": name,
+                                             "message": "%s (%s) needs a fresh start: its last run stopped part way through." % (key, name)})
+                    try:
+                        _pc_send("PATCH", "/api/issues/" + _safe_id(iid), {"status": "blocked", "comment": _FRESH_NOTE,
+                                                                              "unblockDescriptor": _owner_hold("Owner to decide: start it fresh, or close it.")},
+                                 what="mark the task")
+                    except Exception:
+                        pass
+                    bump("task", iid, escalated=True); _watch_log(con, "needs a fresh start", key, name)
+                continue
             out["nudged"].append({"key": key, "agent": name, "idle_minutes": mins, "why": why})
             if not dry_run:
                 try:
@@ -3250,6 +3381,9 @@ def stuck_watch_run(dry_run=False):
                 if not isinstance(issue, dict) or str(issue.get("status")) in ("done", "cancelled"):
                     continue
                 key = issue.get("identifier") or iid[:8]
+                hold = _execution_hold(iid)[1]
+                if hold and not hold.get("canRetry"):
+                    continue      # held by the board: only the owner can start it fresh, so the lead cannot help
                 sent += 1
                 out["triaged"].append({"key": key, "to": lead_name})
                 if dry_run:
@@ -4723,6 +4857,9 @@ def _revive_unavailable(cid, usable, by_id, dry_run=False):
         if not dry_run:
             try:
                 _run_budget_clear(iid, key)
+                hold = _execution_hold(iid)[1]
+                if hold and not hold.get("canRetry"):
+                    continue          # the owner chooses: its card offers a fresh start
                 _pc_send("PATCH", "/api/issues/" + _safe_id(iid), {"status": "todo", "comment": note}, what="put the task back to work")
                 _wake_task(iid, aid)
                 with closing(get_db()) as con:
@@ -4939,16 +5076,21 @@ def _decisions(fresh=False):
             blk_st = str(blk.get("status") or "").lower()
             if blk.get("title") and blk_st and blk_st not in ("done", "cancelled"):
                 continue        # it is waiting on other work that is still open: nothing for the owner to decide
-            btns = [dict(_BTN_RETRY)]
-            if lead is not None and not mine and sid not in triaged:
+            hold = _execution_hold(sid)[1]
+            held = bool(hold and not hold.get("canRetry"))
+            btns = [{"id": "fresh", "label": "Start it fresh", "style": "primary"} if held else dict(_BTN_RETRY)]
+            if lead is not None and not mine and sid not in triaged and not held:
                 btns.append({"id": "lead", "label": "Hand to " + (lead.get("name") or "lead")})
             btns += [{"id": "close", "label": "Close it"}, _BTN_MORE, _BTN_REPLY]
             age = (_now() - (_ts(at) or _now())).days
             c.update({"id": "stuck:" + sid, "kind": "stuck", "tag": "Stopped task", "at": at,
-                      "summary": _clip(_stuck_plain(it.get("whyNow")), 600),
-                      "question": "Put it back to work, or close it?",
+                      "summary": _clip("Its last run stopped part way through (the agent was cut off), so the team "
+                                       "board will not run it again by itself: a step may already have happened."
+                                       if held else _stuck_plain(it.get("whyNow")), 600),
+                      "question": "Start it fresh, or close it?" if held else "Put it back to work, or close it?",
                       "recommendation": ("It has been stopped for %d days. Close it if you no longer need it." % age) if age >= 3
-                                        else "Put it back to work. If it stops again, close it or ask for more detail.",
+                                        else ("Start it fresh. The agent reads the earlier task first, so it can skip what is already done."
+                                              if held else "Put it back to work. If it stops again, close it or ask for more detail."),
                       "buttons": btns, "ref": ("issue", sid, "stuck")})
             cards.append(c)
             continue
@@ -5386,6 +5528,10 @@ def decisions_act(b: DecisionAct, _auth=Depends(require_auth)):
                                 "yes-or-no question, your recommendation).")
             _run_budget_clear(rid, card.get("key"))
             said = "Reply sent. It comes back here only if the agent needs you again."
+        elif act == "fresh":
+            nk = _restart_fresh(rid, note)
+            _DEC_CACHE.clear()
+            return {"ok": True, "message": "Started fresh as %s. The old task is closed." % nk}
         elif act == "retry":
             _run_budget_clear(rid, card.get("key"))
             patch["comment"] = ("**Owner decision: put this back to work.**" + extra + "\n\nPick it up and continue. Close it "
@@ -5414,7 +5560,12 @@ def decisions_act(b: DecisionAct, _auth=Depends(require_auth)):
                 who = patch.get("assigneeAgentId") or (_pc_get("/api/issues/" + _safe_id(rid)) or {}).get("assigneeAgentId")
             except Exception:
                 who = None
-            if who and not _wake_task(rid, who, "The owner answered on this task."):
+            res = _wake_task(rid, who, "The owner answered on this task.") if who else "failed"
+            if res == "fresh_needed":
+                nk = _restart_fresh(rid, note)
+                said = ("Its last run had stopped part way through, so the team board would not run it again. "
+                        "Started it fresh as %s with your answer; the old task is closed." % nk)
+            elif who and res == "failed":
                 said += " The agent could not be started just now; the watch will try again."
     _DEC_CACHE.clear()
     return {"ok": True, "message": said}
@@ -6345,10 +6496,18 @@ def _own_issue(a):
     return issue
 
 
-def _set_issue(issue, status, comment):
+def _owner_hold(action):
+    """What the team board needs to accept "blocked" with no blocking task: who unblocks it and how.
+    Without it the board refuses the change (422), which left agents unable to ask the owner anything."""
+    return {"owner": "board", "action": (re.sub(r"\s+", " ", str(action or "")).strip() or "Owner decision needed")[:1900]}
+
+
+def _set_issue(issue, status, comment, unblock=None):
+    body = {"status": status, "comment": comment[:6000]}
+    if status == "blocked":
+        body["unblockDescriptor"] = _owner_hold(unblock)
     try:
-        _pc_send("PATCH", "/api/issues/" + _safe_id(str(issue["id"])), {"status": status, "comment": comment[:6000]},
-                 what="update the task")
+        _pc_send("PATCH", "/api/issues/" + _safe_id(str(issue["id"])), body, what="update the task")
     except HTTPException as e:
         raise ToolError(str(e.detail))
 
@@ -7524,7 +7683,12 @@ def t_complete_task(a):
     issue = _own_issue(a)
     if issue.get("status") in ("done", "cancelled"):
         return "That task is already closed. Stop here."
-    _set_issue(issue, "done", "Completed: " + summary)
+    try:
+        _set_issue(issue, "done", "Completed: " + summary)
+    except ToolError as e:
+        raise ToolError("The team board did not accept closing this task (%s). Do not retry: post your result as "
+                        "a comment on the task and stop. Agent OS shows the owner a card to close it." % str(e)[:300])
+    _ask_close(str(issue["id"]))
     return "Task marked done. You are finished; stop here."
 
 
@@ -7592,7 +7756,7 @@ def t_need_owner_input(a):
         return "That task is already closed. Stop here."
     summary, q, rec = summary[:1200], q[:600], rec[:600]
     _set_issue(issue, "blocked", "**Decision needed from the owner**\n\n**Summary:** %s\n\n**Question:** %s\n\n"
-                                 "**Recommendation:** %s" % (summary, q, rec))
+                                 "**Recommendation:** %s" % (summary, q, rec), unblock="Owner to answer: " + q)
     try:
         with closing(_asks_db()) as con:
             con.execute("INSERT INTO owner_asks(issue_id, key, agent_id, summary, question, recommendation, asked_at, open) "
@@ -8630,6 +8794,38 @@ def t_search_project(a):
     return _PROJ_NOTICE + "\n\n".join("%s (near character %d):\n...%s..." % (n, at, sn) for _, n, at, sn in hits[:8])
 
 
+def t_create_project(a):
+    """Start a project (a folder of notes, files and tasks) on the owner's Projects page, or reuse one with the same name."""
+    name = re.sub(r"\s+", " ", str(a.get("name") or "")).strip()[:80]
+    desc = _proj_scrub(str(a.get("description") or "").strip())[:600]
+    if len(name) < 3 or len(desc) < 10:
+        raise ToolError("Give the project a name and a one or two sentence description of what it is for.")
+    instr = _proj_scrub(str(a.get("instructions") or "").strip())[:8000]
+    now = _now().isoformat()
+    with closing(_proj_db()) as con:
+        old = con.execute("SELECT id, name FROM projects WHERE name=? COLLATE NOCASE", (name,)).fetchone()
+        if old:
+            pid, made, name = old[0], False, old[1]
+        else:
+            if con.execute("SELECT count(*) FROM projects").fetchone()[0] >= 200:
+                raise ToolError("The Projects page is full. Ask the owner to archive or delete old projects.")
+            pid = con.execute("INSERT INTO projects(name, description, instructions, status, created_at, updated_at) "
+                              "VALUES(?,?,?,?,?,?)", (name, desc, instr, "active", now, now)).lastrowid
+            made = True
+        con.commit()
+    linked = ""
+    if str(a.get("task") or "").strip():
+        try:
+            t = _pc_get("/api/issues/" + _safe_id(str(a["task"]).strip()))
+            if isinstance(t, dict) and t.get("id"):
+                linked = _proj_link_task({"project": str(pid)}, t.get("identifier") or t["id"], t.get("title"))
+        except Exception:
+            pass
+    return ("Project '%s' %s. Add notes to it with save_project_note (project: \"%s\").%s" % (
+        name, "created on the owner's Projects page" if made else "already existed, so it was reused (its "
+        "description and the owner's notes were left as they were)", name, linked))
+
+
 def t_save_project_note(a):
     pid, pname = _proj_pick(a)
     title, text = _proj_clean_name(a.get("title")), str(a.get("text") or "").strip()
@@ -8637,7 +8833,14 @@ def t_save_project_note(a):
         raise ToolError("A note needs a short title and the text to keep.")
     if len(text) > 60000:
         raise ToolError("That note is too long. Keep it under 60,000 characters or split it.")
-    who = _proj_clean_name(a.get("saved_by"), 60) or "the assistant"
+    who = _proj_clean_name(a.get("saved_by"), 60)
+    if not who and a.get("agent_id"):
+        try:
+            _cid, agents = _tool_agents()
+            who = next((_agent_name(x) for x in agents if str(x.get("id")) == str(a["agent_id"])), "")
+        except Exception:
+            who = ""
+    who = who or "the assistant"
     text = _proj_scrub(text)
     try:
         _, replaced = _proj_add_file(pid, title, text.encode(), "text/plain", who, kind="note", text=text)
@@ -9333,6 +9536,14 @@ MCP_TOOLS = {
     "search_project": (t_search_project, "all",
         "Find where a project's files mention a word or phrase. Returns short passages with the file name.",
         _schema({"project": _S, "query": _S}, ("query",))),
+    "create_project": (t_create_project, "all",
+        "Start a project on the owner's Projects page: a folder for one piece of work that holds notes, files "
+        "and tasks. If a project with that name exists it is reused. Then keep findings in it with save_project_note.",
+        _schema({"name": {"type": "string", "description": "Project name, under 80 characters"},
+                 "description": {"type": "string", "description": "One or two plain sentences: what this project is for"},
+                 "instructions": {"type": "string", "description": "Optional standing notes for anyone working on it"},
+                 "task": {"type": "string", "description": "Optional: a task key to list under the project"}},
+                ("name", "description"))),
     "save_project_note": (t_save_project_note, "all",
         "Keep something in a project for later: a decision, a finding, a summary, a finished draft. "
         "Saving a note with an existing title replaces it. Never put passwords, keys or codes in a note.",
@@ -9464,7 +9675,9 @@ async def mcp_agent(request: Request):
 # that key, ask Paperclip whose it is, and act only as that agent. The proxy publishes
 # them on the team board's address under /api/agent-os/.
 _REMOTE_TOOL_NAMES = ("list_agents", "complete_task", "need_owner_input", "split_task", "hand_off_task", "post_idea",
-                      "get_business_plan", "update_business_plan", "save_file", "read_task", "wait_for_tasks")
+                      "get_business_plan", "update_business_plan", "save_file", "read_task", "wait_for_tasks",
+                      "list_projects", "get_project", "read_project_file", "search_project", "create_project",
+                      "save_project_note")
 _REMOTE_HELP = ("Task tools for an agent working an assigned task: split_task when the job will not fit in "
                 "one run, complete_task when it is finished, hand_off_task to pass it to a colleague, "
                 "need_owner_input when only the owner can decide, list_agents for colleagues' names. You "

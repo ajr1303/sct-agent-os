@@ -669,6 +669,12 @@ held for "execution recovery" is released, and gives tasks nobody owns to the le
 agent. A large backlog on one agent therefore clears at about six tasks an hour;
 close tasks that are no longer needed to clear it faster.
 
+A task whose run was cut off part way is held by the board for good, because it
+cannot tell which steps already happened. Its card says so and offers **Start it
+fresh**: a new task for the same agent that reads the old one first, with the old
+one closed. Tasks the owner already put back to work are started fresh by the watch,
+three per pass.
+
 **Combining colleagues' work.** An agent that gave pieces of a job to colleagues has
 two tools for the wait and the read:
 

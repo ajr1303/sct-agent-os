@@ -2,6 +2,39 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.71.0] — 2026-11-23
+
+### Fixed
+- **Tasks the team board refuses to run again can be started fresh.** When an
+  agent's run is cut off part way (a refused or failed model call, an agent
+  that went away), the board cannot tell which steps already happened, so it
+  holds the task for good: Retry is refused and every wake-up is held. v0.70.0
+  missed this, and it also read the wrong field from the board's run list, so
+  its Retry was never sent. Now:
+  - a stopped task held this way shows **Start it fresh** on its card. That
+    opens a new task for the same agent, which reads the old one first so it
+    does not repeat a step, and closes the old one;
+  - a held task the owner already put back to work or replied to is started
+    fresh by the watch, three per pass;
+  - a held task the owner has not seen comes to the owner once, as one card,
+    and is not handed to the lead agent, who cannot release it.
+- **Agents can ask the owner again.** The team board now refuses to mark a
+  task "blocked" unless it says who unblocks it. need_owner_input, the stuck-task
+  watch and the fresh-start card all set "blocked" without saying so, so every
+  ask failed with a 422; an agent that kept trying was paused, and its finished
+  task was handed on as stuck. They now say the owner unblocks it, with the
+  question as the action.
+- **A refused close says what to do.** When the board will not accept
+  complete_task, the agent is told not to retry and to leave its result as a
+  comment, instead of burning its tries.
+
+### Added
+- **Agents can start projects.** create_project starts a project on the
+  Projects page (or reuses one with the same name) and can list a task under it.
+  Agents that run off the box now also get the project tools: list_projects,
+  get_project, read_project_file, search_project, create_project and
+  save_project_note. Notes they save carry the agent's name.
+
 ## [0.70.0] — 2026-11-23
 
 ### Fixed
