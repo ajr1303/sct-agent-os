@@ -2,6 +2,23 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.71.0] — 2026-11-23
+
+### Fixed
+- **Tasks the team board refuses to run again can be started fresh.** When an
+  agent's run is cut off part way (a refused or failed model call, an agent
+  that went away), the board cannot tell which steps already happened, so it
+  holds the task for good: Retry is refused and every wake-up is held. v0.70.0
+  missed this, and it also read the wrong field from the board's run list, so
+  its Retry was never sent. Now:
+  - a stopped task held this way shows **Start it fresh** on its card. That
+    opens a new task for the same agent, which reads the old one first so it
+    does not repeat a step, and closes the old one;
+  - a held task the owner already put back to work or replied to is started
+    fresh by the watch, three per pass;
+  - a held task the owner has not seen comes to the owner once, as one card,
+    and is not handed to the lead agent, who cannot release it.
+
 ## [0.70.0] — 2026-11-23
 
 ### Fixed
