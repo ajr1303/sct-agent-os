@@ -2,6 +2,46 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.73.0] — 2026-11-24
+
+### Fixed
+- **Tasks held after a run that never got going restart on their own.** The
+  assistant sometimes stalls on its very first model call and is stopped after
+  10 to 30 minutes; the team board then holds the task for good. When the
+  assistant's own record shows the run took no step at all, nothing can repeat,
+  so the 10-minute check starts the task again without asking the owner (twice
+  a day per task at most). Held tasks in Blocked are now looked at too.
+- **Chat fixes what is broken now, not what was broken this morning.**
+  workflow_failures splits "still failing" from "already fixed" (a later run
+  succeeded). A new system_health tool reports from live data whether the AI
+  model works, which runs broke off or ran out of tries, what is waiting, and
+  which workflows are still failing, so chat no longer tries to test API keys
+  or read credential files (which needed an approval nobody could see).
+- **Workflows agents build are no longer refused over small mistakes.** Unknown
+  keys on nodes and settings are dropped before n8n sees them, and a connection
+  to a node that does not exist is explained with the exact node names.
+
+### Added
+- **The owner is the board.** Chat's instructions now say: when the owner asks
+  to fix something, do it in the same reply, fix only what is still failing,
+  and bring back only what needs the owner (money, a credential, deleting data,
+  anything sent outside, switching a workflow on).
+- **manage_task** (Chat): restart, reassign or close a task for the owner. A
+  task held after a broken run is started fresh. It works only while the owner
+  is chatting, because agents on the box share Chat's tools.
+- **Operating decisions stay with the team.** need_owner_input only accepts
+  questions about money, credentials and access, deleting data, anything sent
+  outside the business, legal, hiring, security incidents or the business's
+  direction. Anything else is refused with "decide it yourself: pick the
+  option that can be undone". Asking to switch a workflow on is pointed to
+  request_activation.
+- **One setup step, one question.** When a task asks the owner the same thing
+  another task already asked (often sibling parts asking for the same login),
+  it waits on that task instead of adding a second card.
+- **Replace a live workflow with one click.** request_activation takes
+  replaces=<live workflow id>; approving switches the fixed copy on and the old
+  one off (kept, not deleted).
+
 ## [0.72.0] — 2026-11-24
 
 ### Added

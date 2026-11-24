@@ -171,6 +171,9 @@ def get_db():
     # changed afterwards cannot be switched on under the old approval.
     if "fingerprint" not in [c[1] for c in con.execute("PRAGMA table_info(workflow_requests)").fetchall()]:
         con.execute("ALTER TABLE workflow_requests ADD COLUMN fingerprint TEXT")
+    # A fixed copy of a live workflow: approving it switches the copy on and the old one off.
+    if "replaces" not in [c[1] for c in con.execute("PRAGMA table_info(workflow_requests)").fetchall()]:
+        con.execute("ALTER TABLE workflow_requests ADD COLUMN replaces TEXT")
     # Free-form facts about the business every agent can read (name, services, tone).
     con.execute("""
         CREATE TABLE IF NOT EXISTS business_profile (
@@ -2824,6 +2827,62 @@ def _execution_hold(issue_id):
     return issue, (b if isinstance(b, dict) and b.get("recoveryActionId") else None)
 
 
+def _hermes_dbs():
+    """The assistant's conversation stores (the main one and each agent profile's), read-only."""
+    root = HERMES_HOME_RO
+    paths = [os.path.join(root, "state.db")]
+    try:
+        for d in sorted(os.listdir(os.path.join(root, "profiles"))):
+            paths.append(os.path.join(root, "profiles", d, "state.db"))
+    except OSError:
+        pass
+    return [p for p in paths if os.path.isfile(p)]
+
+
+def _run_did_nothing(issue_id, hold):
+    """True only with proof that the broken run took no step: the assistant's own record of
+    it holds the run's prompt and no tool call. Then nothing can repeat, so starting the task
+    again needs no one's say-so. None when it cannot tell (another machine, no record)."""
+    run_id = str((hold or {}).get("runId") or "")
+    if not run_id:
+        return None
+    try:
+        runs = _list(_pc_get("/api/issues/" + _safe_id(str(issue_id)) + "/runs"), "runs", "items")
+    except Exception:
+        return None
+    run = next((r for r in runs if isinstance(r, dict) and str(r.get("runId") or r.get("id")) == run_id), None)
+    if not run:
+        return None
+    start = _ts(run.get("startedAt")) or _ts(run.get("createdAt"))
+    end = _ts(run.get("finishedAt"))
+    if not start or not end:
+        return None
+    cid = _pc_company_id()
+    sid = "paperclip:company:%s:agent:%s:issue:%s" % (cid, run.get("agentId") or hold.get("agentId"), issue_id)
+    lo, hi = start.timestamp() - 15, end.timestamp() + 15
+    for path in _hermes_dbs():
+        for uri in ("file:%s?mode=ro" % path, "file:%s?mode=ro&immutable=1" % path):
+            try:
+                with closing(sqlite3.connect(uri, uri=True, timeout=3)) as con:
+                    rows = con.execute("SELECT role, coalesce(tool_calls,'') FROM messages WHERE session_id=? "
+                                       "AND timestamp BETWEEN ? AND ?", (sid, lo, hi)).fetchall()
+                break
+            except sqlite3.Error:
+                rows = None
+        if not rows:
+            continue
+        if not any(r[0] == "user" for r in rows):
+            return None
+        acted = any(r[0] == "tool" or (r[0] == "assistant" and r[1].strip() not in ("", "[]", "null")) for r in rows)
+        return not acted
+    return None
+
+
+_NOTHING_HEAD = ("**Started again.** The earlier task, %s, broke off before it took a single step (the model "
+                 "call never answered), so nothing in it can have happened twice. Read it with read_task %s "
+                 "if you need its background, then do the work.")
+
+
 def _wake_task(issue_id, agent_id, reason="Agent OS is putting this task back to work."):
     """Start the assigned agent on a task. Returns "started", "fresh_needed" (the board
     holds the task until it is started fresh) or "failed".
@@ -2867,7 +2926,7 @@ _FRESH_HEAD = ("**Restarted as a fresh task.** The earlier task, %s, stopped par
                "done, and do not repeat a step that already happened (for example sending the same message twice).")
 
 
-def _restart_fresh(issue_id, extra=""):
+def _restart_fresh(issue_id, extra="", head=None):
     """Start a task over as a new task for the same agent, and cancel the old one.
     Only on the owner's say-so. Returns the new task's key."""
     old = _pc_get("/api/issues/" + _safe_id(str(issue_id)))
@@ -2875,7 +2934,7 @@ def _restart_fresh(issue_id, extra=""):
         raise HTTPException(status_code=404, detail="That task was not found.")
     cid = old.get("companyId") or _pc_company_id()
     key = old.get("identifier") or str(old["id"])[:8]
-    desc = _FRESH_HEAD % (key, key)
+    desc = (head or _FRESH_HEAD) % (key, key)
     if extra:
         desc += "\n\n**From the owner:** " + extra[:1500]
     desc += "\n\n---\n\n" + str(old.get("description") or "")[:9000]
@@ -2888,8 +2947,10 @@ def _restart_fresh(issue_id, extra=""):
     nk = (new or {}).get("identifier") or (new or {}).get("id") or "a new task"
     try:
         _pc_send("PATCH", "/api/issues/" + _safe_id(str(old["id"])),
-                 {"status": "cancelled", "comment": "Restarted fresh as %s, because its last run stopped part way "
-                                                    "through and the team board would not run it again." % nk},
+                 {"status": "cancelled", "comment": ("Started again as %s: its last run broke off before taking any "
+                                                     "step, so nothing can repeat." if head else
+                                                     "Restarted fresh as %s, because its last run stopped part way "
+                                                     "through and the team board would not run it again.") % nk},
                  what="close the old task")
     except Exception:
         pass
@@ -3043,7 +3104,8 @@ def stuck_watch_run(dry_run=False):
         if out["restarted"]:
             parts.append("Restarted the gateway for: " + ", ".join(out["restarted"]) + ".")
         if out.get("fresh"):
-            parts.append("Started %d task%s fresh that the owner had put back to work: %s." % (
+            parts.append("Started %d held task%s again (the owner had put it back to work, or its run broke off "
+                         "before taking any step): %s." % (
                 len(out["fresh"]), "" if len(out["fresh"]) == 1 else "s", ", ".join("%s as %s" % (f["key"], f["new"]) for f in out["fresh"])))
         if out.get("routed"):
             parts.append("Gave %d unowned task%s to %s to route: %s." % (
@@ -3238,24 +3300,45 @@ def stuck_watch_run(dry_run=False):
         # run: start them fresh a few at a time, whichever agent they are on.
         if not dry_run:
             looked = 0
-            for issue in queued:
-                if fresh_budget <= 0 or looked >= 12:
+            held_pool = list(queued)
+            try:
+                held_pool += [i for i in _list(_pc_get("/api/companies/" + _safe_id(str(cid)) +
+                              "/issues?status=blocked&sortField=updated&sortDir=desc&limit=60"), "issues") if isinstance(i, dict)]
+            except Exception:
+                pass
+            for issue in held_pool:
+                if fresh_budget <= 0 or looked >= 20:
                     break
                 iid = str(issue.get("id") or "")
                 if not iid or str(issue.get("assigneeAgentId") or "") not in usable or iid in live_issue:
                     continue
                 looked += 1
                 hold = _execution_hold(iid)[1]
-                if not hold or hold.get("canRetry") or not _owner_said_go(iid):
+                if not hold or hold.get("canRetry"):
                     continue
                 key = issue.get("identifier") or iid[:8]
                 name = (by_id.get(str(issue.get("assigneeAgentId"))) or {}).get("name") or "agent"
+                title = str(issue.get("title") or "")[:200]
+                nothing = False
+                if not _owner_said_go(iid):
+                    # Proof that the broken run did nothing lets it start again without the owner,
+                    # twice a day per task title at most (a model that keeps hanging is a real fault).
+                    row = con.execute("SELECT attempts FROM stuck_watch WHERE kind='autofresh' AND ref=? AND "
+                                      "last_action_at > ?", (title, (now - datetime.timedelta(hours=24)).isoformat())).fetchone()
+                    again = row[0] if row else 0
+                    if again >= 2 or _run_did_nothing(iid, hold) is not True:
+                        continue
+                    nothing = True
                 fresh_budget -= 1
                 try:
-                    nk = _restart_fresh(iid)
+                    nk = _restart_fresh(iid, head=_NOTHING_HEAD if nothing else None)
                 except Exception:
                     continue
-                out.setdefault("fresh", []).append({"key": key, "new": nk, "agent": name})
+                if nothing:
+                    con.execute("INSERT OR REPLACE INTO stuck_watch(kind, ref, attempts, last_action_at) VALUES('autofresh', ?, "
+                                "coalesce((SELECT attempts FROM stuck_watch WHERE kind='autofresh' AND ref=? AND last_action_at > ?),0)+1, ?)",
+                                (title, title, (now - datetime.timedelta(hours=24)).isoformat(), now.isoformat()))
+                out.setdefault("fresh", []).append({"key": key, "new": nk, "agent": name, "nothing": nothing})
                 con.execute("DELETE FROM stuck_watch WHERE kind='task' AND ref=?", (iid,))
                 _watch_log(con, "started fresh", key, "%s as %s" % (name, nk))
                 candidates = [c for c in candidates if str(c[0].get("id")) != iid]
@@ -6299,6 +6382,85 @@ def t_task_status(a):
     return "\n\n".join(out)
 
 
+def _owner_chatting(minutes=20):
+    """True when the owner has written in Chat in the last few minutes. Chat's task tools are
+    shared with agents running on this box, so actions that speak for the owner check this."""
+    path = os.path.join(HERMES_HOME_RO, "state.db")
+    since = time.time() - minutes * 60
+    for uri in ("file:%s?mode=ro" % path, "file:%s?mode=ro&immutable=1" % path):
+        try:
+            with closing(sqlite3.connect(uri, uri=True, timeout=3)) as con:
+                row = con.execute("SELECT 1 FROM messages m JOIN sessions s ON s.id = m.session_id WHERE "
+                                  "m.role='user' AND m.timestamp > ? AND s.id NOT LIKE 'paperclip:%' AND "
+                                  "coalesce(s.source,'') NOT IN ('api_server','cron') LIMIT 1", (since,)).fetchone()
+            return bool(row)
+        except sqlite3.Error:
+            continue
+    return False
+
+
+def t_manage_task(a):
+    """The owner's hands on a task, through Chat: start it again, give it to someone else, or close it."""
+    key = (a.get("task") or "").strip()
+    act = (a.get("action") or "").strip().lower()
+    note = re.sub(r"\s+", " ", str(a.get("note") or "")).strip()[:1500]
+    if not re.match(r"^[A-Za-z0-9-]{1,80}$", key):
+        raise ToolError("Give the task key exactly as list_tasks shows it, for example ABC-12.")
+    if act not in ("restart", "reassign", "close"):
+        raise ToolError("action must be restart, reassign or close.")
+    if not _owner_chatting():
+        raise ToolError("Only the owner, through Chat, can do this. If you are an agent working a task, use "
+                        "hand_off_task, split_task or complete_task on your own task instead.")
+    try:
+        issue = _pc_get("/api/issues/" + key)
+    except Exception:
+        raise ToolError("Task %s was not found." % key)
+    if not isinstance(issue, dict) or not issue.get("id"):
+        raise ToolError("Task %s was not found." % key)
+    iid = str(issue["id"])
+    if issue.get("status") in ("done", "cancelled") and act != "restart":
+        return "%s is already closed." % key
+    said = "**From the owner, via Chat:** " + (note or "")
+    if act == "close":
+        _pc_send("PATCH", "/api/issues/" + _safe_id(iid), {"status": "cancelled", "comment": said + "\n\nClosed by the owner."},
+                 what="close the task")
+        _ask_close(iid); _DEC_CACHE.clear()
+        return "%s is closed." % key
+    if act == "reassign":
+        cid, agents = _tool_agents()
+        ag = _find_agent(agents, a.get("agent"))
+        if not ag:
+            raise ToolError("No agent called %r. Use list_agents for the names." % a.get("agent"))
+        _pc_send("PATCH", "/api/issues/" + _safe_id(iid), {"assigneeAgentId": str(ag["id"]), "status": "todo",
+                 "comment": said + "\n\nGiven to %s by the owner." % _agent_name(ag)}, what="reassign the task")
+        _ask_close(iid); _DEC_CACHE.clear()
+        res = _wake_task(iid, str(ag["id"]), "The owner gave you this task.")
+        if res == "fresh_needed":
+            nk = _restart_fresh(iid, note)
+            return "%s was held after a broken run, so it was started fresh as %s for %s." % (key, nk, _agent_name(ag))
+        return "%s is now with %s, who has been woken to start it." % (key, _agent_name(ag))
+    # restart
+    aid = str(issue.get("assigneeAgentId") or "")
+    if not aid:
+        raise ToolError("%s has no agent. Use action reassign with an agent name." % key)
+    hold = _execution_hold(iid)[1]
+    if (hold and not hold.get("canRetry")) or issue.get("status") in ("done", "cancelled"):
+        nk = _restart_fresh(iid, note)
+        _DEC_CACHE.clear()
+        return ("%s was held after a broken run, so it was started fresh as %s (the agent reads the old task first "
+                "and skips steps already done). The old one is closed." % (key, nk))
+    _pc_send("PATCH", "/api/issues/" + _safe_id(iid), {"status": "todo", "comment": said + "\n\nPut back to work by "
+             "the owner. Carry on from where the task stands."}, what="put the task back to work")
+    _run_budget_clear(iid, key)
+    _ask_close(iid); _DEC_CACHE.clear()
+    res = _wake_task(iid, aid, "The owner put this task back to work.")
+    if res == "fresh_needed":
+        nk = _restart_fresh(iid, note)
+        return "%s was held after a broken run, so it was started fresh as %s." % (key, nk)
+    return "%s is back to work; its agent has been woken." % key if res == "started" else (
+        "%s is set back to To do; the agent could not be woken just now, and the 10-minute check will retry." % key)
+
+
 def t_request_hiring_review(a):
     _require_bundled()
     need = (a.get("need") or "").strip()
@@ -6355,13 +6517,89 @@ def t_workflow_failures(a):
         lim = max(1, min(int(a.get("limit") or 10), 25))
     except Exception:
         lim = 10
-    ex = (_n8n_send("GET", "/api/v1/executions", {"status": "error", "limit": lim}).get("data")) or []
+    ex = (_n8n_send("GET", "/api/v1/executions", {"status": "error", "limit": max(lim, 25)}).get("data")) or []
     if not ex:
         return "No failed runs."
-    names = {str(w.get("id")): w.get("name") for w in _n8n_all_workflows()}
-    return "\n".join("- run %s | workflow %s (%s) | %s" % (
-        e.get("id"), e.get("workflowId"), names.get(str(e.get("workflowId"))) or "?", e.get("startedAt"))
-        for e in ex)
+    wfs = _n8n_all_workflows()
+    names = {str(w.get("id")): w.get("name") for w in wfs}
+    active = {str(w.get("id")): bool(w.get("active")) for w in wfs}
+    ok_after = {}
+    try:   # the newest successful run of each workflow: a failure before it has already been fixed
+        for e in (_n8n_send("GET", "/api/v1/executions", {"status": "success", "limit": 100}).get("data")) or []:
+            wid, t = str(e.get("workflowId")), _ts(e.get("startedAt"))
+            if t and (wid not in ok_after or t > ok_after[wid]):
+                ok_after[wid] = t
+    except Exception:
+        pass
+    now_failing, fixed = [], {}
+    for e in ex:
+        wid, t = str(e.get("workflowId")), _ts(e.get("startedAt"))
+        if t and ok_after.get(wid) and ok_after[wid] > t:
+            fixed[wid] = fixed.get(wid, 0) + 1
+        else:
+            now_failing.append(e)
+    out = []
+    if now_failing:
+        out.append("STILL FAILING (no successful run since):")
+        out += ["- run %s | workflow %s (%s%s) | %s" % (e.get("id"), e.get("workflowId"),
+                names.get(str(e.get("workflowId"))) or "?", "" if active.get(str(e.get("workflowId"))) else ", switched off",
+                e.get("startedAt")) for e in now_failing[:lim]]
+    else:
+        out.append("Nothing is failing now: every workflow with a recent failure has run successfully since.")
+    if fixed:
+        out.append("ALREADY FIXED (a later run succeeded; nothing to do): " + ", ".join(
+            "%s (%d old failure%s)" % (names.get(w) or w, n, "" if n == 1 else "s") for w, n in fixed.items()))
+    return "\n".join(out)
+
+
+def t_system_health(a):
+    """What is wrong right now, from live data: model runs, held tasks, owner asks, workflows."""
+    out = []
+    cid = _pc_company_id()
+    now = _now()
+    since = now - datetime.timedelta(hours=24)
+    try:
+        agents = {str(x.get("id")): x.get("name") for x in _list(_pc_get("/api/companies/%s/agents" % cid), "agents")
+                  if isinstance(x, dict)}
+        runs = [r for r in _list(_pc_get("/api/companies/%s/heartbeat-runs?limit=400&summary=true" % cid), "runs")
+                if isinstance(r, dict) and (_ts(r.get("createdAt") or r.get("startedAt")) or now) >= since]
+        by = {}
+        for r in runs:
+            by[str(r.get("status"))] = by.get(str(r.get("status")), 0) + 1
+        out.append("AGENT RUNS, last 24 hours: " + (", ".join("%d %s" % (n, k) for k, n in sorted(by.items(), key=lambda x: -x[1]))
+                                                     or "none"))
+        budget = [r for r in runs if "402" in str(r.get("error") or "")]
+        stalled = [r for r in runs if str(r.get("status")) == "cancelled" and "cancelled" in str(r.get("error") or "").lower()
+                   and "reassign" not in str(r.get("error") or "").lower()]
+        if budget:
+            out.append("- %d run%s stopped because a task used its %d tries (the run budget): %s. That task needs "
+                       "a fresh start or splitting, not a retry." % (len(budget), "" if len(budget) == 1 else "s",
+                       RUN_MAX_ATTEMPTS, ", ".join(sorted({agents.get(str(r.get("agentId")), "?") for r in budget}))))
+        if stalled:
+            out.append("- %d run%s broke off with the model call never answering (the assistant stalled and was "
+                       "stopped): %s. Agent OS restarts these on its own when the run took no step." % (
+                       len(stalled), "" if len(stalled) == 1 else "s",
+                       ", ".join(sorted({agents.get(str(r.get("agentId")), "?") for r in stalled}))))
+        ok = by.get("succeeded", 0)
+        if ok:
+            out.append("- The AI model is working: %d runs succeeded. Do not test API keys or read credential "
+                       "files to check it." % ok)
+    except Exception as e:
+        out.append("AGENT RUNS: could not read them (%s)." % _scrub_secrets(str(e))[:120])
+    try:
+        waiting = _list(_pc_get("/api/companies/%s/issues?status=blocked&limit=200" % cid), "issues")
+        held = sum(1 for i in waiting if isinstance(i, dict) and (i.get("executionBlocker") or {}).get("recoveryActionId"))
+        asks = _asks_open()
+        out.append("TASKS: %d waiting (blocked), %d of them on an open question to the owner%s." % (
+            len(waiting), sum(1 for i in waiting if isinstance(i, dict) and str(i.get("id")) in asks),
+            (", %d held after a broken run" % held) if held else ""))
+    except Exception:
+        pass
+    try:
+        out.append("WORKFLOWS: " + t_workflow_failures({"limit": 10}).replace("\n", "\n  "))
+    except Exception as e:
+        out.append("WORKFLOWS: could not read n8n (%s)." % _scrub_secrets(str(e))[:120])
+    return "\n".join(out)
 
 
 def _wf_id(a):
@@ -6437,6 +6675,14 @@ def _wf_redact(obj, secret):
     return obj
 
 
+_N8N_NODE_KEYS = {"id", "name", "type", "typeVersion", "position", "parameters", "credentials", "disabled", "notes",
+                  "notesInFlow", "retryOnFail", "maxTries", "waitBetweenTries", "alwaysOutputData", "executeOnce",
+                  "onError", "continueOnFail", "webhookId"}
+_N8N_SETTING_KEYS = {"executionOrder", "timezone", "saveDataErrorExecution", "saveDataSuccessExecution",
+                     "saveManualExecutions", "saveExecutionProgress", "executionTimeout", "errorWorkflow",
+                     "callerPolicy", "callerIds", "timeSavedPerExecution", "availableInMCP", "binaryMode"}
+
+
 def _wf_body(a):
     name = (a.get("name") or "").strip()
     nodes, conns = a.get("nodes"), a.get("connections")
@@ -6450,8 +6696,28 @@ def _wf_body(a):
         raise ToolError("Too many nodes (max 60). Split this into smaller workflows.")
     if not isinstance(conns, dict):
         raise ToolError("connections must be an n8n connections object (use {} for a single node).")
-    body = {"name": name[:120], "nodes": nodes, "connections": conns,
-            "settings": a.get("settings") if isinstance(a.get("settings"), dict) else {"executionOrder": "v1"}}
+    # n8n refuses a whole workflow over one unknown key on a node; drop keys it does not take.
+    nodes = [{k: v for k, v in n.items() if k in _N8N_NODE_KEYS} for n in nodes]
+    names = [str(n.get("name") or "") for n in nodes]
+    if any(not x for x in names) or len(set(names)) != len(names):
+        raise ToolError("Every node needs a name, and no two nodes may share one.")
+    bad = []
+    for src, outs in conns.items():
+        if src not in names:
+            bad.append("connections start from \"%s\", which is not a node" % src)
+        for kind in (outs or {}).values() if isinstance(outs, dict) else []:
+            for branch in kind or []:
+                for link in branch or []:
+                    tgt = str((link or {}).get("node") or "")
+                    if tgt not in names:
+                        bad.append("\"%s\" connects to \"%s\", which is not a node" % (src, tgt))
+    if bad:
+        raise ToolError("The connections do not match the node names: %s. Node names are exactly: %s. Connection "
+                        "keys and targets must use these names character for character." % (
+                            "; ".join(bad[:5]), ", ".join('"%s"' % x for x in names)))
+    sett = a.get("settings") if isinstance(a.get("settings"), dict) else {}
+    sett = {k: v for k, v in sett.items() if k in _N8N_SETTING_KEYS} or {"executionOrder": "v1"}
+    body = {"name": name[:120], "nodes": nodes, "connections": conns, "settings": sett}
     if len(json.dumps(body, default=str)) > 250000:
         raise ToolError("Workflow is too large.")
     return body
@@ -6470,9 +6736,11 @@ def t_update_workflow(a):
     if _wf_reserved(cur.get("name"), wid):
         raise ToolError(_WF_RESERVED_MSG)
     if cur.get("active"):
-        raise ToolError("That workflow is live, and live workflows cannot be changed from here. Build the "
-                        "fix as a new workflow with create_workflow, then call request_activation and "
-                        "explain that it replaces workflow %s." % wid)
+        raise ToolError("That workflow is live, so it is not changed in place. Build the fix as a copy with "
+                        "create_workflow (same nodes, fixed), then call request_activation with replaces=\"%s\": "
+                        "one approval from the owner switches the fixed copy on and the old one off. Before "
+                        "fixing anything, check workflow_failures: if it says the workflow is already fixed, "
+                        "there is nothing to do." % wid)
     w = _n8n_send("PUT", "/api/v1/workflows/" + wid, _wf_body(a))
     # An approval the owner has not given yet was for the old version. Withdraw it.
     withdrawn = 0
@@ -6496,17 +6764,26 @@ def t_request_activation(a):
     if w.get("active"):
         return "That workflow is already active."
     fp = _wf_fingerprint(w)
+    rep_id = str(a.get("replaces") or "").strip() or None
+    if rep_id:
+        if not re.match(r"^[A-Za-z0-9_-]{1,64}$", rep_id) or rep_id == wid:
+            raise ToolError("replaces must be the id of the live workflow this one takes over from.")
+        old = _n8n_send("GET", "/api/v1/workflows/" + rep_id)
+        if _wf_reserved(old.get("name"), rep_id):
+            raise ToolError(_WF_RESERVED_MSG)
+        summary = ("Replaces the live workflow \"%s\": approving switches this fixed copy on and the old one "
+                   "off. " % (old.get("name") or rep_id)) + summary
     with closing(get_db()) as con:
         row = con.execute("SELECT id FROM workflow_requests WHERE workflow_id=? AND status='pending'",
                           (wid,)).fetchone()
         if row:
-            con.execute("UPDATE workflow_requests SET summary=?, workflow_name=?, fingerprint=? WHERE id=?",
-                        (summary[:2000], w.get("name"), fp, row[0]))
+            con.execute("UPDATE workflow_requests SET summary=?, workflow_name=?, fingerprint=?, replaces=? WHERE id=?",
+                        (summary[:2000], w.get("name"), fp, rep_id, row[0]))
         else:
             con.execute("INSERT INTO workflow_requests(workflow_id, workflow_name, summary, requested_by, "
-                        "status, created_at, fingerprint) VALUES(?,?,?,?,?,?,?)",
+                        "status, created_at, fingerprint, replaces) VALUES(?,?,?,?,?,?,?,?)",
                         (wid, w.get("name"), summary[:2000], (a.get("requested_by") or "")[:80],
-                         "pending", _now().isoformat(), fp))
+                         "pending", _now().isoformat(), fp, rep_id))
         con.commit()
     return ("Activation of '%s' is now waiting for the owner. Tell them: open the Automations tab and "
             "approve or decline it under Waiting for your approval. You cannot activate it yourself."
@@ -7800,6 +8077,62 @@ _HANDOFF_ASK = re.compile(r"\b(hand|pass|give|assign|route|send|move|transfer)\b
                           r"|file (one|a) [^.?]{0,30}task for", re.I)
 _OWNER_ONLY_ASK = re.compile(r"(\$|\bpay|spend|purchase|\bbuy\b|price|contract|password|credential|delete|wipe|"
                              r"security incident|breach|hire|legal|live trad|real money|wallet)", re.I)
+# What only the owner can decide. Anything else an agent decides itself: the owner is the
+# board, and the board delegates running the business. (Workflow activation and hiring have
+# their own approval cards; they do not come through here.)
+_OWNER_DECIDES = re.compile(
+    r"(\$|\bpay|invoice|refund|budget|spend|cost|purchase|\bbuy\b|subscri|price|pricing|quote|discount|contract|"
+    r"\bsign\b|legal|compliance|hire|hiring|\bfire\b|"
+    r"password|credential|\blogin\b|log ?in\b|sign[- ]?in|api key|\bkey\b|token|secret|\b2fa\b|mfa|access to|"
+    r"permission|account|"
+    r"delete|wipe|erase|drop (the|a|table|database)|permanent|irreversib|"
+    r"publish|post (it|this|publicly)|announce|send (it|this|an? (email|message|reply))|email (the|a|our) "
+    r"(client|customer)|reply to (the |a )?(client|customer)|to (the |a |our )?(client|customer)s?\b|outside|public|"
+    r"live trad|real money|wallet|fund|transfer|"
+    r"security incident|breach|compromis|phish|malware|"
+    r"strategy|direction|priorit|business plan|which (client|customer|service|offer|market)|deadline|commit to)",
+    re.I)
+_DECIDE_YOURSELF = ("That is an operating decision, and the owner (the board) has delegated those to the team: "
+                    "decide it yourself. Pick the option that can be undone and fits the business plan (for "
+                    "example build it switched off, draft it, or test it on a copy), write one line on the task "
+                    "saying what you chose and why, and carry on. If you are missing a fact, look it up with "
+                    "your tools or read_task, or ask a colleague with hand_off_task or split_task. Ask the owner "
+                    "only about: ")
+
+
+def _ask_words(text):
+    stop = {"the", "a", "an", "to", "of", "and", "or", "in", "on", "for", "is", "it", "this", "that", "can", "you",
+            "should", "i", "we", "do", "be", "so", "with", "your", "our", "my", "have", "has", "will", "would",
+            "please", "owner", "task", "if", "at", "as", "by", "from", "are", "was", "me", "us", "into", "n8n"}
+    return {w for w in re.findall(r"[a-z0-9@.]{3,}", (text or "").lower()) if w not in stop}
+
+
+_CRED_WORD = re.compile(r"credential|login|log ?in|sign[- ]?in|password|api key|\bkey\b|token|account|app password", re.I)
+
+
+def _setup_subjects(q):
+    """What a setup ask is about: mail addresses, and the words just before 'login', 'credential' and the like
+    ("the support@ IMAP login" -> support@, imap)."""
+    q = q or ""
+    if not _CRED_WORD.search(q):
+        return set()
+    subj = {m.lower().split("@")[0] + "@" for m in re.findall(r"[\w.+-]+@[\w.-]*", q)}
+    for m in _CRED_WORD.finditer(q):
+        before = re.findall(r"[A-Za-z0-9@.'-]{3,}", q[max(0, m.start() - 40):m.start()])[-3:]
+        subj |= {w.lower().strip("'.") for w in before if w.lower() not in ("the", "this", "that", "your", "our",
+                                                                           "for", "and", "new", "add", "set")}
+    return subj
+
+
+def _same_ask(q1, q2):
+    """Two asks the owner would answer with one reply (the same setup step asked by several parts)."""
+    s1, s2 = _setup_subjects(q1), _setup_subjects(q2)
+    if s1 and s2 and s1 & s2:
+        return True
+    a, b = _ask_words(q1), _ask_words(q2)
+    if not a or not b:
+        return False
+    return len(a & b) / float(len(a | b)) >= 0.45
 
 
 def t_need_owner_input(a):
@@ -7822,6 +8155,11 @@ def t_need_owner_input(a):
         raise ToolError("Do not ask the owner whether to pass work to a colleague: do it yourself. Use hand_off_task "
                         "to give this task to the colleague who has the access, or split_task to give them a piece. "
                         "Ask the owner only about: " + _OWNER_ONLY + ".")
+    if not _OWNER_DECIDES.search(q + " " + rec):
+        if re.search(r"\b(activat|turn(ing)? (it |this |the [\w: -]{0,40})?on|switch(ing)? (it |this |the [\w: -]{0,40})?on|go live)", q, re.I):
+            raise ToolError("Switching a workflow on has its own approval: call request_activation with a plain "
+                            "summary (and replaces=<old id> if it takes over from a live workflow). Do not ask here.")
+        raise ToolError(_DECIDE_YOURSELF + _OWNER_ONLY + ".")
     issue = _own_issue(a)
     if issue.get("status") in ("done", "cancelled"):
         return "That task is already closed. Stop here."
@@ -7839,6 +8177,22 @@ def t_need_owner_input(a):
         _DEC_CACHE.clear()
         return ("This task is already waiting on the owner, so the card was updated instead of asking again. "
                 "Stop here; you will be woken when they answer.")
+    # The same question is already in front of the owner from another task (often a sibling
+    # part asking for the same setup step): wait on that task instead of a second card.
+    for oid, o in _asks_open().items():
+        if oid == str(issue["id"]) or not _same_ask(q, o.get("question")):
+            continue
+        try:
+            other = _pc_get("/api/issues/" + _safe_id(oid))
+        except Exception:
+            continue
+        if not isinstance(other, dict) or other.get("status") in ("done", "cancelled"):
+            continue
+        _wait_on(issue, [other], "**Waiting on the owner's answer in %s.** The same question is already in front "
+                 "of the owner there, so it was not asked twice. This task wakes when %s is finished.\n\n"
+                 "**Question:** %s" % (other.get("identifier") or oid[:8], other.get("identifier") or "it", q))
+        return ("The owner has already been asked the same thing on %s, so this task now waits on that one and "
+                "wakes when it is finished. Stop here." % (other.get("identifier") or "another task"))
     _set_issue(issue, "blocked", "**Decision needed from the owner**\n\n**Summary:** %s\n\n**Question:** %s\n\n"
                                  "**Recommendation:** %s" % (summary, q, rec), unblock="Owner to answer: " + q)
     try:
@@ -9405,6 +9759,18 @@ def _schema(props, required=()):
 
 
 _S = {"type": "string"}
+_EXEC_RULES = (" The owner is the board of directors. When they ask you to fix something, fix it in this same "
+               "reply; do not hand them a list of choices. First call system_health: it says what is failing NOW "
+               "and what has already been fixed. Fix only what is still failing, and say in one line what was "
+               "already fixed. Do the reversible work yourself without asking: put held or stopped tasks back to "
+               "work or close dead ones with manage_task, give tasks to the right agent, build or repair workflows "
+               "as switched-off copies, and send "
+               "a fixed copy of a live workflow for approval with request_activation replaces=<old id> (that is "
+               "the owner's one click). Never read .env files, credential stores or keys with the terminal, and "
+               "never test API keys: system_health already says whether the AI model works. Only these need the "
+               "owner: money, adding or changing a password or credential (say exactly which, and where to add "
+               "it), deleting data, anything sent outside the business, and switching a workflow on. End with "
+               "what you changed and the one thing, if any, the owner still has to do.")
 _ROUTING = (" Routing rule for owner requests: answer quick questions yourself; if the work is the same "
             "steps every time on a schedule or trigger (every morning, every week, whenever X happens), "
             "build an n8n workflow, NOT a scheduled job or cron job: a scheduled job runs the AI model on "
@@ -9444,6 +9810,16 @@ MCP_TOOLS = {
     "task_status": (t_task_status, "chat",
         "Latest run status and most recent replies on one task.",
         _schema({"task": {"type": "string", "description": "Task key from list_tasks"}}, ("task",))),
+    "manage_task": (t_manage_task, "chat",
+        "For the owner, through Chat: act on a task. restart = put a stopped, held or waiting task back to work "
+        "(a task held after a broken run is started fresh); reassign = give it to another agent (agent name); "
+        "close = cancel it. Use this when the owner asks you to fix, unstick, move or clear tasks. Works only "
+        "while the owner is chatting.",
+        _schema({"task": {"type": "string", "description": "Task key, e.g. ABC-12"},
+                 "action": {"type": "string", "enum": ["restart", "reassign", "close"]},
+                 "agent": {"type": "string", "description": "For reassign: the agent's name"},
+                 "note": {"type": "string", "description": "Optional instruction from the owner for the agent"}},
+                ("task", "action"))),
     "request_hiring_review": (t_request_hiring_review, "chat",
         "Use when the owner asks for 'someone to handle' an ongoing responsibility (a role, such as "
         "payroll, bookkeeping, support) that no current agent covers. A schedule in the request does "
@@ -9562,8 +9938,14 @@ MCP_TOOLS = {
     "list_workflows": (t_list_workflows, "all",
         "List n8n workflows with id and whether each is active. Check here before building a new one.",
         _schema({})),
-    "workflow_failures": (t_workflow_failures, "all", "Recent failed workflow runs.",
+    "workflow_failures": (t_workflow_failures, "all", "Recent failed workflow runs, split into what is still "
+        "failing now and what has already been fixed (a later run succeeded). Only fix what is still failing.",
         _schema({"limit": {"type": "integer"}})),
+    "system_health": (t_system_health, "all",
+        "What is wrong right now, from live data: whether the AI model is working, runs that broke off or ran "
+        "out of tries, tasks held or waiting on the owner, and workflows still failing (already-fixed failures "
+        "are listed separately). Call this first when asked what is failing or to fix things.",
+        _schema({}, ())),
     "failed_run_detail": (t_failed_run_detail, "all",
         "Which node failed and the error message for one failed run.",
         _schema({"run_id": _S}, ("run_id",))),
@@ -9662,7 +10044,10 @@ MCP_TOOLS = {
         "what the owner reads before approving: what it does, what triggers it, and what it sends or "
         "changes.",
         _schema({"workflow_id": _S, "summary": _S, "requested_by": {"type": "string",
-                 "description": "Your agent name"}}, ("workflow_id", "summary"))),
+                 "description": "Your agent name"},
+                 "replaces": {"type": "string", "description": "Optional: id of a live workflow this fixed copy "
+                              "replaces. Approval switches this one on and that one off."}},
+                ("workflow_id", "summary"))),
 }
 
 
@@ -9702,7 +10087,7 @@ def _mcp_rpc(msg, scope, agent=None):
                                    "that PATH before answering. When it contains [attached file #N "
                                    "\"name\" saved at PATH], call read_chat_file with N. After generate_image, include the image line it gives "
                                    "you so the owner sees the picture."
-                                   + _ROUTING + _STYLE})
+                                   + _EXEC_RULES + _ROUTING + _STYLE})
     if method == "ping":
         return ok({})
     if method == "tools/list":
@@ -10180,7 +10565,7 @@ def workflow_requests(_auth=Depends(require_auth)):
 
 def _decide_request(rid, approve):
     with closing(get_db()) as con:
-        row = con.execute("SELECT workflow_id, status, fingerprint FROM workflow_requests WHERE id=?", (rid,)).fetchone()
+        row = con.execute("SELECT workflow_id, status, fingerprint, replaces FROM workflow_requests WHERE id=?", (rid,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Request not found.")
     if row[1] != "pending":
@@ -10207,6 +10592,11 @@ def _decide_request(rid, approve):
             _n8n_send("POST", "/api/v1/workflows/" + str(row[0]) + "/activate", {})
         except ToolError as e:
             raise HTTPException(status_code=400, detail="n8n could not activate it: " + str(e))
+        if row[3] and re.match(r"^[A-Za-z0-9_-]{1,64}$", str(row[3])):
+            try:     # the fixed copy is on; switch the one it replaces off (kept, not deleted)
+                _n8n_send("POST", "/api/v1/workflows/" + str(row[3]) + "/deactivate", {})
+            except ToolError:
+                pass
     with closing(get_db()) as con:
         con.execute("UPDATE workflow_requests SET status=?, decided_at=? WHERE id=?",
                     ("approved" if approve else "declined", _now().isoformat(), rid))
