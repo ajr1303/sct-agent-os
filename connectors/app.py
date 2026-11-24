@@ -7796,7 +7796,7 @@ def _ask_close(issue_id):
 
 
 _HANDOFF_ASK = re.compile(r"\b(hand|pass|give|assign|route|send|move|transfer)\b[^.?]{0,40}\b(this|it|the (task|audit|work|job|reads?|check))\b"
-                          r"[^.?]{0,30}\bto\b|\b(let|have|ask)\s+(?-i:[A-Z])[a-z]+\s+(do|run|take|handle|post|own)\b"
+                          r"[^.?]{0,30}\bto\b|\b(let|have|having|ask)\s+(?-i:[A-Z])[a-z]+\s+(do|run|take|handle|post|own)\b"
                           r"|file (one|a) [^.?]{0,30}task for", re.I)
 _OWNER_ONLY_ASK = re.compile(r"(\$|\bpay|spend|purchase|\bbuy\b|price|contract|password|credential|delete|wipe|"
                              r"security incident|breach|hire|legal|live trad|real money|wallet)", re.I)
