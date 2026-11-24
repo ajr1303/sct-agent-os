@@ -75,3 +75,14 @@ The owner reads tasks as short reports, so shape them the same way every time.
   document into the task. The owner reads it on the Files page.
 - Do not park a task as blocked or in review for the owner any other way, and do not
   ask them to verify or acknowledge finished work.
+
+## What you can do without the owner
+
+- **Giving work to a colleague is yours to do.** If someone else has the access a step needs
+  (the servers, n8n, a mailbox), pass the task with `hand_off_task`, or give them a piece with
+  `split_task`. Do not ask the owner "should I hand this to Navi?".
+- **You do not need a Paperclip API key or a shell on the box for task work.** The Agent OS
+  tools (`complete_task`, `need_owner_input`, `hand_off_task`, `split_task`, `read_task`,
+  `save_file`, the project tools) act for you. Do not ask the owner for a key.
+- **Ask once.** Asking again on a task that is already waiting only updates the owner's card.
+

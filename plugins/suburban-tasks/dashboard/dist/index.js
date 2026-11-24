@@ -382,6 +382,23 @@
             c.open_in_board && c.key ? h("a", { className: "st-link", href: pcTaskUrl(c.key), target: "_blank", rel: "noopener" }, "Answer on the team board ↗") : null) : null,
           msg ? h("div", { className: "st-card-msg" + (msg.ok ? "" : " st-err") }, msg.text) : null);
       }
+      function cleanup() {
+        if (dBusy) return;
+        setDBusy("cleanup");
+        api("/orchestration/decisions/cleanup", { method: "POST", body: JSON.stringify({ days: 3, dry_run: true }) })
+          .then(function (r) {
+            if (!r.count) { setDBusy(null); setDMsg(Object.assign({}, dMsg, { _cleanup: { ok: true, text: "Nothing has been waiting on you for more than 3 days." } })); return null; }
+            var list = (r.items || []).slice(0, 15).map(function (i) { return "• " + (i.key ? i.key + " " : "") + i.title; }).join("\n");
+            if (!window.confirm("Close " + r.count + " task" + (r.count === 1 ? "" : "s") + " that have waited on you for more than 3 days with no answer?\n\n"
+                + list + (r.count > 15 ? "\n…and " + (r.count - 15) + " more" : "") + "\n\nYou can reopen any of them from its page.")) { setDBusy(null); return null; }
+            return api("/orchestration/decisions/cleanup", { method: "POST", body: JSON.stringify({ days: 3, dry_run: false }) })
+              .then(function (d) {
+                setDBusy(null); setDMsg(Object.assign({}, dMsg, { _cleanup: { ok: true, text: d.message || "Done." } }));
+                return Promise.all([loadDec(), loadList()]);
+              });
+          })
+          .catch(function (e) { setDBusy(null); setDMsg(Object.assign({}, dMsg, { _cleanup: { ok: false, text: String(e.message || e) } })); });
+      }
       function decisionPane() {
         var al = (dec && dec.alerts) || [];
         var done = []; for (var k in dMsg) if (dMsg[k].ok && !cards.some(function (c) { return c.id === k; })) done.push(dMsg[k].text);
@@ -391,7 +408,12 @@
           cards.length === 0
             ? h("div", { className: "st-empty st-clear" }, h("div", { className: "st-clear-h" }, "Nothing needs you right now."),
                 done.length ? done[done.length - 1] + " " : "", "Your team is handling the rest. Anything that needs a decision shows up here with buttons.")
-            : h("div", { className: "st-cards" }, cards.map(function (c) { return card(c, false); })),
+            : h("div", { className: "st-cards" },
+                h("div", { className: "st-cleanup" },
+                  h("button", { type: "button", className: "st-linkbtn", disabled: !!dBusy, onClick: cleanup },
+                    dBusy === "cleanup" ? "Checking…" : "Clear tasks waiting more than 3 days"),
+                  dMsg._cleanup ? h("span", { className: dMsg._cleanup.ok ? "st-done" : "st-err" }, " " + dMsg._cleanup.text) : null),
+                cards.map(function (c) { return card(c, false); })),
           al.length ? h("div", { className: "st-alerts" },
             h("button", { type: "button", className: "st-linkbtn", onClick: function () { setShowAlerts(!showAlerts); } },
               (showAlerts ? "Hide " : "Show ") + al.length + " alert" + (al.length === 1 ? "" : "s") + " (failed runs and agent errors, not decisions)"),
