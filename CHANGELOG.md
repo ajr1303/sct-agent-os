@@ -2,6 +2,22 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.72.0] — 2026-11-24
+
+### Added
+- **Clear tasks waiting more than 3 days.** A link above the Waiting on you
+  cards lists the tasks that have waited on the owner for over three days with
+  no answer, asks once, and closes them. Each can be reopened from its page.
+
+### Fixed
+- **No repeat asks.** An agent asking again on a task that is already waiting
+  on the owner now updates the card instead of posting the same question again
+  (agents were asking two or three times within a minute).
+- **Agents pass work on themselves.** need_owner_input refuses "should I hand
+  this to Navi?" and points the agent to hand_off_task or split_task. The tool
+  notes and the writing-to-the-owner skill now say agents never need a
+  Paperclip API key for task work.
+
 ## [0.71.0] — 2026-11-23
 
 ### Fixed

@@ -5395,6 +5395,66 @@ def decisions_get(_auth=Depends(require_auth)):
         raise HTTPException(status_code=502, detail="Could not read what is waiting: " + _scrub_secrets(str(e))[:140])
 
 
+class DecisionCleanup(BaseModel):
+    days: int = 3
+    dry_run: bool = True
+
+
+_OWNER_MARKS = ("**Reply from the owner:**", "**Owner decision", "Note from the owner:")
+
+
+def _owner_answered_since(issue_id, since):
+    """True when the owner replied or pressed a button on this task after `since`."""
+    try:
+        for c in _list(_pc_get("/api/issues/" + _safe_id(str(issue_id)) + "/recent-comments"), "comments")[:20]:
+            t = _ts((c or {}).get("createdAt"))
+            body = str((c or {}).get("body") or "")
+            if t and t >= since and any(m in body[:400] for m in _OWNER_MARKS):
+                return True
+    except Exception:
+        return True      # unsure: keep it
+    return False
+
+
+@app.post("/orchestration/decisions/cleanup")
+def decisions_cleanup(b: DecisionCleanup, _auth=Depends(require_auth)):
+    """Close tasks that have waited on the owner for days with no answer. Dry run first: the
+    dashboard shows the list and asks before closing. A closed task can be reopened."""
+    _task_writable()
+    days = max(1, min(int(b.days or 3), 60))
+    since = _now() - datetime.timedelta(days=days)
+    data = _decisions(fresh=True)
+    picked = []
+    for c in data["decisions"]:
+        typ, rid, _sub = c.get("ref") or ("", "", "")
+        if typ != "issue" or not rid:
+            continue
+        try:
+            issue = _pc_get("/api/issues/" + _safe_id(str(rid)))
+        except Exception:
+            continue
+        made = _ts((issue or {}).get("createdAt"))
+        if not made or made > since or _owner_answered_since(rid, since):
+            continue
+        picked.append({"id": str(rid), "key": c.get("key") or "", "title": _clip(c.get("title") or issue.get("title") or "", 90)})
+    if b.dry_run:
+        return {"ok": True, "days": days, "count": len(picked), "items": picked[:60]}
+    closed = 0
+    for it in picked[:100]:
+        try:
+            _pc_send("PATCH", "/api/issues/" + _safe_id(it["id"]),
+                     {"status": "cancelled", "comment": "**Closed by the owner's clean-up.** This task had been waiting on "
+                      "the owner for more than %d days with no answer. If it is still needed, reopen it or start a new "
+                      "task; do not restart it on your own." % days}, what="close the task")
+            _ask_close(it["id"])
+            closed += 1
+        except Exception:
+            pass
+    _DEC_CACHE.clear()
+    return {"ok": True, "days": days, "count": closed,
+            "message": "Closed %d old task%s. You can reopen any of them from its page." % (closed, "" if closed == 1 else "s")}
+
+
 class DecisionAct(BaseModel):
     id: str
     action: str
@@ -7735,6 +7795,13 @@ def _ask_close(issue_id):
         pass
 
 
+_HANDOFF_ASK = re.compile(r"\b(hand|pass|give|assign|route|send|move|transfer)\b[^.?]{0,40}\b(this|it|the (task|audit|work|job|reads?|check))\b"
+                          r"[^.?]{0,30}\bto\b|\b(let|have|having|ask)\s+(?-i:[A-Z])[a-z]+\s+(do|run|take|handle|post|own)\b"
+                          r"|file (one|a) [^.?]{0,30}task for", re.I)
+_OWNER_ONLY_ASK = re.compile(r"(\$|\bpay|spend|purchase|\bbuy\b|price|contract|password|credential|delete|wipe|"
+                             r"security incident|breach|hire|legal|live trad|real money|wallet)", re.I)
+
+
 def t_need_owner_input(a):
     q = (a.get("question") or "").strip()
     summary = (a.get("summary") or "").strip()
@@ -7751,10 +7818,27 @@ def t_need_owner_input(a):
                         "without asking. If the work is done, post your result on the task and call "
                         "complete_task; it goes into the owner's daily summary. Ask the owner only about: "
                         + _OWNER_ONLY + ".")
+    if _HANDOFF_ASK.search(q) and not _OWNER_ONLY_ASK.search(q):
+        raise ToolError("Do not ask the owner whether to pass work to a colleague: do it yourself. Use hand_off_task "
+                        "to give this task to the colleague who has the access, or split_task to give them a piece. "
+                        "Ask the owner only about: " + _OWNER_ONLY + ".")
     issue = _own_issue(a)
     if issue.get("status") in ("done", "cancelled"):
         return "That task is already closed. Stop here."
     summary, q, rec = summary[:1200], q[:600], rec[:600]
+    prev = _asks_open().get(str(issue["id"]))
+    if prev and issue.get("status") == "blocked":
+        # Already waiting on the owner: update the card, do not post the same ask again.
+        try:
+            with closing(_asks_db()) as con:
+                con.execute("UPDATE owner_asks SET summary=?, question=?, recommendation=? WHERE issue_id=?",
+                            (summary, q, rec, str(issue["id"])))
+                con.commit()
+        except Exception:
+            pass
+        _DEC_CACHE.clear()
+        return ("This task is already waiting on the owner, so the card was updated instead of asking again. "
+                "Stop here; you will be woken when they answer.")
     _set_issue(issue, "blocked", "**Decision needed from the owner**\n\n**Summary:** %s\n\n**Question:** %s\n\n"
                                  "**Recommendation:** %s" % (summary, q, rec), unblock="Owner to answer: " + q)
     try:
@@ -9437,7 +9521,10 @@ MCP_TOOLS = {
         "owner. That means: " + _OWNER_ONLY + ". It is not for 'please verify', 'please confirm' or 'ok "
         "to close?': finished routine work is closed with complete_task. The owner decides from a short "
         "card with Approve, Decline and Tell me more buttons, so give a plain summary, one yes-or-no "
-        "question and what you recommend. Marks the task as waiting on them.",
+        "question and what you recommend. Marks the task as waiting on them. Ask once: asking again on "
+        "the same task only updates the card. Do not ask whether to give work to a colleague; use "
+        "hand_off_task or split_task yourself. You never need a Paperclip API key for task work: these "
+        "tools act for you.",
         _schema({"task": _S, "agent_id": _S,
                  "summary": {"type": "string", "description": "2 to 4 plain sentences: what this is about and what you found. No jargon, ids or paths."},
                  "question": {"type": "string", "description": "One question the owner can answer yes or no."},
@@ -9682,7 +9769,8 @@ _REMOTE_HELP = ("Task tools for an agent working an assigned task: split_task wh
                 "one run, complete_task when it is finished, hand_off_task to pass it to a colleague, "
                 "need_owner_input when only the owner can decide, list_agents for colleagues' names. You "
                 "are identified by your Paperclip API key, so you never give an agent id. They only work "
-                "on tasks assigned to you.")
+                "on tasks assigned to you. To give work to a colleague, use hand_off_task or split_task yourself "
+                "rather than asking the owner.")
 REMOTE_TOOL_CALLS_PER_MIN = 60
 _remote_lock = threading.Lock()
 _remote_ids = {}      # sha256(key) -> (agent, expires)
