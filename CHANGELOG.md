@@ -2,6 +2,29 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.74.0] — 2026-11-24
+
+### Added
+- **Connections page: connect a business app once, for everyone.** 22 apps
+  businesses use most: Notion, Slack, GitHub, Airtable, HubSpot, Stripe,
+  Trello, Asana, ClickUp, Linear, Jira, Todoist, monday.com, Shopify,
+  WooCommerce, WordPress, Mailchimp, Calendly, Zendesk, Freshdesk, Pipedrive
+  and Cloudflare. Each card says where to get the key, checks it with the app
+  before saving, stores it encrypted, and never shows it again.
+  - Every agent and Chat can use a connected app straight away, on this box or
+    on another machine: connected_apps lists what is connected and what can be
+    done, app_action runs a named action, app_get reads anything else (GET
+    only). No profile files, no restarts.
+  - The same login is saved in n8n ("<App> (Agent OS)") so workflows can pick
+    it; disconnecting removes it there too.
+  - The owner chooses read only or read and write per app. Writes are kept
+    inside the business (a task, a note, a draft, an internal comment); Stripe,
+    Shopify, WooCommerce, Mailchimp, Calendly and Cloudflare are read only, and
+    WordPress posts are saved as drafts.
+  - Every call is logged under Recent use, with who made it.
+  - Google Workspace, Microsoft 365, QuickBooks, Xero, Salesforce, Dropbox and
+    Zoom are listed as coming with one-click sign-in.
+
 ## [0.72.0] — 2026-11-24
 
 ### Added

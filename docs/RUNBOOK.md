@@ -1447,3 +1447,13 @@ When it does, the agent's runs fail until `claude auth login` is run again.
 **Not supported yet:** agents that run on the main server. Hermes there lives in a
 container without Claude Code.
 
+## Connecting business apps
+
+Open **Connections**, pick the app, follow the three steps on its card and paste the key.
+Agent OS checks the key with the app before saving it. From then on every agent and Chat can
+use it (tools `connected_apps`, `app_action`, `app_get`), and n8n has the same login as
+"<App> (Agent OS)". Use **Make read only** to stop agents changing anything in that app, and
+**Recent use** to see who did what. To add an app, add an entry to
+`connectors/business_apps.py` (fields, how requests are signed, a test call, the actions, and
+the n8n credential type).
+

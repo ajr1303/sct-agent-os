@@ -42,6 +42,8 @@ from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
+import business_apps as BA
+
 DB_PATH = os.environ.get("CONNECTORS_DB", "/data/connectors.db")
 HERMES_AUTH_URL = os.environ.get("HERMES_AUTH_URL", "http://hermes:9119/api/auth/me")
 _KEY = os.environ.get("CONNECTORS_KEY")
@@ -171,6 +173,29 @@ def get_db():
     # changed afterwards cannot be switched on under the old approval.
     if "fingerprint" not in [c[1] for c in con.execute("PRAGMA table_info(workflow_requests)").fetchall()]:
         con.execute("ALTER TABLE workflow_requests ADD COLUMN fingerprint TEXT")
+    # Business apps connected on the Connections page (Notion, Slack, HubSpot...). One row
+    # per app; the login is encrypted. access is "read" or "write" (read and write).
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS business_apps (
+            app          TEXT PRIMARY KEY,
+            secret       BLOB NOT NULL,
+            access       TEXT NOT NULL DEFAULT 'write',
+            connected_as TEXT,
+            n8n_id       TEXT,
+            n8n_note     TEXT,
+            created_at   TEXT NOT NULL,
+            updated_at   TEXT NOT NULL,
+            last_used_at TEXT
+        )
+    """)
+    # Every call an agent or Chat makes to a connected app, for the owner to look over.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS app_calls (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            at TEXT NOT NULL, app TEXT NOT NULL, action TEXT NOT NULL,
+            write INTEGER NOT NULL, who TEXT, ok INTEGER NOT NULL, note TEXT
+        )
+    """)
     # Free-form facts about the business every agent can read (name, services, tone).
     con.execute("""
         CREATE TABLE IF NOT EXISTS business_profile (
@@ -6299,6 +6324,268 @@ def t_task_status(a):
     return "\n\n".join(out)
 
 
+# --- Business apps (Connections page) ----------------------------------------
+class AppConnect(BaseModel):
+    fields: dict = {}
+    access: str = "write"
+
+
+class AppAccess(BaseModel):
+    access: str
+
+
+def _app_row(app_id):
+    with closing(get_db()) as con:
+        r = con.execute("SELECT secret, access, connected_as, n8n_id, n8n_note, updated_at, last_used_at "
+                        "FROM business_apps WHERE app=?", (app_id,)).fetchone()
+    if not r:
+        return None
+    return {"fields": json.loads(fernet.decrypt(r[0]).decode()), "access": r[1], "connected_as": r[2],
+            "n8n_id": r[3], "n8n_note": r[4], "updated_at": r[5], "last_used_at": r[6]}
+
+
+def _app_known(app_id):
+    if app_id not in BA.CATALOG:
+        raise HTTPException(status_code=404, detail="Unknown app.")
+
+
+def _app_n8n_sync(app_id, fields, old_id=None):
+    """Save the same login in n8n so workflows can pick it. Returns (credential id, note)."""
+    if not _n8n_conn():
+        return old_id, "n8n is not connected yet, so the login was not added there."
+    ctype, data = BA.n8n_credential(app_id, fields)
+    name = "%s (Agent OS)" % BA.CATALOG[app_id]["label"]
+    if old_id:
+        try:
+            _n8n_send("PATCH", "/api/v1/credentials/" + _safe_id(str(old_id)), {"name": name, "type": ctype, "data": data})
+            return old_id, "Updated in n8n as \"%s\"." % name
+        except ToolError:
+            try:
+                _n8n_send("DELETE", "/api/v1/credentials/" + _safe_id(str(old_id)))
+            except ToolError:
+                pass
+    try:
+        r = _n8n_send("POST", "/api/v1/credentials", {"name": name, "type": ctype, "data": data})
+    except ToolError as e:
+        return None, "Could not add it to n8n: %s" % BA._scrub(str(e), BA.secrets_of(app_id, fields))[:300]
+    note = "Saved in n8n as \"%s\"." % name
+    if old_id:
+        note += " Workflows that used the old login need it picked again."
+    return (str(r.get("id")) if isinstance(r, dict) and r.get("id") else None), note
+
+
+def _apps_view():
+    with closing(get_db()) as con:
+        rows = {r[0]: r for r in con.execute("SELECT app, access, connected_as, n8n_id, n8n_note, updated_at, "
+                                             "last_used_at FROM business_apps").fetchall()}
+        calls = con.execute("SELECT at, app, action, write, who, ok, note FROM app_calls ORDER BY id DESC LIMIT 40").fetchall()
+    apps = []
+    for a in BA.public_catalog():
+        r = rows.get(a["id"])
+        a["connected"] = bool(r)
+        if r:
+            a.update({"access": r[1], "connected_as": r[2], "in_n8n": bool(r[3]), "n8n_note": r[4],
+                      "updated_at": r[5], "last_used_at": r[6]})
+        apps.append(a)
+    return {"apps": apps, "coming": BA.COMING, "n8n_connected": bool(_n8n_conn()),
+            "activity": [{"at": c[0], "app": c[1], "action": c[2], "write": bool(c[3]), "who": c[4], "ok": bool(c[5]),
+                          "note": c[6]} for c in calls]}
+
+
+@app.get("/apps")
+def apps_list(_auth=Depends(require_auth)):
+    return _apps_view()
+
+
+@app.post("/apps/{app_id}/connect")
+def apps_connect(app_id: str, b: AppConnect, _auth=Depends(require_auth)):
+    _app_known(app_id)
+    try:
+        fields = BA.clean_fields(app_id, b.fields)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    old = _app_row(app_id)
+    if old:   # a blank secret field on reconnect keeps the stored one
+        for f in BA.CATALOG[app_id]["fields"]:
+            if f.get("secret") and not str((b.fields or {}).get(f["key"]) or "").strip():
+                fields[f["key"]] = old["fields"].get(f["key"], "")
+    try:
+        who = BA.test(app_id, fields)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="That login did not work: " +
+                            BA._scrub(str(e), BA.secrets_of(app_id, fields))[:300])
+    access = "read" if b.access == "read" or BA.CATALOG[app_id].get("read_only") else "write"
+    n8n_id, note = _app_n8n_sync(app_id, fields, old and old.get("n8n_id"))
+    now = _now().isoformat()
+    with closing(get_db()) as con:
+        con.execute("INSERT INTO business_apps(app, secret, access, connected_as, n8n_id, n8n_note, created_at, updated_at) "
+                    "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(app) DO UPDATE SET secret=excluded.secret, access=excluded.access, "
+                    "connected_as=excluded.connected_as, n8n_id=excluded.n8n_id, n8n_note=excluded.n8n_note, "
+                    "updated_at=excluded.updated_at",
+                    (app_id, fernet.encrypt(json.dumps(fields).encode()), access, who, n8n_id, note, now, now))
+        con.commit()
+    v = _apps_view()
+    v["message"] = "%s is connected (%s). Every agent and Chat can use it now. %s" % (BA.CATALOG[app_id]["label"], who, note)
+    return v
+
+
+@app.post("/apps/{app_id}/access")
+def apps_access(app_id: str, b: AppAccess, _auth=Depends(require_auth)):
+    _app_known(app_id)
+    if b.access not in ("read", "write"):
+        raise HTTPException(status_code=400, detail="access must be read or write.")
+    if b.access == "write" and BA.CATALOG[app_id].get("read_only"):
+        raise HTTPException(status_code=400, detail="This app is read only in Agent OS.")
+    with closing(get_db()) as con:
+        n = con.execute("UPDATE business_apps SET access=?, updated_at=? WHERE app=?", (b.access, _now().isoformat(), app_id)).rowcount
+        con.commit()
+    if not n:
+        raise HTTPException(status_code=404, detail="That app is not connected.")
+    return _apps_view()
+
+
+@app.post("/apps/{app_id}/test")
+def apps_test(app_id: str, _auth=Depends(require_auth)):
+    _app_known(app_id)
+    row = _app_row(app_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="That app is not connected.")
+    try:
+        who = BA.test(app_id, row["fields"])
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="The login no longer works: " +
+                            BA._scrub(str(e), BA.secrets_of(app_id, row["fields"]))[:300] + ". Connect it again.")
+    with closing(get_db()) as con:
+        con.execute("UPDATE business_apps SET connected_as=? WHERE app=?", (who, app_id))
+        con.commit()
+    v = _apps_view()
+    v["message"] = "%s works (%s)." % (BA.CATALOG[app_id]["label"], who)
+    return v
+
+
+@app.delete("/apps/{app_id}")
+def apps_disconnect(app_id: str, _auth=Depends(require_auth)):
+    _app_known(app_id)
+    row = _app_row(app_id)
+    note = ""
+    if row and row.get("n8n_id") and _n8n_conn():
+        try:
+            _n8n_send("DELETE", "/api/v1/credentials/" + _safe_id(str(row["n8n_id"])))
+            note = " Its n8n login was removed too."
+        except ToolError:
+            note = " Its n8n login could not be removed; delete \"%s (Agent OS)\" in n8n." % BA.CATALOG[app_id]["label"]
+    with closing(get_db()) as con:
+        con.execute("DELETE FROM business_apps WHERE app=?", (app_id,))
+        con.commit()
+    v = _apps_view()
+    v["message"] = "%s is disconnected.%s" % (BA.CATALOG[app_id]["label"], note)
+    return v
+
+
+def _app_log(app_id, action, write, who, ok, note=""):
+    try:
+        with closing(get_db()) as con:
+            con.execute("INSERT INTO app_calls(at, app, action, write, who, ok, note) VALUES(?,?,?,?,?,?,?)",
+                        (_now().isoformat(), app_id, action, 1 if write else 0, (who or "")[:80], 1 if ok else 0, (note or "")[:300]))
+            if ok:
+                con.execute("UPDATE business_apps SET last_used_at=? WHERE app=?", (_now().isoformat(), app_id))
+            con.execute("DELETE FROM app_calls WHERE id < (SELECT max(id) - 2000 FROM app_calls)")
+            con.commit()
+    except Exception:
+        pass
+
+
+def _app_caller(a):
+    aid = str(a.get("agent_id") or "")
+    if aid:
+        try:
+            _cid, agents = _tool_agents()
+            return next((_agent_name(x) for x in agents if str(x.get("id")) == aid), aid[:8])
+        except Exception:
+            return aid[:8]
+    return "Chat or an agent on this box"
+
+
+def _app_pick(a):
+    app_id = str(a.get("app") or "").strip().lower().replace(".com", "").replace(" ", "")
+    if app_id not in BA.CATALOG:
+        raise ToolError("Unknown app %r. Call connected_apps to see what is connected." % a.get("app"))
+    row = _app_row(app_id)
+    if not row:
+        raise ToolError("%s is not connected. Tell the owner they can connect it on the Connections page (one "
+                        "login, then every agent can use it)." % BA.CATALOG[app_id]["label"])
+    return app_id, row
+
+
+def t_connected_apps(a):
+    with closing(get_db()) as con:
+        rows = {r[0]: r[1] for r in con.execute("SELECT app, access FROM business_apps").fetchall()}
+    if not rows:
+        return ("No business apps are connected yet. The owner connects them on the Connections page (Notion, Slack, "
+                "HubSpot, Airtable, Jira, Shopify and more).")
+    want = str(a.get("app") or "").strip().lower()
+    out = []
+    for app_id, access in rows.items():
+        if app_id not in BA.CATALOG or (want and want != app_id):
+            continue
+        c = BA.CATALOG[app_id]
+        out.append("%s (app: %s) - %s" % (c["label"], app_id, "read and write" if access == "write" else "read only"))
+        for n, x in c["actions"].items():
+            if x["write"] and access != "write":
+                continue
+            ps = ", ".join(k.rstrip("?") + (" (optional)" if k.endswith("?") else "") + ": " + v for k, v in x["params"].items())
+            out.append("  - %s%s: %s%s" % (n, " [changes data]" if x["write"] else "", x["desc"], (" Params: " + ps) if ps else ""))
+    others = [c["label"] for k, c in BA.CATALOG.items() if k not in rows]
+    out.append("Not connected (the owner can add them on the Connections page): " + ", ".join(others))
+    out.append("Run an action with app_action; read anything else from an app's API with app_get.")
+    return "\n".join(out)
+
+
+def t_app_action(a):
+    app_id, row = _app_pick(a)
+    action = str(a.get("action") or "").strip()
+    params = a.get("params") or {}
+    if isinstance(params, str):
+        try:
+            params = json.loads(params)
+        except Exception:
+            raise ToolError("params must be an object, for example {\"query\": \"invoices\"}.")
+    if not isinstance(params, dict):
+        raise ToolError("params must be an object.")
+    spec = BA.CATALOG[app_id]["actions"].get(action)
+    who = _app_caller(a)
+    try:
+        data = BA.run(app_id, row["fields"], action, params, row["access"] == "write")
+    except (ValueError, PermissionError) as e:
+        _app_log(app_id, action, bool(spec and spec["write"]), who, False, str(e))
+        raise ToolError(str(e))
+    except Exception as e:
+        msg = BA._scrub(str(e), BA.secrets_of(app_id, row["fields"]))
+        _app_log(app_id, action, bool(spec and spec["write"]), who, False, msg)
+        raise ToolError(msg[:500])
+    _app_log(app_id, action, spec["write"], who, True)
+    return BA.trim(data)
+
+
+def t_app_get(a):
+    app_id, row = _app_pick(a)
+    path = str(a.get("path") or "").strip()
+    if not path.startswith("/") or ".." in path or "://" in path or "?" in path or "#" in path or len(path) > 300:
+        raise ToolError("path is the part after the app's API address, starting with / (put the query in query).")
+    q = a.get("query") or {}
+    if not isinstance(q, dict):
+        raise ToolError("query must be an object.")
+    who = _app_caller(a)
+    try:
+        data = BA._send(app_id, row["fields"], "GET", path, query={k: str(v) for k, v in q.items()})
+    except Exception as e:
+        msg = BA._scrub(str(e), BA.secrets_of(app_id, row["fields"]))
+        _app_log(app_id, "GET " + path, False, who, False, msg)
+        raise ToolError(msg[:500])
+    _app_log(app_id, "GET " + path, False, who, True)
+    return BA.trim(data)
+
+
 def t_request_hiring_review(a):
     _require_bundled()
     need = (a.get("need") or "").strip()
@@ -9564,6 +9851,22 @@ MCP_TOOLS = {
         _schema({})),
     "workflow_failures": (t_workflow_failures, "all", "Recent failed workflow runs.",
         _schema({"limit": {"type": "integer"}})),
+    "connected_apps": (t_connected_apps, "all",
+        "The business apps the owner has connected (Notion, Slack, HubSpot, Airtable, Jira, Shopify...) and what "
+        "you can do in each. Call this first when work involves one of them.",
+        _schema({"app": {"type": "string", "description": "Optional: one app id, e.g. notion"}}, ())),
+    "app_action": (t_app_action, "all",
+        "Run a named action in a connected app, e.g. app notion, action search, params {\"query\": \"pricing\"}. "
+        "connected_apps lists the actions and their params. Actions marked [changes data] are only there when the "
+        "owner allowed writing.",
+        _schema({"app": {"type": "string"}, "action": {"type": "string"},
+                 "params": {"type": "object", "description": "The action's params"},
+                 "agent_id": {"type": "string", "description": "Your agent id, if you have one"}}, ("app", "action"))),
+    "app_get": (t_app_get, "all",
+        "Read anything else from a connected app's own API (GET only), e.g. app github, path /repos/acme/site/pulls.",
+        _schema({"app": {"type": "string"}, "path": {"type": "string", "description": "Starts with /"},
+                 "query": {"type": "object", "description": "Query parameters"},
+                 "agent_id": {"type": "string"}}, ("app", "path"))),
     "failed_run_detail": (t_failed_run_detail, "all",
         "Which node failed and the error message for one failed run.",
         _schema({"run_id": _S}, ("run_id",))),
@@ -9764,7 +10067,7 @@ async def mcp_agent(request: Request):
 _REMOTE_TOOL_NAMES = ("list_agents", "complete_task", "need_owner_input", "split_task", "hand_off_task", "post_idea",
                       "get_business_plan", "update_business_plan", "save_file", "read_task", "wait_for_tasks",
                       "list_projects", "get_project", "read_project_file", "search_project", "create_project",
-                      "save_project_note")
+                      "save_project_note", "connected_apps", "app_action", "app_get")
 _REMOTE_HELP = ("Task tools for an agent working an assigned task: split_task when the job will not fit in "
                 "one run, complete_task when it is finished, hand_off_task to pass it to a colleague, "
                 "need_owner_input when only the owner can decide, list_agents for colleagues' names. You "
