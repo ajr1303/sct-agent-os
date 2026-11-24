@@ -1,0 +1,10 @@
+{
+  "name": "suburban-connections",
+  "label": "Connections",
+  "description": "Connect business apps (Notion, Slack, HubSpot, Jira, Shopify and more) once for every agent and n8n",
+  "icon": "Plug",
+  "version": "0.1.0",
+  "tab": { "path": "/connections" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css"
+}
