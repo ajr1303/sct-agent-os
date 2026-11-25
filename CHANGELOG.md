@@ -9,6 +9,18 @@ All notable changes to Suburban Cyber Agent OS. Dates are UTC.
   because the page only loads the 60 newest finished tasks. The tab now reads
   "N this week", and the Done view says how many were finished today (in the
   owner's own time zone) and in the last 7 days, and that it lists the newest.
+- **Starting a task fresh no longer cancels it.** The team board hands back
+  the open task with the same title from the last 48 hours instead of making a
+  new one, so since v0.73.0 a fresh start often cancelled the very task it meant
+  to replace (56 tasks on 24-25 November). Fresh starts now ask the board for a
+  new task explicitly and stop, leaving the old one alone, if it does not make
+  one. The next 10-minute check brings the lost tasks back once, as new tasks,
+  except routine runs that come round again (daily standups, watches, the
+  daily idea, the evening update) and titles that already have an open task.
+- **Today's idea arrives again.** The idea task was one of those cancelled, so
+  the card stayed empty for two days. The idea now follows its task when it is
+  started fresh, and when the morning's request breaks off it is asked for once
+  more automatically.
 
 ## [0.75.0] — 2026-11-24
 
