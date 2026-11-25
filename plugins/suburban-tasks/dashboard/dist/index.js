@@ -282,10 +282,22 @@
         }));
       }
 
+      function doneNote() {
+        var dc = list && list.done_counts;
+        if (!dc || filter !== "done") return null;
+        var start = new Date(); start.setHours(0, 0, 0, 0);
+        var today = (dc.times || []).filter(function (t) { return new Date(t) >= start; }).length;
+        var shown = countFor("done");
+        return h("div", { className: "st-done-note", role: "status" },
+          today + " finished today and " + dc.week + " in the last 7 days." +
+          (dc.week > shown ? " Showing the newest " + shown + "." : ""));
+      }
+
       function filters() {
         var opts = [["attn", "Needs you"], ["working", "Working"], ["team", "With the team"], ["done", "Done"], ["all", "All"]];
         return h("div", { className: "st-filters" }, opts.map(function (o) {
           var n = o[0] === "attn" && cards ? cards.length : countFor(o[0]);
+          if (o[0] === "done" && list && list.done_counts) n = list.done_counts.week + " this week";
           return h("button", { key: o[0], className: "st-filt" + (filter === o[0] ? " on" : ""),
             onClick: function () { setFilter(o[0]); } }, o[1], o[0] !== "all" && list ? h("span", { className: "st-count" }, n) : null);
         }));
@@ -426,7 +438,7 @@
 
       function listPane() {
         return h("div", { className: "st-listpane" },
-          filters(),
+          filters(), doneNote(),
           filter === "attn" && cards ? null : bulkBar(),
           filter === "attn" && cards && up !== false && list && list.connected !== false ? decisionPane()
           : up === false ? h("div", { className: "st-empty" }, "Team management is starting. Tasks will appear once it's up.")

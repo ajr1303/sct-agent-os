@@ -5838,8 +5838,23 @@ def list_tasks(agent: str = "", _auth=Depends(require_auth)):
     for t in tasks:
         if str(t.get("status") or "").lower() in ("blocked", "in_review"):
             t["waiting_on"] = "owner" if (need is None or t["id"] in need) else "team"
+    # How much was really finished: the list only carries the newest 60 done tasks. The
+    # page counts "today" in the owner's own time zone from these finish times.
+    done_counts = None
+    try:
+        week_ago = _now() - datetime.timedelta(days=7)
+        times = []
+        for i in _rows("?status=done&sortField=updated&sortDir=desc&limit=1000"):
+            if not isinstance(i, dict) or (agent and i.get("assigneeAgentId") != agent):
+                continue
+            t = _ts(i.get("completedAt") or i.get("updatedAt"))
+            if t and t >= week_ago:
+                times.append(t.isoformat())
+        done_counts = {"week": len(times), "times": times}
+    except Exception:
+        pass
     return {"paperclip_up": True, "company_id": cid, "company_slug": slug, "tasks": tasks,
-            "sorted": need is not None}
+            "sorted": need is not None, "done_counts": done_counts}
 
 
 @app.get("/orchestration/tasks/{key}")

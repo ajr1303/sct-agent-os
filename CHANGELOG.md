@@ -2,6 +2,14 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.76.0] — 2026-11-25
+
+### Fixed
+- **The Done tab shows how much was really finished.** It used to stop at 60,
+  because the page only loads the 60 newest finished tasks. The tab now reads
+  "N this week", and the Done view says how many were finished today (in the
+  owner's own time zone) and in the last 7 days, and that it lists the newest.
+
 ## [0.75.0] — 2026-11-24
 
 ### Added
