@@ -173,6 +173,14 @@ def get_db():
     # changed afterwards cannot be switched on under the old approval.
     if "fingerprint" not in [c[1] for c in con.execute("PRAGMA table_info(workflow_requests)").fetchall()]:
         con.execute("ALTER TABLE workflow_requests ADD COLUMN fingerprint TEXT")
+    # A copy of every workflow the owner archived or deleted from Chat, so nothing is lost.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS workflow_backups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workflow_id TEXT NOT NULL, name TEXT, action TEXT NOT NULL,
+            body TEXT NOT NULL, at TEXT NOT NULL
+        )
+    """)
     # Business apps connected on the Connections page (Notion, Slack, HubSpot...). One row
     # per app; the login is encrypted. access is "read" or "write" (read and write).
     con.execute("""
@@ -6797,6 +6805,104 @@ def t_list_workflows(a):
         for w in wfs)
 
 
+def _wf_backup(w, action):
+    keep = {k: w.get(k) for k in ("name", "nodes", "connections", "settings", "staticData") if w.get(k) is not None}
+    with closing(get_db()) as con:
+        con.execute("INSERT INTO workflow_backups(workflow_id, name, action, body, at) VALUES(?,?,?,?,?)",
+                    (str(w.get("id")), (w.get("name") or "")[:200], action, json.dumps(keep, default=str), _now().isoformat()))
+        con.execute("DELETE FROM workflow_backups WHERE id < (SELECT max(id) - 3000 FROM workflow_backups)")
+        con.commit()
+
+
+def _wf_archive(wid, w):
+    """Switch it off if needed, then archive it (n8n's soft delete). Older n8n has no archive:
+    then it is switched off and renamed [Archived] instead."""
+    if w.get("active"):
+        _n8n_send("POST", "/api/v1/workflows/" + wid + "/deactivate", {})
+    try:
+        _n8n_send("POST", "/api/v1/workflows/" + wid + "/archive", {})
+        return "archived"
+    except ToolError as e:
+        if not re.search(r"404|405|not found|cannot post", str(e), re.I):
+            raise
+    name = w.get("name") or "Workflow"
+    if not name.startswith("[Archived] "):
+        body = {"name": ("[Archived] " + name)[:120], "nodes": w.get("nodes") or [], "connections": w.get("connections") or {},
+                "settings": {k: v for k, v in (w.get("settings") or {}).items() if k in _N8N_SETTING_KEYS} or {"executionOrder": "v1"}}
+        _n8n_send("PUT", "/api/v1/workflows/" + wid, body)
+    return "switched off and renamed [Archived] (this n8n has no archive)"
+
+
+def t_manage_workflows(a):
+    """The owner, through Chat: archive, unarchive, delete or restore workflows."""
+    act = str(a.get("action") or "").strip().lower()
+    if act not in ("archive", "unarchive", "delete", "restore"):
+        raise ToolError("action must be archive, unarchive, delete or restore.")
+    if not _owner_chatting():
+        raise ToolError("Only the owner, through Chat, can archive or delete workflows.")
+    ids = a.get("workflow_ids") or []
+    if isinstance(ids, str):
+        ids = [x.strip() for x in ids.split(",")]
+    ids = [str(x).strip() for x in ids if str(x).strip()][:60]
+    if not ids:
+        raise ToolError("Give workflow_ids (from list_workflows).")
+    if act == "restore":
+        out = []
+        for bid in ids:
+            with closing(get_db()) as con:
+                r = con.execute("SELECT workflow_id, name, body FROM workflow_backups WHERE workflow_id=? AND action='delete' "
+                                "ORDER BY id DESC LIMIT 1", (bid,)).fetchone()
+            if not r:
+                out.append("- %s: no deleted copy saved" % bid)
+                continue
+            body = json.loads(r[2])
+            body.pop("staticData", None)
+            body["settings"] = {k: v for k, v in (body.get("settings") or {}).items() if k in _N8N_SETTING_KEYS} or {"executionOrder": "v1"}
+            new = _n8n_send("POST", "/api/v1/workflows", body)
+            out.append("- %s restored, switched off, as id %s" % (r[1], new.get("id")))
+        return "\n".join(out)
+    if act == "delete" and a.get("confirm_permanent") is not True:
+        raise ToolError("Deleting is permanent in n8n. First list the workflows you will delete for the owner and get "
+                        "their yes in this chat, then call again with confirm_permanent true. (Archiving is reversible "
+                        "and needs no confirmation.) A copy of each is kept in Agent OS and can be put back with "
+                        "action restore.")
+    done, skipped = [], []
+    for wid in ids:
+        if not re.match(r"^[A-Za-z0-9_-]{1,64}$", wid):
+            skipped.append("%s: not a workflow id" % wid)
+            continue
+        try:
+            w = _n8n_send("GET", "/api/v1/workflows/" + wid)
+        except ToolError:
+            skipped.append("%s: not found" % wid)
+            continue
+        name = w.get("name") or wid
+        if _wf_reserved(name, wid):
+            skipped.append("%s (%s): built into Agent OS, left alone" % (name, wid))
+            continue
+        try:
+            if act == "unarchive":
+                _n8n_send("POST", "/api/v1/workflows/" + wid + "/unarchive", {})
+                done.append("%s: unarchived (still switched off)" % name)
+                continue
+            _wf_backup(w, act)
+            was_on = bool(w.get("active"))
+            how = _wf_archive(wid, w)
+            if act == "delete":
+                _n8n_send("DELETE", "/api/v1/workflows/" + wid)
+                how = "deleted (a copy is kept; restore with action restore and id %s)" % wid
+            done.append("%s (%s): %s%s" % (name, wid, how, " - it was switched on and is now off" if was_on else ""))
+        except ToolError as e:
+            hint = (" (the n8n API key Agent OS uses is missing the workflow delete permission: make a new key "
+                    "with full access in n8n Settings > n8n API and save it on the Automations page)"
+                    if re.search(r"\b403\b|forbidden|scope", str(e), re.I) else "")
+            skipped.append("%s (%s): n8n refused: %s%s" % (name, wid, str(e)[:160], hint))
+    out = ["Done:"] + ["- " + x for x in done] if done else ["Nothing was changed."]
+    if skipped:
+        out += ["Skipped:"] + ["- " + x for x in skipped]
+    return "\n".join(out)
+
+
 def t_workflow_failures(a):
     try:
         lim = max(1, min(int(a.get("limit") or 10), 25))
@@ -10048,7 +10154,8 @@ _EXEC_RULES = (" The owner is the board of directors. When they ask you to fix s
                "reply; do not hand them a list of choices. First call system_health: it says what is failing NOW "
                "and what has already been fixed. Fix only what is still failing, and say in one line what was "
                "already fixed. Do the reversible work yourself without asking: put held or stopped tasks back to "
-               "work or close dead ones with manage_task, give tasks to the right agent, build or repair workflows "
+               "work or close dead ones with manage_task, archive or delete workflows the owner names with "
+               "manage_workflows (archive straight away; delete only after the owner's yes), give tasks to the right agent, build or repair workflows "
                "as switched-off copies, and send "
                "a fixed copy of a live workflow for approval with request_activation replaces=<old id> (that is "
                "the owner's one click). Never read .env files, credential stores or keys with the terminal, and "
@@ -10220,6 +10327,15 @@ MCP_TOOLS = {
     "get_business_profile": (t_get_business_profile, "all",
         "The business's name and what the owner has said about it (services, hours, tone, contact). "
         "Use it instead of placeholders such as [Company Name].", _schema({})),
+    "manage_workflows": (t_manage_workflows, "chat",
+        "For the owner, through Chat: archive (reversible; switches it off first), unarchive, delete (permanent; "
+        "needs the owner's yes in this chat, then confirm_permanent true) or restore (puts a deleted one back, "
+        "switched off) n8n workflows, up to 60 at a time. A copy of each is kept before it is archived or deleted. "
+        "Built-in 'Agent OS:' workflows are never touched. Works only while the owner is chatting.",
+        _schema({"action": {"type": "string", "enum": ["archive", "unarchive", "delete", "restore"]},
+                 "workflow_ids": {"type": "array", "items": {"type": "string"}, "description": "Ids from list_workflows"},
+                 "confirm_permanent": {"type": "boolean", "description": "Only for delete, after the owner said yes"}},
+                ("action", "workflow_ids"))),
     "list_workflows": (t_list_workflows, "all",
         "List n8n workflows with id and whether each is active. Check here before building a new one.",
         _schema({})),
