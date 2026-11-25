@@ -2,6 +2,19 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.75.0] — 2026-11-24
+
+### Added
+- **Archive and delete workflows from Chat.** New manage_workflows tool: the
+  owner can say "archive these test workflows" and Chat does it, up to 60 at a
+  time. Archiving is n8n's soft delete and switches a live workflow off first;
+  unarchive brings it back. Deleting is permanent in n8n, so Chat lists what it
+  will delete and waits for the owner's yes. Agent OS keeps a copy of every
+  workflow before archiving or deleting it, and restore puts a deleted one back
+  (switched off). Built-in "Agent OS:" workflows are never touched, and it
+  works only while the owner is chatting. On an n8n without archive, the
+  workflow is switched off and renamed "[Archived] ...".
+
 ## [0.74.0] — 2026-11-24
 
 ### Added
