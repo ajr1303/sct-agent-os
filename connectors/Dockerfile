@@ -6,7 +6,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # age + rclone: encrypt backups and copy them to cloud storage (backup_tool.py), so the
 # host needs nothing beyond Docker.
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends openssh-client age rclone ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY app.py business_apps.py mcp_config.py store_agent_models.py backup_tool.py agent_templates.json ./
+COPY app.py business_apps.py clients.py mcp_config.py store_agent_models.py backup_tool.py agent_templates.json ./
 # Scripts a computer downloads to report its resources and backups to My devices.
 COPY reporter ./reporter
 ENV CONNECTORS_DB=/data/connectors.db

@@ -44,6 +44,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 import business_apps as BA
+import clients as CLIENTS
 
 DB_PATH = os.environ.get("CONNECTORS_DB", "/data/connectors.db")
 HERMES_AUTH_URL = os.environ.get("HERMES_AUTH_URL", "http://hermes:9119/api/auth/me")
@@ -7512,6 +7513,64 @@ def t_my_devices(a):
     return BA.trim(out)
 
 
+# --- Clients ---------------------------------------------------------------------------
+# One record per business the owner looks after (connectors/clients.py): contact, plan,
+# notes, documents and which of the devices above are theirs.
+CL = CLIENTS.mount(app, get_db, require_auth, _now, lambda: _devices_rows(), lambda: _computers())
+
+
+def _client_pick(a):
+    want = str(a.get("client") or "").strip()
+    if not want:
+        raise ToolError("Say which client, by name.")
+    hits = CL["find"](want)
+    if not hits:
+        raise ToolError("No client matches %r. Call client_info with no client to list them." % want[:60])
+    if len(hits) > 1:
+        raise ToolError("More than one client matches: %s. Use the full name." % ", ".join(h[1] for h in hits[:8]))
+    return hits[0][0]
+
+
+def t_client_info(a):
+    """The owner's clients, or one client's whole record."""
+    try:
+        if not str(a.get("client") or "").strip():
+            rows = CL["listing"]()["clients"]
+            if not rows:
+                raise ToolError("There are no clients yet. The owner adds them on the Clients page.")
+            return BA.trim({"clients": [{k: c[k] for k in ("name", "status", "plan", "contact_name", "equipment", "trouble")}
+                                        for c in rows]})
+        c = CL["detail"](_client_pick(a))
+    except HTTPException as e:
+        raise ToolError(str(e.detail))
+    return BA.trim({
+        "name": c["name"], "status": c["status"],
+        "contact": {k: c["contact_" + k] for k in ("name", "email", "phone") if c["contact_" + k]},
+        "address": c["address"], "website": c["website"],
+        "plan": {"name": c["plan"], "price": c["plan_price"], "renews": c["plan_renews"], "details": c["plan_details"]},
+        "about": c["about"],
+        "network_gear": [{k: g[k] for k in ("name", "model", "ip", "state", "firmware", "update_waiting")} for g in c["gear"]],
+        "computers": [{k: x[k] for k in ("name", "os_name", "host", "reporting", "last_seen", "problems")} for x in c["computers"]],
+        "other_equipment": [{k: e[k] for k in ("name", "kind", "detail")} for e in c["equipment"]],
+        "notes": [{"at": n["created_at"], "by": n["added_by"], "text": n["text"]} for n in c["notes"][:30]],
+        "documents": [d["name"] for d in c["docs"]],
+        "offboarding_done": [s["title"] for s in c["offboard"] if s["done_at"]]})
+
+
+def t_add_client_note(a):
+    text = str(a.get("text") or "").strip()
+    if not text:
+        raise ToolError("text is the note to keep.")
+    if len(text) > 8000:
+        raise ToolError("That note is too long. Keep it under 8000 characters.")
+    cid = _client_pick(a)
+    try:
+        CL["add_note"](cid, re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", text), str(a.get("saved_by") or "An agent"))
+    except HTTPException as e:
+        raise ToolError(str(e.detail))
+    return {"ok": True, "note": "Saved on the client's record."}
+
+
 def t_app_get(a):
     app_id, row = _app_pick(a)
     path = str(a.get("path") or "").strip()
@@ -11236,6 +11295,18 @@ MCP_TOOLS = {
                  "needs_update": {"type": "boolean", "description": "Only gear with a firmware update waiting"},
                  "problems_only": {"type": "boolean", "description": "Only computers with a problem and gear that is not online"},
                  "agent_id": {"type": "string"}}, ())),
+    "client_info": (t_client_info, "all",
+        "The owner's clients (the Clients page). With no client: the list, with plan, equipment count and how "
+        "many of their devices need a look. With a client name: that client's contact, plan, notes, document "
+        "names and their equipment (network gear, reporting computers with their problems, anything typed in by "
+        "hand). Use it whenever a task names a client, before touching anything of theirs.",
+        _schema({"client": {"type": "string", "description": "Client name or part of it; leave out to list them"},
+                 "agent_id": {"type": "string"}}, ())),
+    "add_client_note": (t_add_client_note, "all",
+        "Add a dated note to a client's record: what you did for them, what you found, what was agreed. "
+        "Never put passwords, keys or codes in a note.",
+        _schema({"client": _S, "text": _S, "saved_by": {"type": "string", "description": "Your agent name"},
+                 "agent_id": {"type": "string"}}, ("client", "text"))),
     "app_get": (t_app_get, "all",
         "Read anything else from a connected app's own API (GET only), e.g. app github, path /repos/acme/site/pulls.",
         _schema({"app": {"type": "string"}, "path": {"type": "string", "description": "Starts with /"},
@@ -11449,7 +11520,8 @@ async def mcp_agent(request: Request):
 _REMOTE_TOOL_NAMES = ("list_agents", "complete_task", "need_owner_input", "split_task", "hand_off_task", "post_idea",
                       "get_business_plan", "update_business_plan", "save_file", "read_task", "wait_for_tasks",
                       "list_projects", "get_project", "read_project_file", "search_project", "create_project",
-                      "save_project_note", "connected_apps", "app_action", "app_get", "propose_action", "my_devices")
+                      "save_project_note", "connected_apps", "app_action", "app_get", "propose_action", "my_devices",
+                      "client_info", "add_client_note")
 _REMOTE_HELP = ("Task tools for an agent working an assigned task: split_task when the job will not fit in "
                 "one run, complete_task when it is finished, hand_off_task to pass it to a colleague, "
                 "need_owner_input when only the owner can decide, list_agents for colleagues' names. You "

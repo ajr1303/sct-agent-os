@@ -1457,6 +1457,27 @@ use it (tools `connected_apps`, `app_action`, `app_get`), and n8n has the same l
 `connectors/business_apps.py` (fields, how requests are signed, a test call, the actions, and
 the n8n credential type).
 
+## Clients
+
+The **Clients** tab (`plugins/suburban-clients`) keeps one record per business you look
+after. The routes and tables are in `connectors/clients.py`, added to the service by
+`CLIENTS.mount(...)` in `connectors/app.py`; it reads the device and computer lists My
+devices already holds and never calls a device or changes a connection.
+
+- `clients`: contact, plan, notes about the client, status (`active` / `archived`) and the
+  ticked "If they leave" steps (JSON in `offboard`).
+- `client_links`: what belongs to whom. `kind` is `site` (ref `<source>:<site_id>`),
+  `device` (ref `<source>:<ext_id>`) or `computer` (ref is the `computers` row id). One
+  owner per row; a device linked by itself wins over the site it sits in. Links whose
+  device has left My devices are listed under "No longer on My devices" to clear.
+- `client_equipment`, `client_notes`, `client_docs` + `client_doc_blobs`: hand-typed
+  equipment, the notes log, and uploaded files (20 MB a file, 200 a client, 1 GB in all).
+
+Archiving a client only changes its status. Deleting one removes its record, notes, files
+and links; devices stay on My devices. Agents read a client with `client_info` and add to
+its notes log with `add_client_note`. Client records are in connectors.db, so the normal
+backup covers them. Passwords do not belong in notes or equipment details.
+
 ## My devices
 
 The **My devices** tab (`plugins/suburban-devices`) is where UniFi is connected and where

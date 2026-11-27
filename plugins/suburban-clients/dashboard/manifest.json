@@ -1,0 +1,10 @@
+{
+  "name": "suburban-clients",
+  "label": "Clients",
+  "description": "Each business you look after: contact, plan, equipment, notes and documents in one place",
+  "icon": "FolderOpen",
+  "version": "0.1.0",
+  "tab": { "path": "/clients" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css"
+}

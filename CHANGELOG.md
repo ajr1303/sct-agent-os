@@ -2,6 +2,34 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.78.0] — 2026-11-27
+
+### Added
+- **Clients: a new tab for the businesses you look after.** Each client has one
+  record with its contact, the plan it is on (name, price, renewal date, what
+  it covers), free notes about the client, a dated notes log and uploaded
+  documents (contracts, diagrams, quotes; up to 20 MB each, always served as a
+  download). Under Equipment you link what My devices already knows: a whole
+  network site (gear added to it later is theirs too), single pieces of network
+  gear, and computers that report in, each shown with its live state and
+  problems. Things nothing scans in can be added by hand. A device or computer
+  belongs to one client; linking it elsewhere asks first, then moves it. The
+  list shows how many of each client's devices need a look.
+- **"If they leave" checklist.** Most of an IT provider's access lives on the
+  client's own systems, so the page lists what to remove there (console
+  account, API keys, remote access, reporters, handover, billing) to tick off,
+  then **Archive client** keeps the record and changes nothing on their side.
+  Delete removes the record, notes and documents; devices stay on My devices.
+- **Agents know your clients.** `client_info` lists clients or returns one
+  client's record with its equipment and notes; `add_client_note` writes what
+  an agent did to the client's notes log.
+
+### Notes
+- Additive: new tables only (`clients`, `client_links`, `client_equipment`,
+  `client_notes`, `client_docs`, `client_doc_blobs`) in connectors.db, in the
+  new `connectors/clients.py`. How apps are connected is unchanged; a UniFi
+  login per client comes in a later release.
+
 ## [0.77.0] — 2026-11-26
 
 ### Added
