@@ -2971,13 +2971,25 @@ def _restart_fresh(issue_id, extra="", head=None):
     if extra:
         desc += "\n\n**From the owner:** " + extra[:1500]
     desc += "\n\n---\n\n" + str(old.get("description") or "")[:9000]
+    # allowDuplicate: the board otherwise hands back the open task with the same title from the
+    # last 48 hours - the very task being replaced - and cancelling it would lose the work.
     body = {"title": str(old.get("title") or "Task")[:200], "description": desc[:12000], "status": "todo",
-            "priority": old.get("priority") if old.get("priority") in ("low", "medium", "high", "urgent") else "medium"}
+            "priority": old.get("priority") if old.get("priority") in ("low", "medium", "high", "urgent") else "medium",
+            "allowDuplicate": True}
     for k in ("assigneeAgentId", "projectId", "parentId", "goalId"):
         if old.get(k):
             body[k] = old[k]
     new = _pc_send("POST", "/api/companies/" + _safe_id(str(cid)) + "/issues", body, what="start the task fresh")
-    nk = (new or {}).get("identifier") or (new or {}).get("id") or "a new task"
+    if not isinstance(new, dict) or not new.get("id") or str(new.get("id")) == str(old["id"]):
+        raise HTTPException(status_code=502, detail="The team board did not make a new task, so the old one was left as it was.")
+    nk = new.get("identifier") or new.get("id")
+    try:   # a daily idea follows its task, so the card still gets the answer
+        with closing(_ideas_db()) as con:
+            con.execute("UPDATE ideas SET issue_id=?, issue_key=? WHERE issue_id=? OR (issue_key=? AND issue_key<>'')",
+                        (str(new["id"]), str(nk), str(old["id"]), str(key)))
+            con.commit()
+    except Exception:
+        pass
     try:
         _pc_send("PATCH", "/api/issues/" + _safe_id(str(old["id"])),
                  {"status": "cancelled", "comment": ("Started again as %s: its last run broke off before taking any "
@@ -2995,6 +3007,68 @@ _OWNER_GO = ("**Owner decision: put this back to work.**", "**Reply from the own
 _FRESH_NOTE = ("**Needs a fresh start.** This task stopped part way through its last run, so the team board will "
                "not run it again by itself (a step may already have happened). It is waiting for the owner to start "
                "it fresh or close it.")
+
+
+_ROUTINE_TITLE = re.compile(r"(today's idea|evening update for|daily standup|vulnerability watch|subnet sweep|^scan\s*[—-]|"
+                            r"daily |weekly |\b20\d\d-\d\d-\d\d\b)", re.I)
+
+
+def _repair_lost_restarts(cid, limit=60):
+    """Before the fix above, a fresh start could cancel the task it meant to replace and make no
+    new one. Bring those back once: a new task for each, except routine runs that come round
+    again anyway and titles that already have an open task."""
+    if _kv_get("lost_restart_repair_v1"):
+        return []
+    _kv_set("lost_restart_repair_v1", _now().isoformat())
+    out = []
+    try:
+        gone = _list(_pc_get("/api/companies/%s/issues?status=cancelled&sortField=updated&sortDir=desc&limit=300" % _safe_id(str(cid))), "issues")
+        open_titles = set()
+        for st in ("todo", "in_progress", "blocked", "in_review"):
+            for i in _list(_pc_get("/api/companies/%s/issues?status=%s&limit=300" % (_safe_id(str(cid)), st)), "issues"):
+                if isinstance(i, dict):
+                    open_titles.add(re.sub(r"\s+", " ", str(i.get("title") or "")).strip().lower())
+    except Exception:
+        return out
+    since = _now() - datetime.timedelta(days=4)
+    for i in gone:
+        if len(out) >= limit or not isinstance(i, dict) or (_ts(i.get("updatedAt")) or since) < since:
+            continue
+        key = str(i.get("identifier") or "")
+        title = re.sub(r"\s+", " ", str(i.get("title") or "")).strip()
+        if not key or not i.get("assigneeAgentId") or _ROUTINE_TITLE.search(title) or title.lower() in open_titles:
+            continue
+        try:
+            cm = _list(_pc_get("/api/issues/" + _safe_id(str(i["id"])) + "/recent-comments"), "comments")
+        except Exception:
+            continue
+        lost = any(re.match(r"^(Started again|Restarted fresh) as %s\b" % re.escape(key), str((c or {}).get("body") or ""))
+                   for c in cm[:6])
+        if not lost:
+            continue
+        try:
+            desc = ("**Brought back.** %s was cancelled by mistake: Agent OS tried to start it fresh and the team board "
+                    "handed back the same task instead of a new one. Read it with read_task %s and carry on from where "
+                    "it stands.\n\n---\n\n%s" % (key, key, str(i.get("description") or "")[:9000]))
+            body = {"title": title[:200], "description": desc[:12000], "status": "todo", "allowDuplicate": True,
+                    "priority": i.get("priority") if i.get("priority") in ("low", "medium", "high", "urgent") else "medium"}
+            for k in ("assigneeAgentId", "projectId", "parentId", "goalId"):
+                if i.get(k):
+                    body[k] = i[k]
+            new = _pc_send("POST", "/api/companies/%s/issues" % _safe_id(str(cid)), body, what="bring the task back")
+            nk = new.get("identifier") or new.get("id")
+            if str(new.get("id")) == str(i["id"]):
+                continue
+            open_titles.add(title.lower())
+            try:
+                _pc_send("POST", "/api/issues/" + _safe_id(str(i["id"])) + "/comments",
+                         {"body": "Brought back as %s (the earlier fresh start had failed)." % nk}, what="note it")
+            except Exception:
+                pass
+            out.append({"key": key, "new": nk})
+        except Exception:
+            continue
+    return out
 
 
 def _owner_said_go(issue_id):
@@ -3136,6 +3210,9 @@ def stuck_watch_run(dry_run=False):
             parts.append("Retried the connection for: " + ", ".join(out["retried"]) + ".")
         if out["restarted"]:
             parts.append("Restarted the gateway for: " + ", ".join(out["restarted"]) + ".")
+        if out.get("restored"):
+            parts.append("Brought back %d task%s that an earlier fresh start had cancelled by mistake." % (
+                len(out["restored"]), "" if len(out["restored"]) == 1 else "s"))
         if out.get("fresh"):
             parts.append("Started %d held task%s again (the owner had put it back to work, or its run broke off "
                          "before taking any step): %s." % (
@@ -3329,6 +3406,12 @@ def stuck_watch_run(dry_run=False):
             con.execute("DELETE FROM stuck_watch WHERE kind='task' AND ref=?", (iid,))
 
         fresh_budget = 3
+        if not dry_run:
+            con.commit()          # the repair writes through its own connection
+            back = _repair_lost_restarts(cid)
+            if back:
+                out["restored"] = back
+                _watch_log(con, "brought back", ", ".join(b["key"] for b in back[:20]), "%d tasks" % len(back))
         # Tasks the owner already sent back to work, held by the board after a broken
         # run: start them fresh a few at a time, whichever agent they are on.
         if not dry_run:
@@ -5838,8 +5921,23 @@ def list_tasks(agent: str = "", _auth=Depends(require_auth)):
     for t in tasks:
         if str(t.get("status") or "").lower() in ("blocked", "in_review"):
             t["waiting_on"] = "owner" if (need is None or t["id"] in need) else "team"
+    # How much was really finished: the list only carries the newest 60 done tasks. The
+    # page counts "today" in the owner's own time zone from these finish times.
+    done_counts = None
+    try:
+        week_ago = _now() - datetime.timedelta(days=7)
+        times = []
+        for i in _rows("?status=done&sortField=updated&sortDir=desc&limit=1000"):
+            if not isinstance(i, dict) or (agent and i.get("assigneeAgentId") != agent):
+                continue
+            t = _ts(i.get("completedAt") or i.get("updatedAt"))
+            if t and t >= week_ago:
+                times.append(t.isoformat())
+        done_counts = {"week": len(times), "times": times}
+    except Exception:
+        pass
     return {"paperclip_up": True, "company_id": cid, "company_slug": slug, "tasks": tasks,
-            "sorted": need is not None}
+            "sorted": need is not None, "done_counts": done_counts}
 
 
 @app.get("/orchestration/tasks/{key}")
@@ -7416,6 +7514,13 @@ def _idea_tick():
         return
     day = local.strftime("%Y-%m-%d")
     if _kv_get("idea_asked_day") == day:
+        # One automatic second try when the morning's request broke off (the card would
+        # otherwise sit empty until the owner pressed for another idea).
+        _idea_public()                       # marks a request older than the wait as failed
+        rows = _idea_rows(day)
+        if rows and all(r["status"] == "failed" for r in rows) and len(rows) < 2 and _kv_get("idea_retry_day") != day:
+            _kv_set("idea_retry_day", day)
+            _idea_request(manual=True)
         return
     _kv_set("idea_asked_day", day)
     if not _idea_rows(day):

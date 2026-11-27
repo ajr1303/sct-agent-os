@@ -214,3 +214,4 @@
 .st-bmore{align-self:flex-start;margin:2px 4px}
 .st-bdetail{scroll-margin-top:12px}
 .st-cleanup{display:flex;justify-content:flex-end;align-items:center;gap:6px;font-size:13px}
+.st-done-note{font-size:13px;opacity:.75;margin:-4px 0 4px}
