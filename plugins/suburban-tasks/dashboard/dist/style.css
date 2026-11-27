@@ -215,3 +215,5 @@
 .st-bdetail{scroll-margin-top:12px}
 .st-cleanup{display:flex;justify-content:flex-end;align-items:center;gap:6px;font-size:13px}
 .st-done-note{font-size:13px;opacity:.75;margin:-4px 0 4px}
+.st-group{display:flex;flex-direction:column;gap:10px}
+.st-group-list{display:flex;flex-direction:column;gap:10px;margin-left:14px;padding-left:12px;border-left:1px solid var(--color-border,rgba(255,255,255,.12))}

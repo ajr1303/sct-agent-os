@@ -3047,14 +3047,29 @@ _ROUTINE_TITLE = re.compile(r"(today's idea|evening update for|daily standup|vul
                             r"daily |weekly |\b20\d\d-\d\d-\d\d\b)", re.I)
 
 
-def _repair_lost_restarts(cid, limit=60):
+REPAIR_PER_PASS = 5          # brought back in one pass of the watch
+REPAIR_WINDOW_HOURS = 12     # how long the repair keeps looking before it calls itself done
+
+
+def _repair_lost_restarts(cid, limit=REPAIR_PER_PASS, skip_agents=()):
     """Before the fix above, a fresh start could cancel the task it meant to replace and make no
-    new one. Bring those back once: a new task for each, except routine runs that come round
-    again anyway and titles that already have an open task."""
-    if _kv_get("lost_restart_repair_v1"):
+    new one. Bring those back: a new task for each, except routine runs that come round
+    again anyway and titles that already have an open task.
+
+    A few each pass, never all at once: dozens of tasks handed to one agent in the same
+    minute are refused by its gateway, and each refusal lands on the owner. It runs until a
+    pass finds nothing left (or REPAIR_WINDOW_HOURS have gone by), and leaves alone the
+    tasks of an agent that cannot work right now."""
+    mark = _kv_get("lost_restart_repair_v1") or ""
+    if mark and not mark.startswith("running "):
+        return []                # done (also every install that ran the one-shot version)
+    began = _ts(mark[8:]) if mark else None
+    if began and _now() - began > datetime.timedelta(hours=REPAIR_WINDOW_HOURS):
+        _kv_set("lost_restart_repair_v1", _now().isoformat())
         return []
-    _kv_set("lost_restart_repair_v1", _now().isoformat())
-    out = []
+    if not mark:
+        _kv_set("lost_restart_repair_v1", "running " + _now().isoformat())
+    out, waiting = [], False
     try:
         gone = _list(_pc_get("/api/companies/%s/issues?status=cancelled&sortField=updated&sortDir=desc&limit=300" % _safe_id(str(cid))), "issues")
         open_titles = set()
@@ -3066,20 +3081,25 @@ def _repair_lost_restarts(cid, limit=60):
         return out
     since = _now() - datetime.timedelta(days=4)
     for i in gone:
-        if len(out) >= limit or not isinstance(i, dict) or (_ts(i.get("updatedAt")) or since) < since:
+        if len(out) >= limit:
+            break
+        if not isinstance(i, dict) or (_ts(i.get("updatedAt")) or since) < since:
             continue
         key = str(i.get("identifier") or "")
         title = re.sub(r"\s+", " ", str(i.get("title") or "")).strip()
         if not key or not i.get("assigneeAgentId") or _ROUTINE_TITLE.search(title) or title.lower() in open_titles:
             continue
+        if str(i.get("assigneeAgentId")) in skip_agents:
+            waiting = True       # its agent cannot work right now: look again on a later pass
+            continue
         try:
             cm = _list(_pc_get("/api/issues/" + _safe_id(str(i["id"])) + "/recent-comments"), "comments")
         except Exception:
             continue
-        lost = any(re.match(r"^(Started again|Restarted fresh) as %s\b" % re.escape(key), str((c or {}).get("body") or ""))
-                   for c in cm[:6])
-        if not lost:
-            continue
+        bodies = [str((c or {}).get("body") or "") for c in cm[:6]]
+        lost = any(re.match(r"^(Started again|Restarted fresh) as %s\b" % re.escape(key), b) for b in bodies)
+        if not lost or any(b.startswith("Brought back as ") for b in bodies):
+            continue             # not one of these, or already brought back once
         try:
             desc = ("**Brought back.** %s was cancelled by mistake: Agent OS tried to start it fresh and the team board "
                     "handed back the same task instead of a new one. Read it with read_task %s and carry on from where "
@@ -3102,6 +3122,8 @@ def _repair_lost_restarts(cid, limit=60):
             out.append({"key": key, "new": nk})
         except Exception:
             continue
+    if len(out) < limit and not waiting:
+        _kv_set("lost_restart_repair_v1", _now().isoformat())      # nothing left: done
     return out
 
 
@@ -3164,7 +3186,7 @@ def _restart_gateway(entry):
 ERR_MAX_CLEARS = 3
 ERR_WAIT_MIN = (0, 20, 60)     # minutes before the 1st, 2nd and 3rd automatic retry
 _ERR_CAUSES = (
-    ("credit", r"insufficient|out of (credit|credits|quota|balance)|payment required|\b402\b|billing|exceeded your current quota",
+    ("credit", r"insufficient|credit balance|balance is too low|out of (credit|credits|quota|balance)|payment required|\b402\b|billing|exceeded your current quota",
      "its AI plan or credit has run out",
      "Top up with the provider, or move the agent to another provider under Agents > Change model.", True),
     ("auth", r"\b401\b|unauthori[sz]ed|invalid[ _-]?(api[ _-]?)?key|incorrect api key|authentication|token (has )?expired|\b403\b|forbidden",
@@ -3217,6 +3239,241 @@ def _agent_health():
         return {}
 
 
+# --- Agents that cannot work at all -------------------------------------------------------
+# The error handling above only sees an agent the board has marked "error". An agent whose
+# AI call hangs is cut off by its own watchdog instead: the run ends "cancelled", the agent
+# stays "idle", and the board holds the task for the owner. With the model out of credit
+# that is every task the agent has, one card each. So the watch also looks at the runs
+# themselves: several in a row with none finishing means the agent is down, not its tasks.
+# A down agent gets one card for the owner, its stopped tasks wait without cards, the watch
+# stops restarting them, and it tries the agent again now and then until a run finishes.
+DOWN_MIN_STREAK = 3              # failed runs in a row, on at least two tasks ...
+DOWN_ONE_TASK_STREAK = 5         # ... or this many on one task
+DOWN_PROBE_WAIT_MIN = (30, 60, 120, 240)   # minutes before the 1st, 2nd, 3rd and later tries
+DOWN_STALE_DAYS = 7
+_DOWN_SILENT = ("silent", "its AI stopped answering, so every run was cut off",
+                "Check its model and sign-in under Agents > Change model, and its plan under Usage. "
+                "Then press Try it now.")
+_LOG_TS = re.compile(r"^(\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d)")
+_LOG_HINT = re.compile(r"credit|balance|quota|billing|payment|\b40[123]\b|\b429\b|\b529\b|unauthori|api[ _-]?key|expired|"
+                       r"rate.?limit|overloaded|usage limit|budget", re.I)
+_LOG_CAUSES = ("credit", "auth", "budget", "limit")    # what a log line is trusted to tell us
+
+
+def _agents_down():
+    try:
+        d = json.loads(_kv_get("agent_down") or "{}")
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _down_streaks(runs, now):
+    """Per agent: how many of its latest finished runs failed in a row, and whether that
+    makes the agent (not one task) the problem."""
+    per = {}
+    for r in runs:
+        if not isinstance(r, dict) or not r.get("agentId"):
+            continue
+        st = str(r.get("status") or "")
+        if st not in ("succeeded", "failed", "cancelled", "timed_out"):
+            continue
+        err = str(r.get("error") or "")
+        if st != "succeeded" and ("reassign" in err.lower() or "reassign" in str(r.get("errorCode") or "").lower()):
+            continue             # stopped because the task moved to someone else: says nothing about the agent
+        end = _ts(r.get("finishedAt")) or _ts(r.get("createdAt"))
+        if end:
+            per.setdefault(str(r["agentId"]), []).append((end, st, r))
+    out = {}
+    for aid, rows in per.items():
+        rows.sort(key=lambda x: x[0], reverse=True)
+        streak, issues, errs, windows, last_ok = 0, set(), [], [], None
+        for end, st, r in rows:
+            if st == "succeeded":
+                last_ok = end
+                break
+            streak += 1
+            issues.add(str(r.get("issueId") or ""))
+            if len(errs) < 8:
+                errs.append("%s %s %s" % (st.replace("_", " "), r.get("error") or "", r.get("errorCode") or ""))
+            if len(windows) < 6:
+                start = _ts(r.get("startedAt")) or end
+                windows.append((start.timestamp(), end.timestamp()))
+        if not streak:
+            continue
+        newest = rows[0][0]
+        down = (streak >= DOWN_ONE_TASK_STREAK or (streak >= DOWN_MIN_STREAK and len(issues) >= 2)) \
+            and now - newest < datetime.timedelta(days=DOWN_STALE_DAYS)
+        out[aid] = {"down": down, "streak": streak, "last": newest.isoformat(), "since": rows[streak - 1][0].isoformat(),
+                    "last_ok": last_ok.isoformat() if last_ok else None, "errors": errs, "windows": windows}
+    return out
+
+
+def _hermes_log_cause(windows):
+    """What the assistant's own error log says went wrong during these runs, when it is one
+    of the causes a person has to fix or a busy provider. None when the log is not on this
+    machine or says nothing clear. The board only records "cancelled"; the reason is here."""
+    if not windows:
+        return None
+    counts = {}
+    for name in ("errors.log", "errors.log.1"):
+        path = os.path.join(HERMES_HOME_RO, "logs", name)
+        try:
+            size, mtime = os.path.getsize(path), os.path.getmtime(path)
+            with open(path, "rb") as f:
+                f.seek(max(0, size - 3_000_000))
+                lines = f.read().decode("utf-8", "replace").splitlines()
+        except OSError:
+            continue
+
+        def epoch(m):
+            try:
+                return datetime.datetime.strptime(m.group(1).replace("T", " "), "%Y-%m-%d %H:%M:%S").replace(
+                    tzinfo=datetime.timezone.utc).timestamp()
+            except ValueError:
+                return None
+        # The log's clock may not be UTC: its last line was written when the file last changed.
+        off = None
+        for ln in reversed(lines[-400:]):
+            m = _LOG_TS.match(ln)
+            t = epoch(m) if m else None
+            if t is not None:
+                off = round((mtime - t) / 1800.0) * 1800
+                break
+        if off is None:
+            continue
+        for ln in lines:
+            m = _LOG_TS.match(ln)
+            if not m or not _LOG_HINT.search(ln[:700]):
+                continue
+            t = epoch(m)
+            if t is None or not any(lo - 30 <= t + off <= hi + 30 for lo, hi in windows):
+                continue
+            low = ln[:700].lower()
+            for cause, rx, _plain, _fix, _owner in _ERR_CAUSES:
+                if re.search(rx, low):
+                    if cause in _LOG_CAUSES:
+                        counts[cause] = counts.get(cause, 0) + 1
+                    break
+    if not counts:
+        return None
+    for cause in ("credit", "auth", "budget"):      # something only a person can fix outranks "busy"
+        if counts.get(cause, 0) >= 2:
+            return cause
+    return max(counts, key=counts.get)
+
+
+def _down_cause(info):
+    """Why the agent is down, in the same plain words the agent-error cards use."""
+    by_id = {c[0]: c for c in _ERR_CAUSES}
+    cause = _hermes_log_cause(info.get("windows") or [])
+    if not cause:
+        low = " ".join(info.get("errors") or []).lower()
+        cut = sum(1 for e in info.get("errors") or [] if e.startswith("cancelled"))
+        if cut * 2 < len(info.get("errors") or [1]):       # mostly real failures: read their own errors
+            cause = next((c for c, rx, _p, _f, _o in _ERR_CAUSES if re.search(rx, low)), None)
+    if cause in by_id and cause != "timeout":
+        _c, _rx, plain, fix, owner = by_id[cause]
+        return {"cause": cause, "why": plain, "owner": bool(owner),
+                "fix": (fix or _ERR_FIX_REPEAT.get(cause, "")) + " Then press Try it now."}
+    return {"cause": _DOWN_SILENT[0], "why": _DOWN_SILENT[1], "fix": _DOWN_SILENT[2], "owner": True}
+
+
+def _down_probe(cid, aid, owner=False):
+    """Give a down agent one piece of work to find out whether it can work again. Returns
+    what was tried, in plain words. Without the owner's say-so only a task that is safe to
+    start again is used: one still queued, or one whose broken run took no step."""
+    def mine(status):
+        try:
+            return [i for i in _list(_pc_get("/api/companies/%s/issues?status=%s&sortField=updated&sortDir=desc&limit=100"
+                                             % (_safe_id(str(cid)), status)), "issues")
+                    if isinstance(i, dict) and str(i.get("assigneeAgentId") or "") == str(aid)]
+        except Exception:
+            return []
+    for i in mine("todo")[:3]:
+        if _wake_task(str(i["id"]), aid, "Agent OS is checking whether this agent can work again.") == "started":
+            return "started %s" % (i.get("identifier") or "a queued task")
+    looked = 0
+    for i in mine("blocked"):
+        if looked >= 6:
+            break
+        iid = str(i.get("id") or "")
+        hold = _execution_hold(iid)[1]
+        if not hold or hold.get("canRetry"):
+            continue
+        looked += 1
+        nothing = _run_did_nothing(iid, hold) is True
+        if not (owner or nothing):
+            continue
+        try:
+            nk = _restart_fresh(iid, head=_NOTHING_HEAD if nothing else None)
+            return "started %s again as %s" % (i.get("identifier") or "a task", nk)
+        except Exception:
+            continue
+    try:
+        _pc_send("POST", "/api/agents/" + _safe_id(str(aid)) + "/wakeup",
+                 {"source": "automation", "triggerDetail": "system",
+                  "reason": "Agent OS is checking whether this agent can work again."}, what="wake the agent")
+        return "woke it"
+    except Exception:
+        return ""
+
+
+def _down_scan(cid, by_id, live_agent, now, con, dry_run, out):
+    """Work out which agents are down, note the ones that came back, and try each down
+    agent again when its wait is over. Returns {agent id: record}."""
+    prev = _agents_down()
+    try:
+        runs = _list(_pc_get("/api/companies/%s/heartbeat-runs?limit=500&summary=true" % _safe_id(str(cid))), "runs")
+    except Exception:
+        return prev              # the board did not answer: keep what was known
+    streaks = _down_streaks(runs, now)
+    cur = {}
+    for aid, a in by_id.items():
+        status = str(a.get("status") or "").lower()
+        if status in ("terminated", "pending_approval"):
+            continue
+        name = a.get("name") or "agent"
+        info, old = streaks.get(aid), prev.get(aid)
+        if not (info and info["down"]):
+            if old:
+                out.setdefault("back", []).append(name)
+                if not dry_run:
+                    _watch_log(con, "working again", name, "a run finished; its waiting tasks restart a few at a time")
+                    # Its tasks were restarted and failed through no fault of their own: no daily limit carries over.
+                    con.execute("DELETE FROM stuck_watch WHERE kind='autofresh'")
+            continue
+        rec = dict(old or {})
+        if not old or old.get("last") != info["last"] or not rec.get("why"):
+            rec.update(_down_cause(info))
+        rec.update({"name": name, "since": info["since"], "last": info["last"], "streak": info["streak"],
+                    "last_ok": info["last_ok"], "paused": status == "paused"})
+        cur[aid] = rec
+        if not old:
+            out["escalated"].append({"agent": name, "message": "%s is not working: %s (%d runs in a row did not finish). %s"
+                                     % (name, rec["why"], info["streak"], rec["fix"])})
+            if not dry_run:
+                _watch_log(con, "not working", name, "%s (%d runs in a row)" % (rec["why"], info["streak"]))
+    if not dry_run:
+        for aid, rec in cur.items():
+            if rec.get("paused") or aid in live_agent:
+                continue
+            wait = DOWN_PROBE_WAIT_MIN[min(int(rec.get("probes") or 0), len(DOWN_PROBE_WAIT_MIN) - 1)]
+            base = _ts(rec.get("probe_at")) or _ts(rec.get("last")) or now
+            if now - base < datetime.timedelta(minutes=wait):
+                continue
+            con.commit()         # the probe may write through other connections
+            did = _down_probe(cid, aid)
+            rec["probes"], rec["probe_at"] = int(rec.get("probes") or 0) + 1, now.isoformat()
+            if did:
+                out.setdefault("probed", []).append("%s (%s)" % (rec["name"], did))
+                _watch_log(con, "tried again", rec["name"], did)
+        con.execute("INSERT INTO kv(k, v) VALUES('agent_down', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", (json.dumps(cur),))
+        con.commit()
+        _DEC_CACHE.clear()
+    return cur
+
+
 def stuck_watch_run(dry_run=False):
     """One pass. Returns what it found and did, in plain words, for the dashboard and n8n."""
     out = {"at": _now().isoformat(), "dry_run": bool(dry_run), "checked_agents": 0, "checked_tasks": 0,
@@ -3252,6 +3509,10 @@ def stuck_watch_run(dry_run=False):
             parts.append("Retried the connection for: " + ", ".join(out["retried"]) + ".")
         if out["restarted"]:
             parts.append("Restarted the gateway for: " + ", ".join(out["restarted"]) + ".")
+        if out.get("back"):
+            parts.append("Working again: %s. Their waiting tasks restart a few at a time." % ", ".join(out["back"]))
+        if out.get("probed"):
+            parts.append("Tried again: " + ", ".join(out["probed"]) + ".")
         if out.get("restored"):
             parts.append("Brought back %d task%s that an earlier fresh start had cancelled by mistake." % (
                 len(out["restored"]), "" if len(out["restored"]) == 1 else "s"))
@@ -3315,8 +3576,17 @@ def stuck_watch_run(dry_run=False):
     lead = _lead_agent(agents)
     lead_ok = bool(_team_triage() and lead and str(lead.get("id")) in usable)
     lead_name = (lead.get("name") or "the lead agent") if lead else ""
+    down = {}
     try:
-        out["revived"] = _revive_unavailable(cid, usable, by_id, dry_run)
+        with closing(get_db()) as dcon:
+            down = _down_scan(cid, by_id, live_agent, now, dcon, dry_run, out)
+    except Exception:
+        down = _agents_down()
+    out["down"] = [d.get("name") for d in down.values()]
+    if lead and str(lead.get("id")) in down:
+        lead_ok = False          # nothing is handed to a lead agent that cannot work
+    try:
+        out["revived"] = _revive_unavailable(cid, usable - set(down), by_id, dry_run)
     except Exception:
         out["revived"] = []
 
@@ -3435,6 +3705,7 @@ def stuck_watch_run(dry_run=False):
         queued = rows("?status=todo&sortField=updated&sortDir=asc&limit=60")
         busy_agents = {str(i.get("assigneeAgentId")) for i in working if i.get("assigneeAgentId")} | live_agent
         candidates, taken = [], set()
+        usable = usable - set(down)     # a down agent's tasks wait for the agent, not for a nudge
         for i in working:
             aid = str(i.get("assigneeAgentId") or "")
             if aid in usable and aid not in taken and str(i.get("id")) not in live_issue:
@@ -3450,7 +3721,7 @@ def stuck_watch_run(dry_run=False):
         fresh_budget = 3
         if not dry_run:
             con.commit()          # the repair writes through its own connection
-            back = _repair_lost_restarts(cid)
+            back = _repair_lost_restarts(cid, skip_agents=set(down))
             if back:
                 out["restored"] = back
                 _watch_log(con, "brought back", ", ".join(b["key"] for b in back[:20]), "%d tasks" % len(back))
@@ -3497,7 +3768,7 @@ def stuck_watch_run(dry_run=False):
                                 "coalesce((SELECT attempts FROM stuck_watch WHERE kind='autofresh' AND ref=? AND last_action_at > ?),0)+1, ?)",
                                 (title, title, (now - datetime.timedelta(hours=24)).isoformat(), now.isoformat()))
                 out.setdefault("fresh", []).append({"key": key, "new": nk, "agent": name, "nothing": nothing})
-                con.execute("DELETE FROM stuck_watch WHERE kind='task' AND ref=?", (iid,))
+                con.execute("DELETE FROM stuck_watch WHERE kind IN ('task','ownergo') AND ref=?", (iid,))
                 _watch_log(con, "started fresh", key, "%s as %s" % (name, nk))
                 candidates = [c for c in candidates if str(c[0].get("id")) != iid]
         for issue, why in candidates:
@@ -5177,11 +5448,53 @@ def _clip(v, n):
     return v if len(v) <= n else v[:n - 1].rstrip() + "…"
 
 
+def _task_gist(desc):
+    """The first lines of a task's own description, without the note Agent OS puts on top
+    of a restarted task, so a card can say what the task is."""
+    d = str(desc or "")
+    for _ in range(3):
+        if d.lstrip().startswith("**") and "\n---\n" in d[:4000]:
+            d = d.split("\n---\n", 1)[1]
+    lines = [ln.strip() for ln in d.splitlines() if ln.strip() and not ln.strip().startswith(("#", "---", "```", "|"))]
+    return _clip(re.sub(r"[*_`>#]+", "", " ".join(lines[:3])), 240)
+
+
+def _run_plain(run):
+    """Why a task's last run ended, in plain words. "" when the run says nothing useful."""
+    if not isinstance(run, dict):
+        return ""
+    st, err = str(run.get("status") or ""), str(run.get("error") or "").lower()
+    a, b = _ts(run.get("startedAt")), _ts(run.get("finishedAt"))
+    mins = int((b - a).total_seconds() // 60) if a and b and b > a else 0
+    took = (" after %d minutes" % mins) if mins >= 2 else ""
+    if "429" in err or "rate" in err:
+        return "the agent's gateway was too busy to start it"
+    if st == "timed_out" or "timed out" in err:
+        return "it ran out of time" + took
+    if st == "cancelled" or "interrupt" in err or "cancel" in err:
+        return "the AI stopped answering and the run was cut off" + took
+    if st == "failed":
+        return "its run failed" + took
+    return ""
+
+
+def _ago(when):
+    t = _ts(when)
+    if not t:
+        return ""
+    mins = max(0, int((_now() - t).total_seconds() // 60))
+    if mins < 90:
+        return _plural(max(mins, 1), "minute")
+    if mins < 48 * 60:
+        return _plural(mins // 60, "hour")
+    return _plural(mins // 1440, "day")
+
+
 def _decisions(fresh=False):
     hit = _DEC_CACHE.get("v")
     if hit and not fresh and time.time() - hit[0] < 20:
         return hit[1]
-    out = {"decisions": [], "alerts": [], "with_lead": 0, "lead": None, "triage": _team_triage(), "issue_ids": [], "ok": False}
+    out = {"decisions": [], "alerts": [], "with_lead": 0, "queued": 0, "lead": None, "triage": _team_triage(), "issue_ids": [], "ok": False}
     if not _pc_key() or not _pc_up():
         return out
     cid = _pc_company_id()
@@ -5204,14 +5517,18 @@ def _decisions(fresh=False):
     except Exception:
         items = []
     asks = _asks_open()
-    triaged = set()
+    triaged, go = set(), set()
     try:
         with closing(get_db()) as con:
             triaged = {r[0] for r in con.execute("SELECT ref FROM stuck_watch WHERE kind = 'triage'")}
+            go = {r[0] for r in con.execute("SELECT ref FROM stuck_watch WHERE kind = 'ownergo'")}
     except Exception:
         pass
-    hold = out["triage"] and lead is not None and _watch_recent()
+    down = _agents_down()        # agents that cannot work at all: one card each, not one per task
+    # Stuck tasks go to the lead agent first, unless the lead is the one that cannot work.
+    hold = out["triage"] and lead is not None and _watch_recent() and str(lead.get("id")) not in down
     health = _agent_health()
+    detailed = 0
     cards, seen = [], set()
 
     def issue_bits(iid, subj=None):
@@ -5307,6 +5624,12 @@ def _decisions(fresh=False):
                           "buttons": [_BTN_APPROVE, dict(_BTN_DECLINE, label="Send back"), _BTN_MORE, _BTN_REPLY], "ref": ("issue", sid, "review")})
                 cards.append(c)
                 continue
+            who = str((waiting.get(sid) or {}).get("assigneeAgentId") or "")
+            if who in down:
+                continue        # its agent is down: the agent's own card covers it
+            if sid in go:
+                out["queued"] += 1      # the owner already restarted it; the watch starts these a few at a time
+                continue
             # A stuck task with no clear question. With triage on, the lead agent gets it
             # first, and the owner only sees it if it is still stuck after that.
             if hold and sid not in triaged:
@@ -5317,22 +5640,36 @@ def _decisions(fresh=False):
             blk_st = str(blk.get("status") or "").lower()
             if blk.get("title") and blk_st and blk_st not in ("done", "cancelled"):
                 continue        # it is waiting on other work that is still open: nothing for the owner to decide
-            hold = _execution_hold(sid)[1]
-            held = bool(hold and not hold.get("canRetry"))
+            full, xhold = _execution_hold(sid)
+            held = bool(xhold and not xhold.get("canRetry"))
+            who_name = c["agent"] or "The agent"
+            gist = _task_gist((full or {}).get("description"))
+            why_run = ""
+            if detailed < 15:           # one more lookup each; the first screenful is enough
+                detailed += 1
+                try:
+                    rs = _list(_pc_get("/api/issues/" + _safe_id(sid) + "/runs"), "runs", "items")
+                    why_run = _run_plain(rs[0] if rs else None)
+                except Exception:
+                    pass
             btns = [{"id": "fresh", "label": "Start it fresh", "style": "primary"} if held else dict(_BTN_RETRY)]
             if lead is not None and not mine and sid not in triaged and not held:
                 btns.append({"id": "lead", "label": "Hand to " + (lead.get("name") or "lead")})
             btns += [{"id": "close", "label": "Close it"}, _BTN_MORE, _BTN_REPLY]
             age = (_now() - (_ts(at) or _now())).days
+            stopped = (("%s%s. The team board will not run it again by itself, because it cannot tell whether a step "
+                        "already happened (a message already sent, say)." % (why_run[:1].upper(), why_run[1:])) if why_run else
+                       "Its last run was cut off part way through, so the team board will not run it again by itself: "
+                       "a step may already have happened.") if held else _stuck_plain(it.get("whyNow"))
             c.update({"id": "stuck:" + sid, "kind": "stuck", "tag": "Stopped task", "at": at,
-                      "summary": _clip("Its last run stopped part way through (the agent was cut off), so the team "
-                                       "board will not run it again by itself: a step may already have happened."
-                                       if held else _stuck_plain(it.get("whyNow")), 600),
+                      "summary": _clip((("**The task:** %s\n\n" % gist) if gist else "") + "**Why it stopped:** " + stopped, 900),
                       "question": "Start it fresh, or close it?" if held else "Put it back to work, or close it?",
                       "recommendation": ("It has been stopped for %d days. Close it if you no longer need it." % age) if age >= 3
-                                        else ("Start it fresh. The agent reads the earlier task first, so it can skip what is already done."
-                                              if held else "Put it back to work. If it stops again, close it or ask for more detail."),
-                      "buttons": btns, "ref": ("issue", sid, "stuck")})
+                                        else (("Start it fresh: %s gets a new copy of this task and this one is closed. It reads "
+                                               "this one first, so it can skip what is already done." % who_name)
+                                              if held else ("Put it back to work: %s picks it up where it stopped. If it stops "
+                                                            "again, close it or ask for more detail." % who_name)),
+                      "buttons": btns, "group": "stuck:" + (c["agent"] or ""), "ref": ("issue", sid, "stuck")})
             cards.append(c)
             continue
         if kind == "decision":
@@ -5353,6 +5690,44 @@ def _decisions(fresh=False):
                       "question": choices, "recommendation": "",
                       "buttons": btns + [_BTN_REPLY], "ref": ("decision", sid, riid)})
             cards.append(c)
+    # The same stopped task filed several times over (restarts that failed again): one card.
+    same = {}
+    for c in cards:
+        if c["kind"] == "stuck":
+            same.setdefault((c.get("agent"), re.sub(r"\s+", " ", c["title"]).strip().lower()), []).append(c)
+    folded = set()
+    for grp in same.values():
+        if len(grp) < 2:
+            continue
+        grp.sort(key=lambda c: (_ts(c.get("at")) or _now()).timestamp(), reverse=True)
+        keep, n = grp[0], len(grp) - 1
+        keep["_copies"] = [x["issue_id"] for x in grp[1:]]
+        keep["summary"] = _clip(keep["summary"] + "\n\n%s of this same task %s also stopped and %s folded into this card."
+                                % (_plural(n, "older copy", "older copies"), "is" if n == 1 else "are", "is" if n == 1 else "are"), 1100)
+        keep["buttons"] = keep["buttons"] + [{"id": "dupes", "label": "Close the %s" % _plural(n, "older copy", "older copies")}]
+        folded.update(id(x) for x in grp[1:])
+    cards = [c for c in cards if id(c) not in folded]
+    # One card for each agent that cannot work, in place of a card for every task it holds.
+    for aid, rec in down.items():
+        name = rec.get("name") or names.get(aid) or "An agent"
+        n = sum(1 for i in waiting.values() if str(i.get("status")) == "blocked" and str(i.get("assigneeAgentId") or "") == aid)
+        idle = _ago(rec.get("last_ok") or rec.get("since"))
+        tasks = ("%s waiting on it. They are not listed here one by one, and they start again by themselves, a few at a "
+                 "time, once %s works." % (_plural(n, "task is", "tasks are"), name)) if n else ""
+        if rec.get("paused"):
+            title = "%s is paused. It was not working: %s" % (name, rec.get("why") or "its runs did not finish")
+            body = "You paused %s. %s %s" % (name, tasks, rec.get("fix") or "")
+            btns = [{"id": "resume", "label": "Resume and try it", "style": "primary"}]
+        else:
+            title = "%s is not working: %s" % (name, rec.get("why") or "its runs do not finish")
+            body = "%s has not finished a run in %s (%d tries in a row). %s Agent OS tries it again every so often. %s" % (
+                name, idle or "a while", int(rec.get("streak") or 0), tasks, rec.get("fix") or "")
+            btns = [{"id": "probe", "label": "Try it now", "style": "primary"}, {"id": "pause", "label": "Pause this agent"}]
+        cards.append({"id": "down:" + aid, "kind": "problem", "tag": "Agent not working", "issue_id": None, "key": "",
+                      "title": _clip(title, 160), "agent": name, "at": rec.get("since"),
+                      "summary": _clip(re.sub(r"\s+", " ", body), 900), "question": "",
+                      "recommendation": "" if rec.get("paused") else "Fix the cause first, then press Try it now.",
+                      "buttons": btns, "ref": ("down", aid, "")})
     for r in _action_rows("status='pending'"):
         label = BA.CATALOG.get(r["app"], {}).get("label", r["app"])
         when = (" It would run %s (your time)." % _when_words(r["run_at"])) if r["run_at"] else " It would run as soon as you approve."
@@ -5363,7 +5738,9 @@ def _decisions(fresh=False):
                       "question": "Approve this?" if not r["run_at"] else "Approve this for %s?" % _when_words(r["run_at"]),
                       "recommendation": "Agent OS runs exactly this, then checks the device came back and reports the result.",
                       "buttons": [_BTN_APPROVE, _BTN_DECLINE], "ref": ("action", str(r["id"]), "")})
-    cards.sort(key=lambda c: ({"decision": 0, "approval": 0, "interaction": 1, "review": 2, "problem": 2, "stuck": 3}.get(c["kind"], 4), -(_ts(c.get("at")) or _now()).timestamp()))
+    cards.sort(key=lambda c: (-1 if c["id"].startswith("down:") else   # the one thing that explains the rest comes first
+                              {"decision": 0, "approval": 0, "interaction": 1, "review": 2, "problem": 2, "stuck": 3}.get(c["kind"], 4),
+                              -(_ts(c.get("at")) or _now()).timestamp()))
     out["decisions"] = cards[:120]
     out["alerts"] = out["alerts"][:60]
     out["issue_ids"] = [c["issue_id"] for c in cards if c.get("issue_id")]
@@ -5373,7 +5750,8 @@ def _decisions(fresh=False):
 
 def _dec_public(d):
     return {"decisions": [{k: v for k, v in c.items() if k != "ref" and not k.startswith("_")} for c in d["decisions"]], "alerts": d["alerts"],
-            "with_lead": d["with_lead"], "lead": d["lead"], "triage": d["triage"], "can_act": _pc_mode() != "external"}
+            "with_lead": d["with_lead"], "queued": d.get("queued", 0), "lead": d["lead"], "triage": d["triage"],
+            "can_act": _pc_mode() != "external"}
 
 
 # ---------------------------------------------------------------------------
@@ -5788,6 +6166,33 @@ def decisions_act(b: DecisionAct, _auth=Depends(require_auth)):
         _pc_send("POST", "/api/approvals/" + _safe_id(rid) + "/request-revision", {"decisionNote": note}, what="send your reply")
         _DEC_CACHE.clear()
         return {"ok": True, "message": "Reply sent. It comes back here once the agent has answered."}
+    if typ == "down":
+        name = card.get("agent") or "The agent"
+        recs = _agents_down()
+        rec = recs.get(rid) or {}
+        if act == "pause":
+            _pc_send("POST", "/api/agents/" + _safe_id(rid) + "/pause", {}, what="pause the agent")
+            rec["paused"] = True
+            said = "%s is paused, so it stops trying. Its tasks keep waiting. Resume it from this card when the cause is fixed." % name
+        else:
+            if act == "resume":
+                _pc_send("POST", "/api/agents/" + _safe_id(rid) + "/resume", {}, what="resume the agent")
+                rec["paused"] = False
+            did = _down_probe(_pc_company_id(), rid, owner=True)
+            rec["probes"], rec["probe_at"] = 0, _now().isoformat()
+            said = ("Trying %s now%s. If that run finishes, this card goes away and its waiting tasks start again a few at a "
+                    "time. If it fails the same way, the card stays." % (name, (" (%s)" % did) if did else ""))
+            try:
+                with closing(get_db()) as con:
+                    _watch_log(con, "tried again", name, "the owner asked" + ((": " + did) if did else ""))
+                    con.commit()
+            except Exception:
+                pass
+        if rid in recs:
+            recs[rid] = rec
+            _kv_set("agent_down", json.dumps(recs))
+        _DEC_CACHE.clear()
+        return {"ok": True, "message": said}
     if typ == "agent":
         if act == "pause":
             _pc_send("POST", "/api/agents/" + _safe_id(rid) + "/pause", {}, what="pause the agent")
@@ -5861,6 +6266,18 @@ def decisions_act(b: DecisionAct, _auth=Depends(require_auth)):
                                 "yes-or-no question, your recommendation).")
             _run_budget_clear(rid, card.get("key"))
             said = "Reply sent. It comes back here only if the agent needs you again."
+        elif act == "dupes":
+            n = 0
+            for old_id in (card.get("_copies") or [])[:60]:
+                try:
+                    _pc_send("PATCH", "/api/issues/" + _safe_id(str(old_id)),
+                             {"status": "cancelled", "comment": "Closed by the owner: an older copy of %s, which carries the work."
+                              % (card.get("key") or "the same task")}, what="close the older copy")
+                    _ask_close(str(old_id)); n += 1
+                except Exception:
+                    pass
+            _DEC_CACHE.clear()
+            return {"ok": True, "message": "Closed %s. This one is still waiting for your choice." % _plural(n, "older copy", "older copies")}
         elif act == "fresh":
             nk = _restart_fresh(rid, note)
             _DEC_CACHE.clear()
@@ -5902,6 +6319,74 @@ def decisions_act(b: DecisionAct, _auth=Depends(require_auth)):
                 said += " The agent could not be started just now; the watch will try again."
     _DEC_CACHE.clear()
     return {"ok": True, "message": said}
+
+
+class DecisionActMany(BaseModel):
+    ids: list[str]
+    action: str
+
+
+_GO_TEXT = ("**Owner decision: put this back to work.**\n\nPick it up and continue. Close it with complete_task when it "
+            "is finished. If you cannot finish it, say exactly what you need with need_owner_input (summary, one "
+            "yes-or-no question, your recommendation).")
+
+
+@app.post("/orchestration/decisions/act-many")
+def decisions_act_many(b: DecisionActMany, _auth=Depends(require_auth)):
+    """One choice for a whole group of stopped tasks: restart them all, or close them all.
+
+    Restarting does not start them all at once. A task the board holds is marked as the
+    owner's go-ahead and the watch starts those a few each pass; the rest go back to the
+    queue, where their agent takes them one at a time. Dozens of runs asked for in the
+    same minute are refused by the agent's gateway, and every refusal would come back here."""
+    _task_writable()
+    act = (b.action or "").strip().lower()
+    if act not in ("restart", "close"):
+        raise HTTPException(status_code=400, detail="Choose restart or close.")
+    want = set((b.ids or [])[:150])
+    cards = [c for c in _decisions(fresh=True)["decisions"] if c["id"] in want and c.get("kind") == "stuck" and c.get("ref", ("",))[0] == "issue"]
+    if not cards:
+        raise HTTPException(status_code=404, detail="Those items are no longer waiting. They may already be answered.")
+    done, failed, woke = 0, 0, set()
+    now = _now().isoformat()
+    for c in cards:
+        rid = c["ref"][1]
+        ids = [rid] + ([str(x) for x in (c.get("_copies") or [])] if act == "close" else [])
+        try:
+            if act == "close":
+                for iid in ids:
+                    _pc_send("PATCH", "/api/issues/" + _safe_id(iid),
+                             {"status": "cancelled", "comment": "Closed by the owner, together with other stopped tasks like it. "
+                              "If it is still needed, start a new task."}, what="close the task")
+                    _ask_close(iid)
+            else:
+                issue, hold = _execution_hold(rid)
+                if hold and not hold.get("canRetry"):
+                    _pc_send("POST", "/api/issues/" + _safe_id(rid) + "/comments", {"body": _GO_TEXT}, what="record your decision")
+                else:
+                    _run_budget_clear(rid, c.get("key"))
+                    _pc_send("PATCH", "/api/issues/" + _safe_id(rid), {"status": "todo", "comment": _GO_TEXT}, what="record your decision")
+                    who = str((issue or {}).get("assigneeAgentId") or "")
+                    if who and who not in woke:          # one now per agent; it takes the rest from its queue
+                        woke.add(who)
+                        _wake_task(rid, who, "The owner put this task back to work.")
+                with closing(get_db()) as con:
+                    con.execute("INSERT INTO stuck_watch(kind, ref, attempts, last_action_at, escalated) VALUES('ownergo',?,1,?,0) "
+                                "ON CONFLICT(kind, ref) DO UPDATE SET last_action_at = excluded.last_action_at", (rid, now))
+                    con.commit()
+                _ask_close(rid)
+            done += 1
+        except Exception:
+            failed += 1
+    _DEC_CACHE.clear()
+    if act == "close":
+        msg = "Closed %s." % _plural(done, "task")
+    else:
+        msg = ("%s will start again, a few at a time, over the next hour or so. One comes back here only if it stops again."
+               % _plural(done, "task"))
+    if failed:
+        msg += " %s could not be changed and %s still listed." % (_plural(failed, "task"), "is" if failed == 1 else "are")
+    return {"ok": True, "done": done, "failed": failed, "message": msg}
 
 
 @app.get("/orchestration/tasks")

@@ -149,6 +149,7 @@
       s = useState(null);  var noteFor = s[0], setNoteFor = s[1];  // card id with the note box open
       s = useState("");    var note = s[0], setNote = s[1];
       s = useState(false); var showAlerts = s[0], setShowAlerts = s[1];
+      s = useState({});    var openGroups = s[0], setOpenGroups = s[1];   // group key -> its cards are listed
       s = useState(false); var askOpen = s[0], setAskOpen = s[1];  // full request shown
       s = useState(function () { try { return localStorage.getItem("sct-tasks-view") === "board" ? "board" : "list"; } catch (e) { return "list"; } });
       var view = s[0], setViewRaw = s[1];                          // list | board
@@ -184,6 +185,26 @@
           })
           .catch(function (e) {
             var m = {}; for (var k in dMsg) m[k] = dMsg[k]; m[card.id] = { ok: false, text: String(e.message || e) }; setDMsg(m);
+            setDBusy(null); loadDec();
+          });
+      }
+      // One choice for a whole group of stopped tasks.
+      function decideMany(g, action) {
+        if (dBusy) return;
+        var n = g.cards.length, who = g.agent || "the agent";
+        var ask = action === "close"
+          ? "Close " + n + " stopped task" + (n === 1 ? "" : "s") + " of " + who + "?\n\nNobody will work on them. Start a new task later if one is still needed."
+          : "Restart " + n + " stopped task" + (n === 1 ? "" : "s") + " of " + who + "?\n\nThey start again a few at a time, not all at once.";
+        if (!window.confirm(ask)) return;
+        setDBusy(g.key + ":" + action);
+        api("/orchestration/decisions/act-many", { method: "POST", body: JSON.stringify({ ids: g.cards.map(function (c) { return c.id; }), action: action }) })
+          .then(function (r) {
+            var m = {}; for (var k in dMsg) m[k] = dMsg[k]; m["_many"] = { ok: true, text: r.message || "Done." }; setDMsg(m);
+            setDBusy(null);
+            return Promise.all([loadDec(), loadList()]);
+          })
+          .catch(function (e) {
+            var m = {}; for (var k in dMsg) m[k] = dMsg[k]; m["_many"] = { ok: false, text: String(e.message || e) }; setDMsg(m);
             setDBusy(null); loadDec();
           });
       }
@@ -411,12 +432,49 @@
           })
           .catch(function (e) { setDBusy(null); setDMsg(Object.assign({}, dMsg, { _cleanup: { ok: false, text: String(e.message || e) } })); });
       }
+      // Stopped tasks of one agent, four or more: one block with one choice, the cards a click away.
+      function grouped(all) {
+        var by = {}, out = [];
+        all.forEach(function (c) { if (c.group) (by[c.group] = by[c.group] || []).push(c); });
+        var placed = {};
+        all.forEach(function (c) {
+          var g = c.group && by[c.group].length >= 4 ? c.group : null;
+          if (!g) { out.push({ card: c }); return; }
+          if (placed[g]) return;
+          placed[g] = true;
+          out.push({ group: { key: g, agent: c.agent, cards: by[g] } });
+        });
+        return out;
+      }
+      function groupBlock(g) {
+        var n = g.cards.length, open = !!openGroups[g.key], canAct = !dec || dec.can_act !== false;
+        return h("div", { key: g.key, className: "st-group" },
+          h("div", { className: "st-card st-card-stuck" },
+            h("div", { className: "st-card-top" },
+              h("span", { className: "st-tag st-tag-stuck" }, "Stopped tasks"),
+              g.agent ? h("span", { className: "st-agent" }, g.agent) : null),
+            h("div", { className: "st-card-title" }, n + " tasks" + (g.agent ? " of " + g.agent : "") + " stopped and are waiting for you"),
+            h("div", { className: "st-card-sum" }, "Each one stopped part way through a run. You can make one choice for all of them, or open the list and answer them one by one."),
+            h("div", { className: "st-card-rec" }, h("span", { className: "st-card-l" }, "What the buttons do"),
+              h("div", null, "Restart all puts every one back to work, a few at a time so the agent is not flooded. Close all ends them; nobody works on them after that.")),
+            canAct ? h("div", { className: "st-card-acts" },
+              h("button", { type: "button", disabled: !!dBusy, className: "st-btn st-dbtn st-primary", onClick: function () { decideMany(g, "restart"); } },
+                dBusy === g.key + ":restart" ? "Working…" : "Restart all " + n),
+              h("button", { type: "button", disabled: !!dBusy, className: "st-btn st-dbtn st-quiet", onClick: function () { decideMany(g, "close"); } },
+                dBusy === g.key + ":close" ? "Working…" : "Close all " + n),
+              h("button", { type: "button", className: "st-linkbtn", "aria-expanded": open,
+                onClick: function () { var o = Object.assign({}, openGroups); o[g.key] = !open; setOpenGroups(o); } }, open ? "Hide the list" : "Show them one by one")) : null),
+          open ? h("div", { className: "st-group-list" }, g.cards.map(function (c) { return card(c, false); })) : null);
+      }
       function decisionPane() {
         var al = (dec && dec.alerts) || [];
-        var done = []; for (var k in dMsg) if (dMsg[k].ok && !cards.some(function (c) { return c.id === k; })) done.push(dMsg[k].text);
+        var done = []; for (var k in dMsg) if (k.charAt(0) !== "_" && dMsg[k].ok && !cards.some(function (c) { return c.id === k; })) done.push(dMsg[k].text);
         return h("div", null,
           dec.with_lead ? h("div", { className: "st-lead" }, dec.with_lead + " stuck task" + (dec.with_lead === 1 ? " is" : "s are") + " going to " + (dec.lead || "your lead agent")
             + " to sort out first. You'll only see one if it still needs you.") : null,
+          dec.queued ? h("div", { className: "st-lead" }, dec.queued + " task" + (dec.queued === 1 ? "" : "s") + " you restarted "
+            + (dec.queued === 1 ? "is" : "are") + " starting again a few at a time. One comes back here only if it stops again.") : null,
+          dMsg._many ? h("div", { className: "st-lead" + (dMsg._many.ok ? "" : " st-err") , role: "status" }, dMsg._many.text) : null,
           cards.length === 0
             ? h("div", { className: "st-empty st-clear" }, h("div", { className: "st-clear-h" }, "Nothing needs you right now."),
                 done.length ? done[done.length - 1] + " " : "", "Your team is handling the rest. Anything that needs a decision shows up here with buttons.")
@@ -425,7 +483,7 @@
                   h("button", { type: "button", className: "st-linkbtn", disabled: !!dBusy, onClick: cleanup },
                     dBusy === "cleanup" ? "Checking…" : "Clear tasks waiting more than 3 days"),
                   dMsg._cleanup ? h("span", { className: dMsg._cleanup.ok ? "st-done" : "st-err" }, " " + dMsg._cleanup.text) : null),
-                cards.map(function (c) { return card(c, false); })),
+                grouped(cards).map(function (x) { return x.group ? groupBlock(x.group) : card(x.card, false); })),
           al.length ? h("div", { className: "st-alerts" },
             h("button", { type: "button", className: "st-linkbtn", onClick: function () { setShowAlerts(!showAlerts); } },
               (showAlerts ? "Hide " : "Show ") + al.length + " alert" + (al.length === 1 ? "" : "s") + " (failed runs and agent errors, not decisions)"),
