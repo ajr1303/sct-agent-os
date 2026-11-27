@@ -555,7 +555,7 @@ CATALOG = {
         "about": "Your UniFi gateway, switches and access points: see devices, clients and firewall rules; "
                  "restart a device or update its firmware with your approval.",
         "fields": [{"key": "site", "label": "Controller address", "secret": False,
-                    "placeholder": "https://192.168.1.1 or https://unifi.example.com:8443"},
+                    "placeholder": "https://unifi.example.com or https://your-gateway-address"},
                    {"key": "token", "label": "API key", "secret": True, "placeholder": "From Integrations"}],
         "steps": ["Open your UniFi Network application (version 9 or newer) as an admin.",
                   "Go to Settings > Control Plane > Integrations, create an API key named Agent OS and copy it.",
