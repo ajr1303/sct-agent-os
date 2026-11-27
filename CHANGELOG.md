@@ -25,7 +25,19 @@ All notable changes to Suburban Cyber Agent OS. Dates are UTC.
   (firmware went from X to Y, back online after N minutes, or that it did not
   come back). A scheduled one can be cancelled. UniFi is set up on this tab,
   not on Connections.
-- **Agents know your devices.** my_devices gives agents the scanned list; they
+- **Computers, servers and Veeam backups on My devices.** Add a computer and
+  you get one command to run on it (Windows or Linux). It installs a small
+  task that sends that machine's CPU, memory, disk space, uptime and pending
+  restart to Agent OS every 5 minutes. Where Veeam Agent is installed (the
+  standalone agent, no Backup & Replication server needed) it also sends each
+  backup job's results, so the page shows the last result, when a backup last
+  completed, and the warning or error text. Each computer lists its problems
+  in plain words: not reporting for 15 minutes, a disk over 90% full, a failed
+  or warned backup, no completed backup in 3 days, the Veeam service stopped.
+  The script only reads; Agent OS never logs in to the machine and stores no
+  password for it. Each machine has its own token that can only post its
+  report, kept in a folder only administrators can read.
+- **Agents know your devices.** my_devices gives agents the same list, problems included; they
   can also read sites, clients, networks, Wi-Fi, WAN links and firewall rules
   from UniFi. With the owner's approval they can restart a device, power-cycle
   a PoE port, and install a waiting firmware update. The controller's

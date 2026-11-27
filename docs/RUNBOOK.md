@@ -1469,6 +1469,20 @@ same run-and-verify path as agent proposals. Agents read the list with `my_devic
 list is empty or stale, press Scan now: the error from the controller is shown on the page.
 To add another source of devices, write its rows into `devices` with its own `source`.
 
+**Computers and servers** report in themselves. **Add a computer** creates a row in
+`computers` (only a hash of the token is stored) and shows one install command. The
+command downloads `connectors/reporter/install.ps1` or `install.sh` from this box, which
+saves `report.ps1` / `report.sh` and the token (Windows: `%ProgramData%\AgentOS`, a scheduled
+task named "Agent OS report" running as SYSTEM; Linux: `/opt/agent-os-report` and
+`/etc/cron.d/agent-os-report`). Every 5 minutes the script posts to
+`/api/connectors/devices/report`; nginx lets that path and `/devices/reporter/` through
+without a browser session because the token is the check. Veeam Agent results come from the
+"Veeam Agent" Windows event log ("... finished with Success/Warning/Failed") and from
+`veeamconfig session list` on Linux; `_veeam_jobs` in `connectors/app.py` turns them into
+jobs, so a wording difference in a Veeam version is fixed there, not on the machines. A
+computer that shows "no report yet": run `report.ps1` / `report.sh` by hand on it and read
+the error, and check the machine can open the Agent OS address used in the command.
+
 ## Actions that need the owner's approval
 
 Some app actions can interrupt the business (restart a UniFi device, power-cycle a port,

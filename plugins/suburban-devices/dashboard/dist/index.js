@@ -55,13 +55,17 @@
       s = useState("all"); var show = s[0], setShow = s[1];
       s = useState("");    var q = s[0], setQ = s[1];
       s = useState(60);    var cap = s[0], setCap = s[1];
+      s = useState(null);  var add = s[0], setAdd = s[1];        // the Add a computer form: {name, os, base}
+      s = useState(null);  var inst = s[0], setInst = s[1];      // the install command, shown once
+      s = useState(false); var copied = s[0], setCopied = s[1];
 
       function load(quiet) {
         return api("/devices").then(function (x) { setD(x); if (!quiet) setErr(null); })
           .catch(function (e) { if (!quiet) setErr(String(e.message || e)); });
       }
       useEffect(function () { load(); }, []);
-      var live = d && (d.actions || []).some(function (a) { return a.status === "running" || a.status === "approved"; });
+      var live = d && ((d.actions || []).some(function (a) { return a.status === "running" || a.status === "approved"; }) ||
+        (d.computers || []).some(function (c) { return !c.last_seen; }));
       var fresh = d && d.unifi.connected && !(d.scan || {}).at;
       useEffect(function () {
         if (!live && !fresh) return;
@@ -78,6 +82,64 @@
         call("connect", "/apps/unifi/connect", { method: "POST", body: JSON.stringify({ fields: f, access: "write" }) })
           .then(function (x) { if (x) { setSetup(false); setF({}); setMsg("UniFi is connected. Scanning your network now."); load(true); } });
       }
+      function addComputer() {
+        call("add", "/devices/computers", { method: "POST", body: JSON.stringify(add) })
+          .then(function (x) { if (x && x.install) { setInst(x.install); setAdd(null); setCopied(false); } });
+      }
+      function copy(text) {
+        try { navigator.clipboard.writeText(text).then(function () { setCopied(true); }); } catch (e) {}
+      }
+      function bar(label, pct, note) {
+        if (pct === null || pct === undefined) return null;
+        return h("div", { className: "dv-meter", key: label },
+          h("div", { className: "dv-meter-top" }, h("span", null, label), h("span", null, Math.round(pct) + "%" + (note ? " · " + note : ""))),
+          h("div", { className: "dv-track", role: "img", "aria-label": label + " " + Math.round(pct) + " percent" },
+            h("div", { className: "dv-fill" + (pct >= 90 ? " dv-fill-bad" : (pct >= 75 ? " dv-fill-warn" : "")), style: { width: Math.min(100, Math.max(2, pct)) + "%" } })));
+      }
+      function computer(c) {
+        var v = c.veeam;
+        return h("div", { key: c.id, className: "dv-card dv-comp" + (c.problems.length ? " dv-comp-warn" : "") },
+          h("div", { className: "dv-main" },
+            h("span", { className: "dv-dot" + (c.reporting ? " dv-dot-on" : (c.last_seen ? " dv-dot-bad" : "")), "aria-hidden": "true" }),
+            h("div", { className: "dv-meta" },
+              h("div", { className: "dv-name" }, c.name, c.reboot_pending ? h("span", { className: "dv-badge" }, "Restart needed for updates") : null),
+              h("div", { className: "dv-dim" }, [c.host && c.host.toLowerCase() !== c.name.toLowerCase() ? c.host : "", c.os_name || (c.os === "windows" ? "Windows" : "Linux"),
+                c.uptime_days !== null ? "up " + c.uptime_days + " days" : "", c.last_seen ? "reported " + when(c.last_seen) : "no report yet"].filter(Boolean).join(" · "))),
+            h("button", { type: "button", className: "dv-btn", disabled: busy === "rmc:" + c.id, onClick: function () {
+              if (window.confirm("Remove " + c.name + " from My devices? Its reports are refused from then on.")) call("rmc:" + c.id, "/devices/computers/" + c.id, { method: "DELETE" }); } }, "Remove")),
+          c.problems.length ? h("ul", { className: "dv-probs" }, c.problems.map(function (t, i) { return h("li", { key: i }, t); })) : null,
+          c.last_seen ? h("div", { className: "dv-meters" },
+            bar("CPU", c.cpu), bar("Memory", c.mem_pct, c.mem_gb ? c.mem_gb + " GB" : ""),
+            c.disks.map(function (x) { return bar("Disk " + x.name, x.pct, x.free_gb + " GB free of " + x.size_gb); })) : null,
+          v ? h("div", { className: "dv-veeam" },
+            h("div", { className: "dv-lab" }, "Veeam backups" + (v.version ? " · agent " + v.version : "")),
+            v.jobs.length ? v.jobs.map(function (j, i) {
+              return h("div", { key: i, className: "dv-job" },
+                h("span", { className: "dv-badge dv-badge-" + (j.result === "Success" ? "done" : (j.result === "Warning" ? "warn" : "failed")) }, j.result),
+                h("span", { className: "dv-jobname" }, j.job),
+                h("span", { className: "dv-dim" }, "last ran " + when(j.at) + (j.result !== "Success" && j.last_success && j.last_success !== j.at ? " · last completed " + when(j.last_success) : "") +
+                  (j.result !== "Success" && j.detail ? " · " + j.detail : "")));
+            }) : h("div", { className: "dv-dim" }, "No finished backup found yet.")) : null);
+      }
+      function addForm() {
+        return h("div", { className: "dv-card" },
+          h("div", { className: "dv-name" }, "Add a computer or server"),
+          h("div", { className: "dv-dim" }, "You get one command to run on that machine. It installs a small task that sends its CPU, memory, disk and Veeam backup results here every 5 minutes. " +
+            "It only reads, and Agent OS never logs in to the machine or stores a password for it."),
+          h("label", { className: "dv-field" }, h("span", null, "Name to show"),
+            h("input", { className: "dv-in", type: "text", placeholder: "Front office PC, Hyper-V host, NAS…", value: add.name,
+              onChange: function (e) { setAdd(Object.assign({}, add, { name: e.target.value })); } })),
+          h("fieldset", { className: "dv-pick" }, h("legend", null, "It runs"),
+            ["windows", "linux"].map(function (o) { return h("label", { key: o },
+              h("input", { type: "radio", name: "dv-os", checked: add.os === o, onChange: function () { setAdd(Object.assign({}, add, { os: o })); } }), o === "windows" ? " Windows" : " Linux"); })),
+          h("label", { className: "dv-field" }, h("span", null, "Agent OS address, as that machine reaches it"),
+            h("input", { className: "dv-in", type: "text", spellCheck: false, value: add.base,
+              onChange: function (e) { setAdd(Object.assign({}, add, { base: e.target.value })); } })),
+          h("div", { className: "dv-acts" },
+            h("button", { type: "button", className: "dv-btn", onClick: function () { setAdd(null); } }, "Cancel"),
+            h("button", { type: "button", className: "dv-btn dv-primary", disabled: busy === "add" || !add.name.trim(), onClick: addComputer }, busy === "add" ? "Adding…" : "Get the command")));
+      }
+
       function act(dev, action, iso) {
         setAsk(null);
         call("act:" + dev.id, "/devices/" + dev.id + "/action", { method: "POST", body: JSON.stringify({ action: action, when: iso || "" }) });
@@ -92,6 +154,8 @@
       var updates = gear.filter(function (x) { return x.updatable; }).length;
       var down = gear.filter(function (x) { return x.state !== "ONLINE"; }).length;
       var canAct = u.access === "write";
+      var comps = d.computers || [];
+      var trouble = comps.filter(function (c) { return c.problems.length; }).length;
       var open = {};      // device "site/id" -> its action in progress or waiting
       (d.actions || []).forEach(function (a) { if (!open[a.device] && (a.status === "running" || a.status === "approved" || a.status === "pending")) open[a.device] = a; });
 
@@ -155,9 +219,23 @@
 
       return h("div", { className: "dv-wrap" },
         h("div", { className: "dv-h1" }, "My devices"),
-        h("div", { className: "dv-sub" }, "Your network gear and everything connected to it, scanned in automatically. Restart a device or install its firmware update from here."),
+        h("div", { className: "dv-sub" }, "Your computers, servers and backups, and your network gear with everything connected to it, in one place."),
         msg ? h("div", { className: "dv-msg dv-good", role: "status" }, msg) : null,
         err ? h("div", { className: "dv-msg dv-bad", role: "alert" }, err) : null,
+        h("div", { className: "dv-bar" },
+          h("div", { className: "dv-h2 dv-h2-flat" }, "Computers and servers (" + comps.length + ")" + (trouble ? " · " + trouble + " need a look" : "")),
+          add ? null : h("button", { type: "button", className: "dv-btn", onClick: function () { setInst(null); setAdd({ name: "", os: "windows", base: window.location.origin }); } }, "Add a computer")),
+        add ? addForm() : null,
+        inst ? h("div", { className: "dv-card dv-inst" },
+          h("div", { className: "dv-name" }, "Run this once on " + inst.name),
+          h("div", { className: "dv-dim" }, "Paste it into " + inst.where + ". It is shown only this once; if you lose it, remove the computer and add it again."),
+          h("pre", { className: "dv-cmd" }, inst.command),
+          h("div", { className: "dv-acts dv-left" },
+            h("button", { type: "button", className: "dv-btn dv-primary", onClick: function () { copy(inst.command); } }, copied ? "Copied" : "Copy command"),
+            h("button", { type: "button", className: "dv-btn", onClick: function () { setInst(null); } }, "Done"))) : null,
+        comps.length ? h("div", { className: "dv-comps" }, comps.map(computer))
+          : (add || inst ? null : h("div", { className: "dv-dim" }, "None yet. Add a computer to see its CPU, memory, disk space and Veeam backups here.")),
+        u.connected ? h("div", { className: "dv-h2" }, "Network") : null,
         (!u.connected || setup) ? form() : null,
         u.connected ? h("div", { className: "dv-stats" },
           [[gear.length, "Network devices"], [down, "Not online"], [updates, "Updates waiting"], [clients.filter(function (c) { return c.state === "ONLINE"; }).length, "Connected now"]]

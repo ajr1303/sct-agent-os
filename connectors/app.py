@@ -34,6 +34,7 @@ import hashlib
 import subprocess
 import threading
 import uuid
+import secrets
 
 import httpx
 from dateutil import parser as dtparse
@@ -216,6 +217,14 @@ def get_db():
             updatable INTEGER NOT NULL DEFAULT 0, link TEXT,
             first_seen TEXT NOT NULL, last_seen TEXT NOT NULL,
             UNIQUE(source, ext_id)
+        )
+    """)
+    # Computers and servers that report their own resources and backups (see /devices/report).
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS computers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, os TEXT NOT NULL,
+            created_at TEXT NOT NULL, last_seen TEXT, data TEXT
         )
     """)
     # Every call an agent or Chat makes to a connected app, for the owner to look over.
@@ -7085,6 +7094,7 @@ def _devices_view(message=None):
                         "action": r["action"], "target": r["target"], "status": r["status"], "result": r["result"],
                         "why": r["why"], "agent": r["agent"], "run_at": r["run_at"], "run_at_words": _when_words(r["run_at"]) if r["run_at"] else "",
                         "finished_at": r["finished_at"]} for r in acts][:30]}
+    out["computers"] = _computers()
     if message:
         out["message"] = message
     return out
@@ -7159,25 +7169,257 @@ def devices_cancel(rid: int, _auth=Depends(require_auth)):
     return _devices_view("Cancelled. Nothing was changed.")
 
 
+# ---- Computers and servers that report in ------------------------------------------------
+# UniFi only knows a computer is on the network. For CPU, memory, disk and backups, a small
+# script on each machine posts a report every 5 minutes with that machine's own token. Agent
+# OS never logs in to the machine and stores no password for it; the token can only post.
+COMPUTER_SILENT_MIN = 15
+BACKUP_STALE_DAYS = 3
+_REPORTER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reporter")
+
+
+class ComputerAdd(BaseModel):
+    name: str
+    os: str
+    base: str
+
+
+def _tok_hash(tok):
+    return hashlib.sha256(("agent-os-reporter:" + str(tok)).encode()).hexdigest()
+
+
+def _clip(v, n=120):
+    return re.sub(r"[\x00-\x1f\x7f]+", " ", str(v if v is not None else "")).strip()[:n]
+
+
+def _num(v, lo=0.0, hi=1e15):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if lo <= f <= hi else None
+
+
+def _report_clean(j):
+    """A machine's report, reduced to known fields with bounded sizes. The sender is not trusted."""
+    out = {"host": _clip(j.get("host"), 80), "os_name": _clip(j.get("os_name"), 120),
+           "uptime_s": _num(j.get("uptime_s")), "cpu": _num(j.get("cpu"), 0, 100),
+           "mem_total": _num(j.get("mem_total")), "mem_free": _num(j.get("mem_free")),
+           "reboot_pending": bool(j.get("reboot_pending")), "tz": _clip(j.get("tz"), 8), "disks": [], "veeam": None}
+    for d in (j.get("disks") or [])[:24] if isinstance(j.get("disks"), list) else []:
+        if isinstance(d, dict) and (_num(d.get("size")) or 0) >= 2 * 2 ** 30:      # skip tiny system mounts
+            out["disks"].append({"name": _clip(d.get("name"), 60), "size": _num(d.get("size")), "free": _num(d.get("free")) or 0})
+    v = j.get("veeam")
+    if isinstance(v, dict) and v.get("installed"):
+        ev = []
+        for e in (v.get("events") or [])[:300] if isinstance(v.get("events"), list) else []:
+            if isinstance(e, dict):
+                ev.append({"at": _clip(e.get("at"), 40), "level": _clip(e.get("level"), 16), "msg": _clip(e.get("msg"), 400)})
+        out["veeam"] = {"installed": True, "version": _clip(v.get("version"), 40), "service": _clip(v.get("service"), 24),
+                        "events": ev, "sessions": [_clip(x, 300) for x in (v.get("sessions") or [])[:120]] if isinstance(v.get("sessions"), list) else []}
+    return out
+
+
+_VEEAM_WIN = re.compile(r"'(.+?)'\s+finished with\s+(\w+)", re.I)
+_VEEAM_LNX = re.compile(r"^(.*\S)\s+(\w+)\s+\{[0-9a-fA-F-]{36}\}\s+(\w+)\s+(\d{4}-\d\d-\d\d \d\d:\d\d)(?:\s+(\d{4}-\d\d-\d\d \d\d:\d\d))?")
+
+
+def _veeam_jobs(v, tz=""):
+    """Latest result and last success per backup job, from what the machine sent."""
+    runs = []
+    for e in v.get("events") or []:
+        m = _VEEAM_WIN.search(e["msg"])
+        if m and _ts(e["at"]):
+            runs.append((m.group(1)[:80], m.group(2).capitalize(), _ts(e["at"]),
+                         re.sub(r"^[\s.:]+", "", e["msg"][m.end():])[:220]))
+    off = tz if re.match(r"^[+-]\d{4}$", tz or "") else "+0000"
+    for line in v.get("sessions") or []:
+        m = _VEEAM_LNX.match(line.strip())
+        if m and m.group(3).lower() != "running":
+            t = _ts((m.group(5) or m.group(4)).replace(" ", "T") + ":00" + off[:3] + ":" + off[3:])
+            if t:
+                runs.append((m.group(1)[:80], m.group(3).capitalize(), t, ""))
+    jobs = {}
+    for name, result, at, detail in sorted(runs, key=lambda r: r[2]):
+        j = jobs.setdefault(name, {"job": name, "result": result, "at": None, "last_success": None, "detail": ""})
+        j["result"], j["at"], j["detail"] = result, at.isoformat(), detail
+        if result == "Success" or result == "Warning":       # a warning run still made a restore point
+            j["last_success"] = at.isoformat()
+    return sorted(jobs.values(), key=lambda j: j["job"].lower())
+
+
+def _computer_view(r):
+    cid, name, osk, created, last_seen, data = r
+    d = json.loads(data) if data else {}
+    seen = _ts(last_seen) if last_seen else None
+    reporting = bool(seen and _now() - seen < datetime.timedelta(minutes=COMPUTER_SILENT_MIN))
+    out = {"id": cid, "name": name, "os": osk, "created_at": created, "last_seen": last_seen, "reporting": reporting,
+           "host": d.get("host") or "", "os_name": d.get("os_name") or "", "cpu": d.get("cpu"),
+           "uptime_days": round(d["uptime_s"] / 86400, 1) if d.get("uptime_s") else None,
+           "mem_pct": round(100 * (1 - d["mem_free"] / d["mem_total"])) if d.get("mem_total") and d.get("mem_free") is not None else None,
+           "mem_gb": round(d["mem_total"] / 2 ** 30, 1) if d.get("mem_total") else None,
+           "reboot_pending": bool(d.get("reboot_pending")),
+           "disks": [{"name": x["name"], "pct": round(100 * (1 - x["free"] / x["size"])), "free_gb": round(x["free"] / 2 ** 30, 1),
+                      "size_gb": round(x["size"] / 2 ** 30, 1)} for x in d.get("disks") or []],
+           "veeam": None, "problems": []}
+    p = out["problems"]
+    if not seen:
+        p.append("Waiting for its first report. Run the install command on it.")
+    elif not reporting:
+        p.append("No report since %s. It may be off, offline, or the report task stopped." % _when_words(last_seen))
+    for x in out["disks"]:
+        if x["pct"] >= 90:
+            p.append("Disk %s is %d%% full (%s GB free)." % (x["name"], x["pct"], x["free_gb"]))
+    v = d.get("veeam")
+    if v:
+        jobs = _veeam_jobs(v, d.get("tz") or "")
+        out["veeam"] = {"version": v.get("version"), "service": v.get("service"), "jobs": jobs}
+        if v.get("service") and v["service"].lower() not in ("running", "active"):
+            p.append("The Veeam service is %s." % v["service"].lower())
+        if not jobs:
+            p.append("Veeam is installed but no finished backup could be read from its log.")
+        for j in jobs:
+            if j["result"] not in ("Success", "Warning"):
+                p.append("Backup \"%s\" %s on %s." % (j["job"], j["result"].lower(), _when_words(j["at"])))
+            elif j["result"] == "Warning":
+                p.append("Backup \"%s\" finished with a warning on %s." % (j["job"], _when_words(j["at"])))
+            ok = _ts(j["last_success"]) if j["last_success"] else None
+            if not ok:
+                p.append("Backup \"%s\" has no completed run on record." % j["job"])
+            elif _now() - ok > datetime.timedelta(days=BACKUP_STALE_DAYS):
+                p.append("Backup \"%s\" last completed %d days ago." % (j["job"], (_now() - ok).days))
+    return out
+
+
+def _computers():
+    with closing(get_db()) as con:
+        rows = con.execute("SELECT id, name, os, created_at, last_seen, data FROM computers ORDER BY name COLLATE NOCASE").fetchall()
+    return [_computer_view(r) for r in rows]
+
+
+def _reporter_file(name):
+    with open(os.path.join(_REPORTER_DIR, name), encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _reporter_base(u):
+    u = str(u or "").strip().rstrip("/")
+    if not re.match(r"^https?://[A-Za-z0-9.\-]+(:\d{1,5})?$", u):
+        raise HTTPException(status_code=400, detail="The Agent OS address must look like https://agent-os.example.com or http://server:9119.")
+    return u
+
+
+@app.post("/devices/computers")
+def computers_add(b: ComputerAdd, _auth=Depends(require_auth)):
+    name = _clip(b.name, 60)
+    if len(name) < 2 or b.os not in ("windows", "linux"):
+        raise HTTPException(status_code=400, detail="Give the computer a name and choose Windows or Linux.")
+    base = _reporter_base(b.base)
+    tok = secrets.token_urlsafe(24)
+    with closing(get_db()) as con:
+        if con.execute("SELECT count(*) FROM computers").fetchone()[0] >= 200:
+            raise HTTPException(status_code=400, detail="200 computers is the limit.")
+        if con.execute("SELECT 1 FROM computers WHERE name=? COLLATE NOCASE", (name,)).fetchone():
+            raise HTTPException(status_code=409, detail="A computer with that name is already listed.")
+        con.execute("INSERT INTO computers(name, token_hash, os, created_at) VALUES(?,?,?,?)", (name, _tok_hash(tok), b.os, _now().isoformat()))
+        con.commit()
+    url = "%s/api/connectors/devices/reporter/%s/install.%s?u=%s" % (base, tok, "ps1" if b.os == "windows" else "sh", quote(base, safe=""))
+    v = _devices_view("%s is added. Run the command on it once; it shows here within a minute." % name)
+    v["install"] = {"name": name, "os": b.os, "command":
+                    ("[Net.ServicePointManager]::SecurityProtocol='Tls12'; irm '%s' | iex" % url) if b.os == "windows"
+                    else ("curl -fsSL '%s' | sudo sh" % url),
+                    "where": "PowerShell opened with Run as administrator" if b.os == "windows" else "a terminal on that machine"}
+    return v
+
+
+@app.delete("/devices/computers/{cid}")
+def computers_remove(cid: int, _auth=Depends(require_auth)):
+    with closing(get_db()) as con:
+        n = con.execute("DELETE FROM computers WHERE id=?", (cid,)).rowcount
+        con.commit()
+    if not n:
+        raise HTTPException(status_code=404, detail="That computer is not listed.")
+    return _devices_view("Removed. Its reports are refused from now on; the report task on the machine can be deleted.")
+
+
+def _computer_by_token(tok):
+    if not re.match(r"^[A-Za-z0-9_-]{20,64}$", str(tok or "")):
+        raise HTTPException(status_code=404, detail="Not found")
+    with closing(get_db()) as con:
+        r = con.execute("SELECT id, os, last_seen FROM computers WHERE token_hash=?", (_tok_hash(tok),)).fetchone()
+    if not r:
+        raise HTTPException(status_code=404, detail="Not found")
+    return r
+
+
+@app.get("/devices/reporter/{tok}/{fname}")
+def reporter_script(tok: str, fname: str, u: str = ""):
+    """The install and report scripts, fetched by the machine itself with its own token."""
+    _cid, osk, _seen = _computer_by_token(tok)
+    ext = "ps1" if osk == "windows" else "sh"
+    if fname == "install." + ext:
+        base = _reporter_base(u)
+        body = _reporter_file("install." + ext).replace("__BASE__", base).replace("__TOKEN__", tok)
+    elif fname == "report." + ext:
+        body = _reporter_file("report." + ext)
+    else:
+        raise HTTPException(status_code=404, detail="Not found")
+    return Response(content=body, media_type="text/plain; charset=utf-8", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/devices/report")
+async def computers_report(request: Request):
+    auth = request.headers.get("authorization", "")
+    cid, _osk, seen = _computer_by_token(auth[7:].strip() if auth.lower().startswith("bearer ") else "")
+    last = _ts(seen) if seen else None
+    if last and _now() - last < datetime.timedelta(seconds=45):
+        raise HTTPException(status_code=429, detail="Too soon")
+    raw = await request.body()
+    if len(raw) > 200000:
+        raise HTTPException(status_code=413, detail="Report too large")
+    try:
+        j = json.loads(raw.decode("utf-8-sig"))
+        assert isinstance(j, dict)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Send a JSON object")
+    with closing(get_db()) as con:
+        con.execute("UPDATE computers SET last_seen=?, data=? WHERE id=?", (_now().isoformat(), json.dumps(_report_clean(j)), cid))
+        con.commit()
+    return {"ok": True}
+
+
 def t_my_devices(a):
-    """The owner's device list as last scanned (no call to the controller)."""
-    if not _app_row("unifi"):
-        raise ToolError("No device source is connected. Tell the owner they can connect UniFi on the My devices page.")
-    kind = str(a.get("kind") or "network").lower()
-    if kind not in ("network", "client", "all"):
-        raise ToolError("kind is network, client or all.")
-    rows = _devices_rows() if kind == "all" else _devices_rows("kind=?", (kind,))
+    """The owner's device list as last scanned or reported (no call to any device)."""
+    kind = str(a.get("kind") or "all").lower()
+    if kind not in ("network", "client", "computer", "all"):
+        raise ToolError("kind is network, client, computer or all.")
+    comps = _computers() if kind in ("computer", "all") else []
+    unifi = bool(_app_row("unifi"))
+    if not unifi and not comps:
+        raise ToolError("Nothing is listed yet. Tell the owner they can connect UniFi and add computers on the My devices page.")
+    rows = []
+    if unifi and kind != "computer":
+        rows = _devices_rows("kind='network'") if kind in ("network", "all") else []
+        if kind == "client" or (kind == "all" and a.get("search")):
+            rows += _devices_rows("kind='client'")
     q = str(a.get("search") or "").lower().strip()
     if q:
         rows = [r for r in rows if q in " ".join(str(r[k] or "") for k in ("name", "model", "ip", "mac")).lower()]
+        comps = [c for c in comps if q in (c["name"] + " " + c["host"]).lower()]
     if a.get("needs_update"):
-        rows = [r for r in rows if r["updatable"]]
+        rows, comps = [r for r in rows if r["updatable"]], []
+    if a.get("problems_only"):
+        rows, comps = [r for r in rows if r["kind"] == "network" and r["state"] != "ONLINE"], [c for c in comps if c["problems"]]
     scan = json.loads(_kv_get("devices_scan") or "{}")
-    out = {"scanned_at": scan.get("at"), "scan_ok": scan.get("ok"), "count": len(rows),
+    out = {"network_scanned_at": scan.get("at") if unifi else None,
+           "computers": [{k: c[k] for k in ("name", "os_name", "host", "last_seen", "reporting", "cpu", "mem_pct", "mem_gb",
+                                           "uptime_days", "reboot_pending", "disks", "veeam", "problems")} for c in comps],
            "devices": [{"name": r["name"], "kind": r["kind"], "model": r["model"], "ip": r["ip"], "mac": r["mac"],
                         "state": r["state"].lower(), "firmware": r["firmware"], "update_waiting": bool(r["updatable"]),
                         "connection": r["link"], "site_id": r["site_id"], "device_id": r["ext_id"].split("/", 1)[1],
                         "first_seen": r["first_seen"], "last_seen": r["last_seen"]} for r in rows[:400]]}
+    if kind == "all" and unifi and not q:
+        out["note"] = "Things connected to the network are left out here; ask with kind client or a search."
     return BA.trim(out)
 
 
@@ -10895,11 +11137,15 @@ MCP_TOOLS = {
                  "task": {"type": "string", "description": "Your task key, so the result is written there"},
                  "agent_id": {"type": "string"}}, ("app", "action", "params", "why"))),
     "my_devices": (t_my_devices, "all",
-        "The owner's devices as last scanned (the My devices page): network gear with state, firmware and whether an "
-        "update is waiting, and the computers, phones and printers connected to it. Fast, and gives the site_id and "
-        "device_id that propose_action needs. kind is network (default), client or all.",
-        _schema({"kind": {"type": "string"}, "search": {"type": "string", "description": "Part of a name, model, IP or MAC"},
+        "The owner's devices (the My devices page), without calling any device. computers: servers and PCs that "
+        "report in, with CPU, memory, disks, uptime, their Veeam backup jobs (last result, last completed run) and "
+        "a plain list of problems. devices: network gear with state, firmware and whether an update is waiting "
+        "(with the site_id and device_id propose_action needs), and with kind client the things connected to it. "
+        "Start here for 'are the backups OK', 'what is low on disk', 'what needs an update'.",
+        _schema({"kind": {"type": "string", "description": "all (default), computer, network or client"},
+                 "search": {"type": "string", "description": "Part of a name, model, IP or MAC"},
                  "needs_update": {"type": "boolean", "description": "Only gear with a firmware update waiting"},
+                 "problems_only": {"type": "boolean", "description": "Only computers with a problem and gear that is not online"},
                  "agent_id": {"type": "string"}}, ())),
     "app_get": (t_app_get, "all",
         "Read anything else from a connected app's own API (GET only), e.g. app github, path /repos/acme/site/pulls.",
