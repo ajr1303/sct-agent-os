@@ -207,6 +207,17 @@ def get_db():
             last_used_at TEXT
         )
     """)
+    # My devices: what scanning the owner's network found (UniFi gear and what is connected to it).
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS devices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL, ext_id TEXT NOT NULL, site_id TEXT, kind TEXT NOT NULL,
+            name TEXT, model TEXT, ip TEXT, mac TEXT, state TEXT, firmware TEXT,
+            updatable INTEGER NOT NULL DEFAULT 0, link TEXT,
+            first_seen TEXT NOT NULL, last_seen TEXT NOT NULL,
+            UNIQUE(source, ext_id)
+        )
+    """)
     # Every call an agent or Chat makes to a connected app, for the owner to look over.
     con.execute("""
         CREATE TABLE IF NOT EXISTS app_calls (
@@ -3205,6 +3216,10 @@ def stuck_watch_run(dry_run=False):
             _idea_tick()       # the day's idea for the owner, once their morning has started
             try:
                 _actions_tick()    # approved actions whose time has come
+            except Exception:
+                pass
+            try:
+                _devices_scan()    # keep My devices current
             except Exception:
                 pass
         except Exception:
@@ -6617,6 +6632,8 @@ def _apps_view():
         calls = con.execute("SELECT at, app, action, write, who, ok, note FROM app_calls ORDER BY id DESC LIMIT 40").fetchall()
     apps = []
     for a in BA.public_catalog():
+        if a.get("home"):       # lives on its own page (UniFi is on My devices)
+            continue
         r = rows.get(a["id"])
         a["connected"] = bool(r)
         if r:
@@ -6661,6 +6678,8 @@ def apps_connect(app_id: str, b: AppConnect, _auth=Depends(require_auth)):
                     "updated_at=excluded.updated_at",
                     (app_id, fernet.encrypt(json.dumps(fields).encode()), access, who, n8n_id, note, now, now))
         con.commit()
+    if app_id == "unifi":
+        threading.Thread(target=_devices_scan, daemon=True).start()
     v = _apps_view()
     v["message"] = "%s is connected (%s). Every agent and Chat can use it now. %s" % (BA.CATALOG[app_id]["label"], who, note)
     return v
@@ -6713,6 +6732,8 @@ def apps_disconnect(app_id: str, _auth=Depends(require_auth)):
             note = " Its n8n login could not be removed; delete \"%s (Agent OS)\" in n8n." % BA.CATALOG[app_id]["label"]
     with closing(get_db()) as con:
         con.execute("DELETE FROM business_apps WHERE app=?", (app_id,))
+        if app_id == "unifi":
+            con.execute("DELETE FROM devices WHERE source='unifi'")
         con.commit()
     v = _apps_view()
     v["message"] = "%s is disconnected.%s" % (BA.CATALOG[app_id]["label"], note)
@@ -6749,8 +6770,9 @@ def _app_pick(a):
         raise ToolError("Unknown app %r. Call connected_apps to see what is connected." % a.get("app"))
     row = _app_row(app_id)
     if not row:
-        raise ToolError("%s is not connected. Tell the owner they can connect it on the Connections page (one "
-                        "login, then every agent can use it)." % BA.CATALOG[app_id]["label"])
+        raise ToolError("%s is not connected. Tell the owner they can connect it on the %s page (one "
+                        "login, then every agent can use it)." % (
+                            BA.CATALOG[app_id]["label"], "My devices" if BA.CATALOG[app_id].get("home") else "Connections"))
     return app_id, row
 
 
@@ -6966,6 +6988,197 @@ def _when_words(iso):
     off = -(_idea_prefs()["tz"])            # the owner's offset from UTC in minutes, as the browser reported it
     local = d.astimezone(datetime.timezone(datetime.timedelta(minutes=off)))
     return local.strftime("%a %b %-d at %-I:%M %p")
+
+
+# ---- My devices: everything found on the owner's network, in one list --------------------
+# Filled by scanning what is connected (UniFi today). Gear the owner can act on has
+# kind "network"; computers, phones and printers seen on the network have kind "client".
+_DEV_KEYS = ("id", "source", "ext_id", "site_id", "kind", "name", "model", "ip", "mac", "state", "firmware",
+             "updatable", "link", "first_seen", "last_seen")
+_DEV_LOCK = threading.Lock()
+DEVICE_FORGET_DAYS = 30
+
+
+class DeviceAct(BaseModel):
+    action: str
+    when: str = ""
+
+
+def _unifi_pages(fields, path, cap=2000):
+    out, off = [], 0
+    while off < cap:
+        j = BA._send("unifi", fields, "GET", path, query={"limit": 200, "offset": off})
+        data = (j or {}).get("data") or []
+        out += data
+        off += len(data)
+        if not data or off >= int((j or {}).get("totalCount") or 0):
+            break
+    return out
+
+
+def _devices_scan():
+    """Read every site's gear and clients from UniFi into the devices table. Returns the scan note."""
+    row = _app_row("unifi")
+    if not row:
+        return None
+    if not _DEV_LOCK.acquire(blocking=False):
+        return json.loads(_kv_get("devices_scan") or "{}")
+    now = _now().isoformat()
+    note = {"at": now, "ok": True, "note": "", "network": 0, "clients": 0}
+    try:
+        found = []
+        for s in _unifi_pages(row["fields"], "/v1/sites"):
+            sid = str(s.get("id") or "")
+            if not sid:
+                continue
+            for d in _unifi_pages(row["fields"], "/v1/sites/%s/devices" % sid):
+                found.append((sid + "/" + str(d.get("id")), sid, "network", d.get("name") or d.get("model") or "Device",
+                              d.get("model") or "", d.get("ipAddress") or "", str(d.get("macAddress") or "").lower(),
+                              str(d.get("state") or "").upper(), d.get("firmwareVersion") or "",
+                              1 if d.get("firmwareUpdatable") else 0, ""))
+            for c in _unifi_pages(row["fields"], "/v1/sites/%s/clients" % sid):
+                mac = str(c.get("macAddress") or "").lower()
+                found.append((sid + "/" + (mac or str(c.get("id"))), sid, "client",
+                              c.get("name") or c.get("hostname") or mac or "Unnamed", "", c.get("ipAddress") or "", mac,
+                              "ONLINE", "", 0, str(c.get("type") or "").lower()))
+        with closing(get_db()) as con:
+            for f in found:
+                con.execute("INSERT INTO devices(source, ext_id, site_id, kind, name, model, ip, mac, state, firmware, "
+                            "updatable, link, first_seen, last_seen) VALUES('unifi',?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                            "ON CONFLICT(source, ext_id) DO UPDATE SET site_id=excluded.site_id, kind=excluded.kind, "
+                            "name=excluded.name, model=excluded.model, ip=excluded.ip, mac=excluded.mac, state=excluded.state, "
+                            "firmware=excluded.firmware, updatable=excluded.updatable, link=excluded.link, "
+                            "last_seen=excluded.last_seen", f + (now, now))
+            # Not in this scan: a client has left the network; gear was removed from the controller.
+            con.execute("UPDATE devices SET state='OFFLINE' WHERE source='unifi' AND kind='client' AND last_seen<?", (now,))
+            con.execute("UPDATE devices SET state='REMOVED', updatable=0 WHERE source='unifi' AND kind='network' AND last_seen<?", (now,))
+            old = (_now() - datetime.timedelta(days=DEVICE_FORGET_DAYS)).isoformat()
+            con.execute("DELETE FROM devices WHERE source='unifi' AND last_seen<?", (old,))
+            con.commit()
+        note["network"] = sum(1 for f in found if f[2] == "network")
+        note["clients"] = sum(1 for f in found if f[2] == "client")
+    except Exception as e:
+        note.update(ok=False, note=BA._scrub(str(e), BA.secrets_of("unifi", row["fields"]))[:300])
+    finally:
+        _DEV_LOCK.release()
+    _kv_set("devices_scan", json.dumps(note))
+    return note
+
+
+def _devices_rows(where="1=1", args=()):
+    with closing(get_db()) as con:
+        rows = con.execute("SELECT %s FROM devices WHERE %s ORDER BY kind DESC, (state='ONLINE') DESC, name COLLATE NOCASE "
+                           "LIMIT 3000" % (", ".join(_DEV_KEYS), where), args).fetchall()
+    return [dict(zip(_DEV_KEYS, r)) for r in rows]
+
+
+def _devices_view(message=None):
+    row = _app_row("unifi")
+    cat = next(a for a in BA.public_catalog() if a["id"] == "unifi")
+    acts = _action_rows("app='unifi' AND (status IN ('pending','approved','running') OR finished_at>?)",
+                        ((_now() - datetime.timedelta(days=7)).isoformat(),))
+    out = {"unifi": {"connected": bool(row), "connected_as": (row or {}).get("connected_as"), "access": (row or {}).get("access"),
+                     "label": cat["label"], "fields": cat["fields"], "steps": cat["steps"]},
+           "scan": json.loads(_kv_get("devices_scan") or "{}") if row else {},
+           "devices": _devices_rows() if row else [],
+           "actions": [{"id": r["id"], "device": (json.loads(r["params"]).get("site_id", "") + "/" + json.loads(r["params"]).get("device_id", "")),
+                        "action": r["action"], "target": r["target"], "status": r["status"], "result": r["result"],
+                        "why": r["why"], "agent": r["agent"], "run_at": r["run_at"], "run_at_words": _when_words(r["run_at"]) if r["run_at"] else "",
+                        "finished_at": r["finished_at"]} for r in acts][:30]}
+    if message:
+        out["message"] = message
+    return out
+
+
+@app.get("/devices")
+def devices_list(_auth=Depends(require_auth)):
+    return _devices_view()
+
+
+@app.post("/devices/scan")
+def devices_scan(_auth=Depends(require_auth)):
+    note = _devices_scan()
+    if note is None:
+        raise HTTPException(status_code=400, detail="Connect UniFi first.")
+    if not note.get("ok"):
+        raise HTTPException(status_code=502, detail="The scan did not finish: " + (note.get("note") or "the controller did not answer."))
+    return _devices_view("Scan finished: %d network devices and %d things connected to them." % (note["network"], note["clients"]))
+
+
+_DEV_ACTIONS = {"restart": "restart_device", "update": "update_firmware"}
+
+
+@app.post("/devices/{dev_id}/action")
+def devices_act(dev_id: int, b: DeviceAct, _auth=Depends(require_auth)):
+    """The owner pressed Restart or Update on a device. Their click is the approval."""
+    action = _DEV_ACTIONS.get(b.action)
+    devs = _devices_rows("id=? AND kind='network'", (dev_id,))
+    row = _app_row("unifi")
+    if not action or not devs or not row:
+        raise HTTPException(status_code=404, detail="That device or action was not found.")
+    if row["access"] != "write":
+        raise HTTPException(status_code=400, detail="UniFi is set to read only. Allow changes first.")
+    try:
+        run_at = _when(b.when)
+    except ToolError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    params = {"site_id": devs[0]["site_id"], "device_id": devs[0]["ext_id"].split("/", 1)[1]}
+    try:
+        info = BA.describe("unifi", row["fields"], action, params)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=BA._scrub(str(e), BA.secrets_of("unifi", row["fields"]))[:300])
+    pj, now = json.dumps(params, sort_keys=True), _now().isoformat()
+    with closing(get_db()) as con:
+        if con.execute("SELECT 1 FROM action_requests WHERE app='unifi' AND params=? AND status IN ('approved','running')", (pj,)).fetchone():
+            raise HTTPException(status_code=409, detail="Something is already running or scheduled on %s. Wait for it, or cancel it below." % info["target"])
+        # An agent's waiting request for the same thing is settled by this click.
+        con.execute("UPDATE action_requests SET status='declined', result='Done from My devices instead.', decided_at=?, "
+                    "finished_at=? WHERE app='unifi' AND params=? AND status='pending'", (now, now, pj))
+        rid = con.execute("INSERT INTO action_requests(app, action, params, target, detail, why, agent, issue_id, issue_key, before, "
+                          "run_at, status, created_at, decided_at) VALUES('unifi',?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                          (action, pj, info["target"][:200], info["detail"][:400], "Started by the owner on My devices.", "You",
+                           "", "", json.dumps(info.get("state") or {}), run_at.isoformat() if run_at else None, "approved", now, now)).lastrowid
+        con.commit()
+    _DEC_CACHE.clear()
+    if not run_at:
+        _action_start(rid)
+    return _devices_view("%s %s. This page shows the result when it is checked." % (
+        info["target"], ("is scheduled for " + _when_words(run_at.isoformat())) if run_at else
+        ("is updating now" if action == "update_firmware" else "is restarting now")))
+
+
+@app.post("/devices/actions/{rid}/cancel")
+def devices_cancel(rid: int, _auth=Depends(require_auth)):
+    with closing(get_db()) as con:
+        n = con.execute("UPDATE action_requests SET status='declined', result='Cancelled before it ran.', finished_at=? "
+                        "WHERE id=? AND app='unifi' AND status IN ('pending','approved')", (_now().isoformat(), rid)).rowcount
+        con.commit()
+    if not n:
+        raise HTTPException(status_code=409, detail="It has already started or finished, so it cannot be cancelled.")
+    _DEC_CACHE.clear()
+    return _devices_view("Cancelled. Nothing was changed.")
+
+
+def t_my_devices(a):
+    """The owner's device list as last scanned (no call to the controller)."""
+    if not _app_row("unifi"):
+        raise ToolError("No device source is connected. Tell the owner they can connect UniFi on the My devices page.")
+    kind = str(a.get("kind") or "network").lower()
+    if kind not in ("network", "client", "all"):
+        raise ToolError("kind is network, client or all.")
+    rows = _devices_rows() if kind == "all" else _devices_rows("kind=?", (kind,))
+    q = str(a.get("search") or "").lower().strip()
+    if q:
+        rows = [r for r in rows if q in " ".join(str(r[k] or "") for k in ("name", "model", "ip", "mac")).lower()]
+    if a.get("needs_update"):
+        rows = [r for r in rows if r["updatable"]]
+    scan = json.loads(_kv_get("devices_scan") or "{}")
+    out = {"scanned_at": scan.get("at"), "scan_ok": scan.get("ok"), "count": len(rows),
+           "devices": [{"name": r["name"], "kind": r["kind"], "model": r["model"], "ip": r["ip"], "mac": r["mac"],
+                        "state": r["state"].lower(), "firmware": r["firmware"], "update_waiting": bool(r["updatable"]),
+                        "connection": r["link"], "site_id": r["site_id"], "device_id": r["ext_id"].split("/", 1)[1],
+                        "first_seen": r["first_seen"], "last_seen": r["last_seen"]} for r in rows[:400]]}
+    return BA.trim(out)
 
 
 def t_app_get(a):
@@ -10681,6 +10894,13 @@ MCP_TOOLS = {
                  "when": {"type": "string", "description": "'now', or an ISO time with offset, e.g. 2026-01-15T23:00:00-05:00"},
                  "task": {"type": "string", "description": "Your task key, so the result is written there"},
                  "agent_id": {"type": "string"}}, ("app", "action", "params", "why"))),
+    "my_devices": (t_my_devices, "all",
+        "The owner's devices as last scanned (the My devices page): network gear with state, firmware and whether an "
+        "update is waiting, and the computers, phones and printers connected to it. Fast, and gives the site_id and "
+        "device_id that propose_action needs. kind is network (default), client or all.",
+        _schema({"kind": {"type": "string"}, "search": {"type": "string", "description": "Part of a name, model, IP or MAC"},
+                 "needs_update": {"type": "boolean", "description": "Only gear with a firmware update waiting"},
+                 "agent_id": {"type": "string"}}, ())),
     "app_get": (t_app_get, "all",
         "Read anything else from a connected app's own API (GET only), e.g. app github, path /repos/acme/site/pulls.",
         _schema({"app": {"type": "string"}, "path": {"type": "string", "description": "Starts with /"},
@@ -10894,7 +11114,7 @@ async def mcp_agent(request: Request):
 _REMOTE_TOOL_NAMES = ("list_agents", "complete_task", "need_owner_input", "split_task", "hand_off_task", "post_idea",
                       "get_business_plan", "update_business_plan", "save_file", "read_task", "wait_for_tasks",
                       "list_projects", "get_project", "read_project_file", "search_project", "create_project",
-                      "save_project_note", "connected_apps", "app_action", "app_get", "propose_action")
+                      "save_project_note", "connected_apps", "app_action", "app_get", "propose_action", "my_devices")
 _REMOTE_HELP = ("Task tools for an agent working an assigned task: split_task when the job will not fit in "
                 "one run, complete_task when it is finished, hand_off_task to pass it to a colleague, "
                 "need_owner_input when only the owner can decide, list_agents for colleagues' names. You "

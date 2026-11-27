@@ -222,7 +222,7 @@ denies after `RUN_MAX_ATTEMPTS`) → Hermes runs API on the **default profile**.
   `POST /projects/{id}/notes`, `GET /projects/{id}/files/{fid}` (always an attachment)
   and `/text`. Text is extracted at upload (`pypdf` for PDF, zip/XML for Office
   files). Tools for both scopes: `list_projects`, `get_project`, `read_project_file`,
-  `search_project`, `save_project_note`, `create_project`, `connected_apps`, `app_action`, `app_get`, `propose_action` (actions marked approval=True run only after the owner approves the card; see _action_run) (business apps from the Connections page; see connectors/business_apps.py), `system_health`, `manage_task` and `manage_workflows` (Chat only, while the owner is chatting) (all of these also reach agents off the box); `assign_task` takes an optional `project`.
+  `search_project`, `save_project_note`, `create_project`, `connected_apps`, `app_action`, `app_get`, `my_devices` (the scanned device list behind the My devices tab; table `devices`, filled by _devices_scan), `propose_action` (actions marked approval=True run only after the owner approves the card; see _action_run) (business apps from the Connections page; see connectors/business_apps.py), `system_health`, `manage_task` and `manage_workflows` (Chat only, while the owner is chatting) (all of these also reach agents off the box); `assign_task` takes an optional `project`.
 - **Chat files and images:** `POST /chat/files?name=` (raw body), `GET /chat/files/{id}`
   (inline only for PNG/JPEG/GIF/WebP by magic bytes, otherwise an attachment; CSP
   sandbox, nosniff). Copies are written to `/chat-files` (host `data/hermes/chat-files`,

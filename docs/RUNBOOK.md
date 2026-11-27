@@ -1457,6 +1457,18 @@ use it (tools `connected_apps`, `app_action`, `app_get`), and n8n has the same l
 `connectors/business_apps.py` (fields, how requests are signed, a test call, the actions, and
 the n8n credential type).
 
+## My devices
+
+The **My devices** tab (`plugins/suburban-devices`) is where UniFi is connected and where
+everything it finds is listed. `_devices_scan` in `connectors/app.py` reads every site's
+devices and clients into the `devices` table (connectors.db) on connect, on **Scan now**, and
+in the 10-minute check; the last scan's outcome is in kv `devices_scan`. Clients that have
+left are kept as offline for 30 days. Restart and Update on the page create an
+already-approved row in `action_requests` (the owner's click is the approval) and follow the
+same run-and-verify path as agent proposals. Agents read the list with `my_devices`. If the
+list is empty or stale, press Scan now: the error from the controller is shown on the page.
+To add another source of devices, write its rows into `devices` with its own `source`.
+
 ## Actions that need the owner's approval
 
 Some app actions can interrupt the business (restart a UniFi device, power-cycle a port,

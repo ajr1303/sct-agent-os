@@ -1,0 +1,10 @@
+{
+  "name": "suburban-devices",
+  "label": "My devices",
+  "description": "Your network gear and everything connected to it, scanned in from UniFi, with restart and firmware updates",
+  "icon": "Network",
+  "version": "0.1.0",
+  "tab": { "path": "/devices" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css"
+}

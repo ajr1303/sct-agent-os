@@ -10,18 +10,25 @@ All notable changes to Suburban Cyber Agent OS. Dates are UTC.
   (propose_action); the owner gets a card under Needs you with what will
   happen, to which device, why and when, and Approve / Decline. On Approve,
   Agent OS runs exactly what was shown, now or at the time given (for after
-  hours), then checks the result and writes it on the task and under Recent
-  use on Connections. Before asking, it checks the device exists and is
+  hours), then checks the result and writes it on the task and on My
+  devices. Before asking, it checks the device exists and is
   online; a request nobody answers lapses after 3 days; the same action is
   never asked twice.
-- **UniFi Network on the Connections page.** Connect a UniFi console or a
-  self-hosted Network Server (version 9 or newer) with an API key. Agents can
-  see sites, devices (state, firmware, update available), clients, networks,
-  Wi-Fi, WAN links and firewall rules. With the owner's approval they can
-  restart a device, power-cycle a PoE port, and install a waiting firmware
-  update; after a restart or update Agent OS waits for the device to come back
-  online (and, for an update, for the firmware version to change) and reports
-  how long it took, or that it did not come back. The controller's
+- **My devices: a new tab for your network.** Connect a UniFi console or a
+  self-hosted Network Server (version 9 or newer) with an API key and Agent OS
+  scans in every gateway, switch and access point (state, firmware, update
+  waiting) and everything connected to them (name, address, wired or Wi-Fi,
+  first and last seen). The list is rescanned every 10 minutes and on Scan
+  now; things that leave the network stay listed as offline for 30 days.
+  Each piece of gear has Restart and, when UniFi offers one, Update: choose
+  Tonight at 11 PM or Do it now, and the page shows the checked result
+  (firmware went from X to Y, back online after N minutes, or that it did not
+  come back). A scheduled one can be cancelled. UniFi is set up on this tab,
+  not on Connections.
+- **Agents know your devices.** my_devices gives agents the scanned list; they
+  can also read sites, clients, networks, Wi-Fi, WAN links and firewall rules
+  from UniFi. With the owner's approval they can restart a device, power-cycle
+  a PoE port, and install a waiting firmware update. The controller's
   self-signed certificate is remembered on first connect and is the only one
   accepted afterwards.
 

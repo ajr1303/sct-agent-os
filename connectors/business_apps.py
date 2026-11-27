@@ -552,6 +552,7 @@ CATALOG = {
     },
     "unifi": {
         "label": "UniFi Network", "category": "IT & security",
+        "home": "devices",      # set up on the My devices page, not on Connections
         "about": "Your UniFi gateway, switches and access points: see devices, clients and firewall rules; "
                  "restart a device or update its firmware with your approval.",
         "fields": [{"key": "site", "label": "Controller address", "secret": False,
@@ -654,6 +655,7 @@ def public_catalog():
     out = []
     for aid, a in CATALOG.items():
         out.append({"id": aid, "label": a["label"], "category": a["category"], "about": a["about"],
+                    "home": a.get("home") or "",
                     "fields": a["fields"], "steps": a["steps"], "read_only": bool(a.get("read_only")),
                     "has_writes": any(x["write"] for x in a["actions"].values()),
                     "actions": [{"name": n, "desc": x["desc"], "write": x["write"], "approval": bool(x.get("approval"))}
