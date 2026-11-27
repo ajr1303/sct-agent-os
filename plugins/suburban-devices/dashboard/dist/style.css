@@ -65,6 +65,7 @@
 .dv-badge-warn{border-color:rgba(255,189,56,.6);color:#ffbd38}
 .dv-pick{border:0;padding:0;margin:0;display:flex;gap:16px;font-size:13px;flex-wrap:wrap}
 .dv-pick legend{font-size:11px;letter-spacing:.05em;text-transform:uppercase;opacity:.65;padding:0;margin-bottom:5px}
+.dv-check{font-size:13px;display:flex;gap:8px;align-items:center}
 .dv-cmd{margin:0;padding:10px 12px;font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;background:rgba(0,0,0,.35);border:1px solid var(--color-border,rgba(255,255,255,.15));user-select:all}
 @media (max-width:640px){.dv-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.dv-search{max-width:none}.dv-comps{grid-template-columns:1fr}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}

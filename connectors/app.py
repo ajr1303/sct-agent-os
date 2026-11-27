@@ -227,6 +227,9 @@ def get_db():
             created_at TEXT NOT NULL, last_seen TEXT, data TEXT
         )
     """)
+    # status: "ok", or "pending" for a computer that enrolled itself and waits for the owner.
+    if "status" not in [c[1] for c in con.execute("PRAGMA table_info(computers)").fetchall()]:
+        con.execute("ALTER TABLE computers ADD COLUMN status TEXT NOT NULL DEFAULT 'ok'")
     # Every call an agent or Chat makes to a connected app, for the owner to look over.
     con.execute("""
         CREATE TABLE IF NOT EXISTS app_calls (
@@ -7095,6 +7098,8 @@ def _devices_view(message=None):
                         "why": r["why"], "agent": r["agent"], "run_at": r["run_at"], "run_at_words": _when_words(r["run_at"]) if r["run_at"] else "",
                         "finished_at": r["finished_at"]} for r in acts][:30]}
     out["computers"] = _computers()
+    e = _enroll_state()
+    out["enroll"] = {"on": bool(e), "created_at": e.get("at"), "approve": bool(e.get("approve"))}
     if message:
         out["message"] = message
     return out
@@ -7249,7 +7254,7 @@ def _veeam_jobs(v, tz=""):
 
 
 def _computer_view(r):
-    cid, name, osk, created, last_seen, data = r
+    cid, name, osk, created, last_seen, data, status = r
     d = json.loads(data) if data else {}
     seen = _ts(last_seen) if last_seen else None
     reporting = bool(seen and _now() - seen < datetime.timedelta(minutes=COMPUTER_SILENT_MIN))
@@ -7261,8 +7266,10 @@ def _computer_view(r):
            "reboot_pending": bool(d.get("reboot_pending")),
            "disks": [{"name": x["name"], "pct": round(100 * (1 - x["free"] / x["size"])), "free_gb": round(x["free"] / 2 ** 30, 1),
                       "size_gb": round(x["size"] / 2 ** 30, 1)} for x in d.get("disks") or []],
-           "veeam": None, "problems": []}
+           "veeam": None, "problems": [], "pending": status == "pending"}
     p = out["problems"]
+    if status == "pending":
+        return out
     if not seen:
         p.append("Waiting for its first report. Run the install command on it.")
     elif not reporting:
@@ -7293,8 +7300,16 @@ def _computer_view(r):
 
 def _computers():
     with closing(get_db()) as con:
-        rows = con.execute("SELECT id, name, os, created_at, last_seen, data FROM computers ORDER BY name COLLATE NOCASE").fetchall()
+        rows = con.execute("SELECT id, name, os, created_at, last_seen, data, status FROM computers ORDER BY name COLLATE NOCASE").fetchall()
     return [_computer_view(r) for r in rows]
+
+
+def _enroll_state():
+    try:
+        e = json.loads(_kv_get("computer_enroll") or "{}")
+    except Exception:
+        e = {}
+    return e if isinstance(e, dict) and e.get("hash") else {}
 
 
 def _reporter_file(name):
@@ -7342,6 +7357,80 @@ def computers_remove(cid: int, _auth=Depends(require_auth)):
     return _devices_view("Removed. Its reports are refused from now on; the report task on the machine can be deleted.")
 
 
+class EnrollKey(BaseModel):
+    base: str
+    approve: bool = True
+
+
+class EnrollReq(BaseModel):
+    host: str = ""
+    os: str = ""
+
+
+_enroll_hits = []
+
+
+@app.post("/devices/enroll-key")
+def enroll_key_make(b: EnrollKey, _auth=Depends(require_auth)):
+    """One key for pushing the reporter to many computers (MDM, RMM, a login script). Making a
+    new key ends the old one; computers already enrolled keep their own tokens."""
+    base = _reporter_base(b.base)
+    key = "aos-enroll-" + secrets.token_urlsafe(24)
+    _kv_set("computer_enroll", json.dumps({"hash": _tok_hash(key), "at": _now().isoformat(), "approve": bool(b.approve)}))
+    v = _devices_view("The enrollment scripts are ready. Download them now: the key inside is not shown again.")
+    v["enroll_scripts"] = {
+        "windows": _reporter_file("install.ps1").replace("__BASE__", base).replace("__TOKEN__", "").replace("__ENROLL__", key),
+        "linux": _reporter_file("install.sh").replace("__BASE__", base).replace("__TOKEN__", "").replace("__ENROLL__", key)}
+    return v
+
+
+@app.delete("/devices/enroll-key")
+def enroll_key_off(_auth=Depends(require_auth)):
+    _kv_set("computer_enroll", "{}")
+    return _devices_view("Enrollment is off. Scripts with the old key can no longer add computers; computers already listed keep reporting.")
+
+
+@app.post("/devices/computers/{cid}/approve")
+def computers_approve(cid: int, _auth=Depends(require_auth)):
+    with closing(get_db()) as con:
+        n = con.execute("UPDATE computers SET status='ok' WHERE id=? AND status='pending'", (cid,)).rowcount
+        con.commit()
+    if not n:
+        raise HTTPException(status_code=404, detail="That computer is not waiting for approval.")
+    return _devices_view("Approved.")
+
+
+@app.post("/devices/enroll")
+def computers_enroll(b: EnrollReq, request: Request):
+    """A computer signs itself up with the enrollment key and gets its own report token."""
+    e = _enroll_state()
+    auth = request.headers.get("authorization", "")
+    key = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    now = time.time()
+    _enroll_hits[:] = [t for t in _enroll_hits if now - t < 3600]
+    if len(_enroll_hits) >= 300:
+        raise HTTPException(status_code=429, detail="Too many enrollments this hour")
+    _enroll_hits.append(now)
+    if not e or not key or not hmac.compare_digest(_tok_hash(key), e["hash"]):
+        raise HTTPException(status_code=403, detail="Enrollment is off or the key is not valid")
+    name = re.sub(r"[^A-Za-z0-9._ -]", "", _clip(b.host, 60)).strip()
+    if len(name) < 2 or b.os not in ("windows", "linux"):
+        raise HTTPException(status_code=400, detail="Send host and os (windows or linux)")
+    tok = secrets.token_urlsafe(24)
+    status = "pending" if e.get("approve") else "ok"
+    with closing(get_db()) as con:
+        old = con.execute("SELECT id FROM computers WHERE name=? COLLATE NOCASE", (name,)).fetchone()
+        if old:     # the same computer set up again: it keeps its place and approval, with a new token
+            con.execute("UPDATE computers SET token_hash=?, os=? WHERE id=?", (_tok_hash(tok), b.os, old[0]))
+        else:
+            if con.execute("SELECT count(*) FROM computers").fetchone()[0] >= 200:
+                raise HTTPException(status_code=400, detail="200 computers is the limit")
+            con.execute("INSERT INTO computers(name, token_hash, os, created_at, status) VALUES(?,?,?,?,?)",
+                        (name, _tok_hash(tok), b.os, _now().isoformat(), status))
+        con.commit()
+    return {"token": tok}
+
+
 def _computer_by_token(tok):
     if not re.match(r"^[A-Za-z0-9_-]{20,64}$", str(tok or "")):
         raise HTTPException(status_code=404, detail="Not found")
@@ -7359,7 +7448,7 @@ def reporter_script(tok: str, fname: str, u: str = ""):
     ext = "ps1" if osk == "windows" else "sh"
     if fname == "install." + ext:
         base = _reporter_base(u)
-        body = _reporter_file("install." + ext).replace("__BASE__", base).replace("__TOKEN__", tok)
+        body = _reporter_file("install." + ext).replace("__BASE__", base).replace("__TOKEN__", tok).replace("__ENROLL__", "")
     elif fname == "report." + ext:
         body = _reporter_file("report." + ext)
     else:
@@ -7393,7 +7482,7 @@ def t_my_devices(a):
     kind = str(a.get("kind") or "all").lower()
     if kind not in ("network", "client", "computer", "all"):
         raise ToolError("kind is network, client, computer or all.")
-    comps = _computers() if kind in ("computer", "all") else []
+    comps = [c for c in _computers() if not c["pending"]] if kind in ("computer", "all") else []
     unifi = bool(_app_row("unifi"))
     if not unifi and not comps:
         raise ToolError("Nothing is listed yet. Tell the owner they can connect UniFi and add computers on the My devices page.")

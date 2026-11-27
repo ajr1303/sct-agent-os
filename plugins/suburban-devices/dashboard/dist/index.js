@@ -58,6 +58,8 @@
       s = useState(null);  var add = s[0], setAdd = s[1];        // the Add a computer form: {name, os, base}
       s = useState(null);  var inst = s[0], setInst = s[1];      // the install command, shown once
       s = useState(false); var copied = s[0], setCopied = s[1];
+      s = useState(null);  var many = s[0], setMany = s[1];      // the enrollment panel: {base, approve}
+      s = useState(null);  var scripts = s[0], setScripts = s[1]; // enrollment scripts, held only until the page is left
 
       function load(quiet) {
         return api("/devices").then(function (x) { setD(x); if (!quiet) setErr(null); })
@@ -65,7 +67,7 @@
       }
       useEffect(function () { load(); }, []);
       var live = d && ((d.actions || []).some(function (a) { return a.status === "running" || a.status === "approved"; }) ||
-        (d.computers || []).some(function (c) { return !c.last_seen; }));
+        (d.computers || []).some(function (c) { return !c.last_seen; }) || (d.enroll || {}).on);
       var fresh = d && d.unifi.connected && !(d.scan || {}).at;
       useEffect(function () {
         if (!live && !fresh) return;
@@ -86,6 +88,45 @@
         call("add", "/devices/computers", { method: "POST", body: JSON.stringify(add) })
           .then(function (x) { if (x && x.install) { setInst(x.install); setAdd(null); setCopied(false); } });
       }
+      function makeKey() {
+        call("key", "/devices/enroll-key", { method: "POST", body: JSON.stringify(many) })
+          .then(function (x) { if (x && x.enroll_scripts) setScripts(x.enroll_scripts); });
+      }
+      function save(name, text) {
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" })); a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+      }
+      function manyPanel() {
+        var en = d.enroll || {};
+        return h("div", { className: "dv-card" },
+          h("div", { className: "dv-name" }, "Set up many computers at once"),
+          h("div", { className: "dv-dim" }, "For Intune, another MDM, an RMM tool or a login script. You download one script per system with an enrollment key inside. " +
+            "Each computer that runs it signs itself up under its own name and gets its own private token. Running it again on the same computer changes nothing."),
+          scripts ? h("div", { className: "dv-ask" },
+            h("div", null, "Download the scripts now. The key inside is not shown again; if you lose them, make a new key (computers already listed keep working)."),
+            h("div", { className: "dv-acts dv-left" },
+              h("button", { type: "button", className: "dv-btn dv-primary", onClick: function () { save("AgentOS-Enroll.ps1", scripts.windows); } }, "Windows script (.ps1)"),
+              h("button", { type: "button", className: "dv-btn dv-primary", onClick: function () { save("agentos-enroll.sh", scripts.linux); } }, "Linux script (.sh)")),
+            h("div", { className: "dv-dim" }, "Intune: add the .ps1 as a Windows platform script, run as the system account (not the logged-on user), in 64-bit PowerShell. " +
+              "Linux: run the .sh as root. Treat both files like a password: anyone holding one can add a computer to this list.")) : null,
+          en.on ? h("div", { className: "dv-dim" }, "Enrollment is on since " + when(en.created_at) + ". New computers " +
+            (en.approve ? "wait for your approval before they count." : "are listed straight away.")) : null,
+          h("label", { className: "dv-field" }, h("span", null, "Agent OS address, as those computers reach it"),
+            h("input", { className: "dv-in", type: "text", spellCheck: false, value: many.base,
+              onChange: function (e) { setMany(Object.assign({}, many, { base: e.target.value })); } })),
+          h("label", { className: "dv-check" }, h("input", { type: "checkbox", checked: many.approve,
+            onChange: function (e) { setMany(Object.assign({}, many, { approve: e.target.checked })); } }), " New computers wait for my approval"),
+          h("div", { className: "dv-acts" },
+            h("button", { type: "button", className: "dv-btn", onClick: function () { setMany(null); setScripts(null); } }, scripts ? "Done" : "Cancel"),
+            en.on ? h("button", { type: "button", className: "dv-btn", disabled: busy === "keyoff", onClick: function () {
+              if (window.confirm("Turn enrollment off? Scripts with the current key can no longer add computers. Computers already listed keep reporting."))
+                call("keyoff", "/devices/enroll-key", { method: "DELETE" }).then(function () { setScripts(null); }); } }, "Turn off") : null,
+            h("button", { type: "button", className: "dv-btn dv-primary", disabled: busy === "key", onClick: function () {
+              if (!en.on || window.confirm("Make a new key? Scripts with the old key stop adding computers. Computers already listed keep reporting.")) makeKey(); } },
+              busy === "key" ? "Working…" : (en.on ? "Make a new key" : "Create the scripts"))));
+      }
       function copy(text) {
         try { navigator.clipboard.writeText(text).then(function () { setCopied(true); }); } catch (e) {}
       }
@@ -98,6 +139,17 @@
       }
       function computer(c) {
         var v = c.veeam;
+        if (c.pending) return h("div", { key: c.id, className: "dv-card dv-comp dv-comp-warn" },
+          h("div", { className: "dv-main" },
+            h("span", { className: "dv-dot", "aria-hidden": "true" }),
+            h("div", { className: "dv-meta" }, h("div", { className: "dv-name" }, c.name, h("span", { className: "dv-badge" }, "Waiting for your approval")),
+              h("div", { className: "dv-dim" }, [c.os_name || (c.os === "windows" ? "Windows" : "Linux"), "signed up " + when(c.created_at)].join(" · ")))),
+          h("div", { className: "dv-dim" }, "This computer signed itself up with the enrollment key. Approve it if it is yours."),
+          h("div", { className: "dv-acts dv-left" },
+            h("button", { type: "button", className: "dv-btn dv-primary", disabled: busy === "ok:" + c.id,
+              onClick: function () { call("ok:" + c.id, "/devices/computers/" + c.id + "/approve", { method: "POST" }); } }, "Approve"),
+            h("button", { type: "button", className: "dv-btn", disabled: busy === "rmc:" + c.id,
+              onClick: function () { call("rmc:" + c.id, "/devices/computers/" + c.id, { method: "DELETE" }); } }, "Remove")));
         return h("div", { key: c.id, className: "dv-card dv-comp" + (c.problems.length ? " dv-comp-warn" : "") },
           h("div", { className: "dv-main" },
             h("span", { className: "dv-dot" + (c.reporting ? " dv-dot-on" : (c.last_seen ? " dv-dot-bad" : "")), "aria-hidden": "true" }),
@@ -155,7 +207,7 @@
       var down = gear.filter(function (x) { return x.state !== "ONLINE"; }).length;
       var canAct = u.access === "write";
       var comps = d.computers || [];
-      var trouble = comps.filter(function (c) { return c.problems.length; }).length;
+      var trouble = comps.filter(function (c) { return c.problems.length || c.pending; }).length;
       var open = {};      // device "site/id" -> its action in progress or waiting
       (d.actions || []).forEach(function (a) { if (!open[a.device] && (a.status === "running" || a.status === "approved" || a.status === "pending")) open[a.device] = a; });
 
@@ -224,8 +276,11 @@
         err ? h("div", { className: "dv-msg dv-bad", role: "alert" }, err) : null,
         h("div", { className: "dv-bar" },
           h("div", { className: "dv-h2 dv-h2-flat" }, "Computers and servers (" + comps.length + ")" + (trouble ? " · " + trouble + " need a look" : "")),
-          add ? null : h("button", { type: "button", className: "dv-btn", onClick: function () { setInst(null); setAdd({ name: "", os: "windows", base: window.location.origin }); } }, "Add a computer")),
+          add || many ? null : h("div", { className: "dv-acts" },
+            h("button", { type: "button", className: "dv-btn", onClick: function () { setInst(null); setScripts(null); setMany({ base: window.location.origin, approve: true }); } }, "Set up many (MDM)"),
+            h("button", { type: "button", className: "dv-btn", onClick: function () { setInst(null); setAdd({ name: "", os: "windows", base: window.location.origin }); } }, "Add a computer"))),
         add ? addForm() : null,
+        many ? manyPanel() : null,
         inst ? h("div", { className: "dv-card dv-inst" },
           h("div", { className: "dv-name" }, "Run this once on " + inst.name),
           h("div", { className: "dv-dim" }, "Paste it into " + inst.where + ". It is shown only this once; if you lose it, remove the computer and add it again."),
@@ -234,7 +289,7 @@
             h("button", { type: "button", className: "dv-btn dv-primary", onClick: function () { copy(inst.command); } }, copied ? "Copied" : "Copy command"),
             h("button", { type: "button", className: "dv-btn", onClick: function () { setInst(null); } }, "Done"))) : null,
         comps.length ? h("div", { className: "dv-comps" }, comps.map(computer))
-          : (add || inst ? null : h("div", { className: "dv-dim" }, "None yet. Add a computer to see its CPU, memory, disk space and Veeam backups here.")),
+          : (add || inst || many ? null : h("div", { className: "dv-dim" }, "None yet. Add a computer to see its CPU, memory, disk space and Veeam backups here.")),
         u.connected ? h("div", { className: "dv-h2" }, "Network") : null,
         (!u.connected || setup) ? form() : null,
         u.connected ? h("div", { className: "dv-stats" },

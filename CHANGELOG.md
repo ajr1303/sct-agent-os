@@ -37,6 +37,13 @@ All notable changes to Suburban Cyber Agent OS. Dates are UTC.
   The script only reads; Agent OS never logs in to the machine and stores no
   password for it. Each machine has its own token that can only post its
   report, kept in a folder only administrators can read.
+- **Set up many computers at once (MDM).** My devices can create an enrollment
+  key and hands you one Windows script and one Linux script with it inside,
+  for Intune, another MDM, an RMM tool or a login script. Each computer that
+  runs it signs itself up under its own name and gets its own private token;
+  running it again changes nothing. New computers can wait for the owner's
+  approval before they count. Making a new key or turning enrollment off stops
+  the old scripts from adding computers and leaves enrolled ones reporting.
 - **Agents know your devices.** my_devices gives agents the same list, problems included; they
   can also read sites, clients, networks, Wi-Fi, WAN links and firewall rules
   from UniFi. With the owner's approval they can restart a device, power-cycle

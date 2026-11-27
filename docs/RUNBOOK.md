@@ -1479,7 +1479,11 @@ task named "Agent OS report" running as SYSTEM; Linux: `/opt/agent-os-report` an
 without a browser session because the token is the check. Veeam Agent results come from the
 "Veeam Agent" Windows event log ("... finished with Success/Warning/Failed") and from
 `veeamconfig session list` on Linux; `_veeam_jobs` in `connectors/app.py` turns them into
-jobs, so a wording difference in a Veeam version is fixed there, not on the machines. A
+jobs, so a wording difference in a Veeam version is fixed there, not on the machines. **Set up many
+(MDM)** stores a hash of one enrollment key in kv `computer_enroll` and returns the same
+install scripts with the key inside instead of a token; a machine running one calls
+`/api/connectors/devices/enroll` with its hostname, gets its own token, and (if approval is
+on) is listed as waiting until the owner approves it. A
 computer that shows "no report yet": run `report.ps1` / `report.sh` by hand on it and read
 the error, and check the machine can open the Agent OS address used in the command.
 
