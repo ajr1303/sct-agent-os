@@ -34,6 +34,7 @@ import hashlib
 import subprocess
 import threading
 import uuid
+import secrets
 
 import httpx
 from dateutil import parser as dtparse
@@ -173,6 +174,17 @@ def get_db():
     # changed afterwards cannot be switched on under the old approval.
     if "fingerprint" not in [c[1] for c in con.execute("PRAGMA table_info(workflow_requests)").fetchall()]:
         con.execute("ALTER TABLE workflow_requests ADD COLUMN fingerprint TEXT")
+    # Actions that need the owner's yes before they run (a restart, a firmware update). The
+    # row is what runs: an agent cannot change it after the owner has seen it.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS action_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            app TEXT NOT NULL, action TEXT NOT NULL, params TEXT NOT NULL,
+            target TEXT, detail TEXT, why TEXT, agent TEXT, issue_id TEXT, issue_key TEXT,
+            before TEXT, run_at TEXT, status TEXT NOT NULL, result TEXT,
+            created_at TEXT NOT NULL, decided_at TEXT, finished_at TEXT
+        )
+    """)
     # A copy of every workflow the owner archived or deleted from Chat, so nothing is lost.
     con.execute("""
         CREATE TABLE IF NOT EXISTS workflow_backups (
@@ -196,6 +208,28 @@ def get_db():
             last_used_at TEXT
         )
     """)
+    # My devices: what scanning the owner's network found (UniFi gear and what is connected to it).
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS devices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL, ext_id TEXT NOT NULL, site_id TEXT, kind TEXT NOT NULL,
+            name TEXT, model TEXT, ip TEXT, mac TEXT, state TEXT, firmware TEXT,
+            updatable INTEGER NOT NULL DEFAULT 0, link TEXT,
+            first_seen TEXT NOT NULL, last_seen TEXT NOT NULL,
+            UNIQUE(source, ext_id)
+        )
+    """)
+    # Computers and servers that report their own resources and backups (see /devices/report).
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS computers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, os TEXT NOT NULL,
+            created_at TEXT NOT NULL, last_seen TEXT, data TEXT
+        )
+    """)
+    # status: "ok", or "pending" for a computer that enrolled itself and waits for the owner.
+    if "status" not in [c[1] for c in con.execute("PRAGMA table_info(computers)").fetchall()]:
+        con.execute("ALTER TABLE computers ADD COLUMN status TEXT NOT NULL DEFAULT 'ok'")
     # Every call an agent or Chat makes to a connected app, for the owner to look over.
     con.execute("""
         CREATE TABLE IF NOT EXISTS app_calls (
@@ -3192,6 +3226,14 @@ def stuck_watch_run(dry_run=False):
     if not dry_run:
         try:
             _idea_tick()       # the day's idea for the owner, once their morning has started
+            try:
+                _actions_tick()    # approved actions whose time has come
+            except Exception:
+                pass
+            try:
+                _devices_scan()    # keep My devices current
+            except Exception:
+                pass
         except Exception:
             pass
         try:
@@ -5311,6 +5353,16 @@ def _decisions(fresh=False):
                       "question": choices, "recommendation": "",
                       "buttons": btns + [_BTN_REPLY], "ref": ("decision", sid, riid)})
             cards.append(c)
+    for r in _action_rows("status='pending'"):
+        label = BA.CATALOG.get(r["app"], {}).get("label", r["app"])
+        when = (" It would run %s (your time)." % _when_words(r["run_at"])) if r["run_at"] else " It would run as soon as you approve."
+        cards.append({"id": "action:%d" % r["id"], "kind": "approval", "tag": "Action · " + label, "issue_id": None,
+                      "key": r["issue_key"] or "", "title": _clip("%s: %s" % (r["action"].replace("_", " ").capitalize(), r["target"]), 160),
+                      "agent": r["agent"], "at": r["created_at"],
+                      "summary": _clip("%s %s%s" % (r["why"], r["detail"], when), 900),
+                      "question": "Approve this?" if not r["run_at"] else "Approve this for %s?" % _when_words(r["run_at"]),
+                      "recommendation": "Agent OS runs exactly this, then checks the device came back and reports the result.",
+                      "buttons": [_BTN_APPROVE, _BTN_DECLINE], "ref": ("action", str(r["id"]), "")})
     cards.sort(key=lambda c: ({"decision": 0, "approval": 0, "interaction": 1, "review": 2, "problem": 2, "stuck": 3}.get(c["kind"], 4), -(_ts(c.get("at")) or _now()).timestamp()))
     out["decisions"] = cards[:120]
     out["alerts"] = out["alerts"][:60]
@@ -5678,6 +5730,28 @@ def decisions_act(b: DecisionAct, _auth=Depends(require_auth)):
     if act == "reply" and not note:
         raise HTTPException(status_code=400, detail="Type your reply first.")
     reply_md = "**Reply from the owner:**\n\n" + note
+    if typ == "action":
+        rows = _action_rows("id=? AND status='pending'", (int(rid),))
+        if not rows:
+            raise HTTPException(status_code=404, detail="That action is no longer waiting.")
+        r = rows[0]
+        if act == "approve":
+            _action_set(r["id"], status="approved", decided_at=_now().isoformat())
+            later = _ts(r["run_at"]) if r["run_at"] else None
+            if later and later > _now():
+                said = "Approved. It will run %s (your time), within 10 minutes of that, and the result will be on the task and under Recent use on Connections." % _when_words(r["run_at"])
+                _action_note(r, "**The owner approved** %s on %s for %s. Agent OS will run it and report here." % (
+                    r["action"].replace("_", " "), r["target"], _when_words(r["run_at"])))
+            else:
+                _action_start(r["id"])
+                said = "Approved. It is running now; Agent OS checks the device comes back and puts the result on the task and under Recent use on Connections."
+        else:
+            _action_set(r["id"], status="declined", decided_at=_now().isoformat(), finished_at=_now().isoformat())
+            _action_note(r, "**The owner declined** %s on %s.%s Do not propose it again unless something changes." % (
+                r["action"].replace("_", " "), r["target"], extra))
+            said = "Declined. Nothing was changed."
+        _DEC_CACHE.clear()
+        return {"ok": True, "message": said}
     if typ == "decision":
         if act.startswith("opt:"):
             _pc_send("POST", "/api/decisions/" + _safe_id(rid) + "/decide", {"optionId": act[4:]}, what="record your decision")
@@ -6570,6 +6644,8 @@ def _apps_view():
         calls = con.execute("SELECT at, app, action, write, who, ok, note FROM app_calls ORDER BY id DESC LIMIT 40").fetchall()
     apps = []
     for a in BA.public_catalog():
+        if a.get("home"):       # lives on its own page (UniFi is on My devices)
+            continue
         r = rows.get(a["id"])
         a["connected"] = bool(r)
         if r:
@@ -6599,6 +6675,7 @@ def apps_connect(app_id: str, b: AppConnect, _auth=Depends(require_auth)):
             if f.get("secret") and not str((b.fields or {}).get(f["key"]) or "").strip():
                 fields[f["key"]] = old["fields"].get(f["key"], "")
     try:
+        fields = BA.prepare(app_id, fields)
         who = BA.test(app_id, fields)
     except Exception as e:
         raise HTTPException(status_code=400, detail="That login did not work: " +
@@ -6613,6 +6690,8 @@ def apps_connect(app_id: str, b: AppConnect, _auth=Depends(require_auth)):
                     "updated_at=excluded.updated_at",
                     (app_id, fernet.encrypt(json.dumps(fields).encode()), access, who, n8n_id, note, now, now))
         con.commit()
+    if app_id == "unifi":
+        threading.Thread(target=_devices_scan, daemon=True).start()
     v = _apps_view()
     v["message"] = "%s is connected (%s). Every agent and Chat can use it now. %s" % (BA.CATALOG[app_id]["label"], who, note)
     return v
@@ -6665,6 +6744,8 @@ def apps_disconnect(app_id: str, _auth=Depends(require_auth)):
             note = " Its n8n login could not be removed; delete \"%s (Agent OS)\" in n8n." % BA.CATALOG[app_id]["label"]
     with closing(get_db()) as con:
         con.execute("DELETE FROM business_apps WHERE app=?", (app_id,))
+        if app_id == "unifi":
+            con.execute("DELETE FROM devices WHERE source='unifi'")
         con.commit()
     v = _apps_view()
     v["message"] = "%s is disconnected.%s" % (BA.CATALOG[app_id]["label"], note)
@@ -6701,8 +6782,9 @@ def _app_pick(a):
         raise ToolError("Unknown app %r. Call connected_apps to see what is connected." % a.get("app"))
     row = _app_row(app_id)
     if not row:
-        raise ToolError("%s is not connected. Tell the owner they can connect it on the Connections page (one "
-                        "login, then every agent can use it)." % BA.CATALOG[app_id]["label"])
+        raise ToolError("%s is not connected. Tell the owner they can connect it on the %s page (one "
+                        "login, then every agent can use it)." % (
+                            BA.CATALOG[app_id]["label"], "My devices" if BA.CATALOG[app_id].get("home") else "Connections"))
     return app_id, row
 
 
@@ -6723,7 +6805,8 @@ def t_connected_apps(a):
             if x["write"] and access != "write":
                 continue
             ps = ", ".join(k.rstrip("?") + (" (optional)" if k.endswith("?") else "") + ": " + v for k, v in x["params"].items())
-            out.append("  - %s%s: %s%s" % (n, " [changes data]" if x["write"] else "", x["desc"], (" Params: " + ps) if ps else ""))
+            out.append("  - %s%s: %s%s" % (n, " [needs the owner's approval: use propose_action]" if x.get("approval")
+                                           else (" [changes data]" if x["write"] else ""), x["desc"], (" Params: " + ps) if ps else ""))
     others = [c["label"] for k, c in BA.CATALOG.items() if k not in rows]
     out.append("Not connected (the owner can add them on the Connections page): " + ", ".join(others))
     out.append("Run an action with app_action; read anything else from an app's API with app_get.")
@@ -6754,6 +6837,679 @@ def t_app_action(a):
         raise ToolError(msg[:500])
     _app_log(app_id, action, spec["write"], who, True)
     return BA.trim(data)
+
+
+ACTION_PENDING_DAYS = 3
+
+
+def _when(text):
+    """'now' or an ISO time with offset -> aware datetime or None. Raises ToolError when unreadable."""
+    t = str(text or "").strip()
+    if not t or t.lower() == "now":
+        return None
+    d = _ts(t)
+    if not d or d.tzinfo is None:
+        raise ToolError("when must be 'now' or a full time with its offset, e.g. 2026-01-15T23:00:00-05:00.")
+    if d < _now() - datetime.timedelta(minutes=5):
+        raise ToolError("when is in the past.")
+    if d > _now() + datetime.timedelta(days=14):
+        raise ToolError("when must be within the next 14 days.")
+    return d
+
+
+def t_propose_action(a):
+    """Ask the owner to approve one action that can interrupt the business."""
+    app_id, row = _app_pick(a)
+    action = str(a.get("action") or "").strip()
+    spec = BA.CATALOG[app_id]["actions"].get(action)
+    if not spec:
+        raise ToolError("%s has no action %r." % (BA.CATALOG[app_id]["label"], action))
+    if not spec.get("approval"):
+        raise ToolError("%s does not need approval: run it with app_action." % action)
+    if row["access"] != "write":
+        raise ToolError("The owner set %s to read only, so nothing can be changed there." % BA.CATALOG[app_id]["label"])
+    params = a.get("params") or {}
+    if not isinstance(params, dict):
+        raise ToolError("params must be an object.")
+    why = re.sub(r"\s+", " ", str(a.get("why") or "")).strip()[:400]
+    if len(why) < 15:
+        raise ToolError("Give why in one plain sentence the owner can judge (what is wrong, or what the update fixes).")
+    run_at = _when(a.get("when"))
+    try:
+        info = BA.describe(app_id, row["fields"], action, params)
+    except ValueError as e:
+        raise ToolError(str(e))
+    except Exception as e:
+        raise ToolError(BA._scrub(str(e), BA.secrets_of(app_id, row["fields"]))[:400])
+    pj = json.dumps(params, sort_keys=True)
+    issue = None
+    if a.get("task"):
+        try:
+            issue = _pc_get("/api/issues/" + _safe_id(str(a["task"]).strip()))
+        except Exception:
+            issue = None
+    with closing(get_db()) as con:
+        dup = con.execute("SELECT id FROM action_requests WHERE app=? AND action=? AND params=? AND status IN "
+                          "('pending','approved','running')", (app_id, action, pj)).fetchone()
+        if dup:
+            return "The owner already has this exact action waiting. Stop here; you will be told the result."
+        if con.execute("SELECT count(*) FROM action_requests WHERE status='pending'").fetchone()[0] >= 20:
+            raise ToolError("Too many actions are already waiting for the owner. Wait for those to be decided.")
+        con.execute("INSERT INTO action_requests(app, action, params, target, detail, why, agent, issue_id, issue_key, before, "
+                    "run_at, status, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (app_id, action, pj, info["target"][:200], info["detail"][:400], why, _app_caller(a)[:80],
+                     str((issue or {}).get("id") or ""), str((issue or {}).get("identifier") or ""),
+                     json.dumps(info.get("state") or {}), run_at.isoformat() if run_at else None, "pending", _now().isoformat()))
+        con.commit()
+    _DEC_CACHE.clear()
+    return ("The owner now has a card to approve or decline this. Do not run it yourself and do not ask again. When "
+            "they approve, Agent OS runs it%s, checks the result and writes it on the task. Stop here." % (
+                " at the time you gave" if run_at else ""))
+
+
+def _action_rows(where, args=()):
+    keys = ("id", "app", "action", "params", "target", "detail", "why", "agent", "issue_id", "issue_key", "before",
+            "run_at", "status", "result", "created_at", "decided_at", "finished_at")
+    with closing(get_db()) as con:
+        rows = con.execute("SELECT %s FROM action_requests WHERE %s ORDER BY id DESC LIMIT 60" % (", ".join(keys), where), args).fetchall()
+    return [dict(zip(keys, r)) for r in rows]
+
+
+def _action_set(rid, **kw):
+    with closing(get_db()) as con:
+        con.execute("UPDATE action_requests SET %s WHERE id=?" % ", ".join(k + "=?" for k in kw), list(kw.values()) + [rid])
+        con.commit()
+
+
+def _action_note(r, text):
+    """Tell the task (and so the agent) what happened."""
+    if r.get("issue_id"):
+        try:
+            _pc_send("POST", "/api/issues/" + _safe_id(r["issue_id"]) + "/comments", {"body": text}, what="record the result")
+        except Exception:
+            pass
+
+
+def _action_run(rid):
+    """Run one approved action and check that it worked. Runs in its own thread."""
+    rows = _action_rows("id=? AND status IN ('approved','running')", (rid,))
+    if not rows:
+        return
+    r = rows[0]
+    with closing(get_db()) as con:      # claim it: only one runner per action
+        n = con.execute("UPDATE action_requests SET status='running' WHERE id=? AND status='approved'", (rid,)).rowcount
+        con.commit()
+    if not n:
+        return
+    label = BA.CATALOG.get(r["app"], {}).get("label", r["app"])
+    what = "%s on %s" % (r["action"].replace("_", " "), r["target"])
+    row = _app_row(r["app"])
+    params = json.loads(r["params"])
+    ok, result = False, ""
+    try:
+        if not row or row["access"] != "write":
+            raise RuntimeError("%s is no longer connected with changes allowed." % label)
+        info = BA.describe(r["app"], row["fields"], r["action"], params)       # still true now?
+        started = time.time()
+        BA.run(r["app"], row["fields"], r["action"], params, True, approved=True)
+        while True:
+            done, ok, result = BA.confirm(r["app"], row["fields"], r["action"], params, info.get("state") or {}, started)
+            if done:
+                break
+            time.sleep(20)
+    except Exception as e:
+        ok, result = False, "It did not run: " + BA._scrub(str(e), BA.secrets_of(r["app"], (row or {}).get("fields") or {}))[:400]
+    _action_set(rid, status="done" if ok else "failed", result=result, finished_at=_now().isoformat())
+    _app_log(r["app"], r["action"], True, "approved by the owner", ok, ("%s: %s" % (r["target"], result))[:300])
+    _action_note(r, ("**Approved action finished.** %s. %s" if ok else
+                     "**Approved action did not work.** %s. %s Do not try it again yourself; tell the owner what you "
+                     "found with need_owner_input if it needs them.") % (what[0].upper() + what[1:], result))
+    _DEC_CACHE.clear()
+
+
+def _action_start(rid):
+    threading.Thread(target=_action_run, args=(rid,), daemon=True).start()
+
+
+def _actions_tick():
+    """From the 10-minute check: run approved actions whose time has come, drop stale requests."""
+    now = _now()
+    for r in _action_rows("status='approved'"):
+        due = _ts(r["run_at"]) if r["run_at"] else now
+        if due and due <= now:
+            _action_start(r["id"])
+    for r in _action_rows("status='pending'"):
+        made = _ts(r["created_at"])
+        if made and now - made > datetime.timedelta(days=ACTION_PENDING_DAYS):
+            _action_set(r["id"], status="expired", finished_at=now.isoformat())
+            _action_note(r, "The owner did not decide on %s within %d days, so the request has lapsed. Propose it "
+                            "again only if it is still needed." % (r["action"].replace("_", " "), ACTION_PENDING_DAYS))
+    for r in _action_rows("status='running'"):      # a restart of this service mid-run
+        dec = _ts(r["decided_at"]) or now
+        if now - dec > datetime.timedelta(hours=2) and not (_ts(r["run_at"]) and _ts(r["run_at"]) > now - datetime.timedelta(hours=2)):
+            _action_set(r["id"], status="failed", result="Agent OS restarted while this was running, so the result "
+                        "was not checked. Look at the device.", finished_at=now.isoformat())
+            _action_note(r, "**Approved action: result unknown.** Agent OS restarted while %s was running. Check the "
+                            "device's state with app_action and report." % r["action"].replace("_", " "))
+
+
+def _when_words(iso):
+    d = _ts(iso)
+    if not d:
+        return ""
+    off = -(_idea_prefs()["tz"])            # the owner's offset from UTC in minutes, as the browser reported it
+    local = d.astimezone(datetime.timezone(datetime.timedelta(minutes=off)))
+    return local.strftime("%a %b %-d at %-I:%M %p")
+
+
+# ---- My devices: everything found on the owner's network, in one list --------------------
+# Filled by scanning what is connected (UniFi today). Gear the owner can act on has
+# kind "network"; computers, phones and printers seen on the network have kind "client".
+_DEV_KEYS = ("id", "source", "ext_id", "site_id", "kind", "name", "model", "ip", "mac", "state", "firmware",
+             "updatable", "link", "first_seen", "last_seen")
+_DEV_LOCK = threading.Lock()
+DEVICE_FORGET_DAYS = 30
+
+
+class DeviceAct(BaseModel):
+    action: str
+    when: str = ""
+
+
+def _unifi_pages(fields, path, cap=2000):
+    out, off = [], 0
+    while off < cap:
+        j = BA._send("unifi", fields, "GET", path, query={"limit": 200, "offset": off})
+        data = (j or {}).get("data") or []
+        out += data
+        off += len(data)
+        if not data or off >= int((j or {}).get("totalCount") or 0):
+            break
+    return out
+
+
+def _devices_scan():
+    """Read every site's gear and clients from UniFi into the devices table. Returns the scan note."""
+    row = _app_row("unifi")
+    if not row:
+        return None
+    if not _DEV_LOCK.acquire(blocking=False):
+        return json.loads(_kv_get("devices_scan") or "{}")
+    now = _now().isoformat()
+    note = {"at": now, "ok": True, "note": "", "network": 0, "clients": 0}
+    try:
+        found = []
+        for s in _unifi_pages(row["fields"], "/v1/sites"):
+            sid = str(s.get("id") or "")
+            if not sid:
+                continue
+            for d in _unifi_pages(row["fields"], "/v1/sites/%s/devices" % sid):
+                found.append((sid + "/" + str(d.get("id")), sid, "network", d.get("name") or d.get("model") or "Device",
+                              d.get("model") or "", d.get("ipAddress") or "", str(d.get("macAddress") or "").lower(),
+                              str(d.get("state") or "").upper(), d.get("firmwareVersion") or "",
+                              1 if d.get("firmwareUpdatable") else 0, ""))
+            for c in _unifi_pages(row["fields"], "/v1/sites/%s/clients" % sid):
+                mac = str(c.get("macAddress") or "").lower()
+                found.append((sid + "/" + (mac or str(c.get("id"))), sid, "client",
+                              c.get("name") or c.get("hostname") or mac or "Unnamed", "", c.get("ipAddress") or "", mac,
+                              "ONLINE", "", 0, str(c.get("type") or "").lower()))
+        with closing(get_db()) as con:
+            for f in found:
+                con.execute("INSERT INTO devices(source, ext_id, site_id, kind, name, model, ip, mac, state, firmware, "
+                            "updatable, link, first_seen, last_seen) VALUES('unifi',?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                            "ON CONFLICT(source, ext_id) DO UPDATE SET site_id=excluded.site_id, kind=excluded.kind, "
+                            "name=excluded.name, model=excluded.model, ip=excluded.ip, mac=excluded.mac, state=excluded.state, "
+                            "firmware=excluded.firmware, updatable=excluded.updatable, link=excluded.link, "
+                            "last_seen=excluded.last_seen", f + (now, now))
+            # Not in this scan: a client has left the network; gear was removed from the controller.
+            con.execute("UPDATE devices SET state='OFFLINE' WHERE source='unifi' AND kind='client' AND last_seen<?", (now,))
+            con.execute("UPDATE devices SET state='REMOVED', updatable=0 WHERE source='unifi' AND kind='network' AND last_seen<?", (now,))
+            old = (_now() - datetime.timedelta(days=DEVICE_FORGET_DAYS)).isoformat()
+            con.execute("DELETE FROM devices WHERE source='unifi' AND last_seen<?", (old,))
+            con.commit()
+        note["network"] = sum(1 for f in found if f[2] == "network")
+        note["clients"] = sum(1 for f in found if f[2] == "client")
+    except Exception as e:
+        note.update(ok=False, note=BA._scrub(str(e), BA.secrets_of("unifi", row["fields"]))[:300])
+    finally:
+        _DEV_LOCK.release()
+    _kv_set("devices_scan", json.dumps(note))
+    return note
+
+
+def _devices_rows(where="1=1", args=()):
+    with closing(get_db()) as con:
+        rows = con.execute("SELECT %s FROM devices WHERE %s ORDER BY kind DESC, (state='ONLINE') DESC, name COLLATE NOCASE "
+                           "LIMIT 3000" % (", ".join(_DEV_KEYS), where), args).fetchall()
+    return [dict(zip(_DEV_KEYS, r)) for r in rows]
+
+
+def _devices_view(message=None):
+    row = _app_row("unifi")
+    cat = next(a for a in BA.public_catalog() if a["id"] == "unifi")
+    acts = _action_rows("app='unifi' AND (status IN ('pending','approved','running') OR finished_at>?)",
+                        ((_now() - datetime.timedelta(days=7)).isoformat(),))
+    out = {"unifi": {"connected": bool(row), "connected_as": (row or {}).get("connected_as"), "access": (row or {}).get("access"),
+                     "label": cat["label"], "fields": cat["fields"], "steps": cat["steps"]},
+           "scan": json.loads(_kv_get("devices_scan") or "{}") if row else {},
+           "devices": _devices_rows() if row else [],
+           "actions": [{"id": r["id"], "device": (json.loads(r["params"]).get("site_id", "") + "/" + json.loads(r["params"]).get("device_id", "")),
+                        "action": r["action"], "target": r["target"], "status": r["status"], "result": r["result"],
+                        "why": r["why"], "agent": r["agent"], "run_at": r["run_at"], "run_at_words": _when_words(r["run_at"]) if r["run_at"] else "",
+                        "finished_at": r["finished_at"]} for r in acts][:30]}
+    out["computers"] = _computers()
+    e = _enroll_state()
+    out["enroll"] = {"on": bool(e), "created_at": e.get("at"), "approve": bool(e.get("approve"))}
+    if message:
+        out["message"] = message
+    return out
+
+
+@app.get("/devices")
+def devices_list(_auth=Depends(require_auth)):
+    return _devices_view()
+
+
+@app.post("/devices/scan")
+def devices_scan(_auth=Depends(require_auth)):
+    note = _devices_scan()
+    if note is None:
+        raise HTTPException(status_code=400, detail="Connect UniFi first.")
+    if not note.get("ok"):
+        raise HTTPException(status_code=502, detail="The scan did not finish: " + (note.get("note") or "the controller did not answer."))
+    return _devices_view("Scan finished: %d network devices and %d things connected to them." % (note["network"], note["clients"]))
+
+
+_DEV_ACTIONS = {"restart": "restart_device", "update": "update_firmware"}
+
+
+@app.post("/devices/{dev_id}/action")
+def devices_act(dev_id: int, b: DeviceAct, _auth=Depends(require_auth)):
+    """The owner pressed Restart or Update on a device. Their click is the approval."""
+    action = _DEV_ACTIONS.get(b.action)
+    devs = _devices_rows("id=? AND kind='network'", (dev_id,))
+    row = _app_row("unifi")
+    if not action or not devs or not row:
+        raise HTTPException(status_code=404, detail="That device or action was not found.")
+    if row["access"] != "write":
+        raise HTTPException(status_code=400, detail="UniFi is set to read only. Allow changes first.")
+    try:
+        run_at = _when(b.when)
+    except ToolError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    params = {"site_id": devs[0]["site_id"], "device_id": devs[0]["ext_id"].split("/", 1)[1]}
+    try:
+        info = BA.describe("unifi", row["fields"], action, params)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=BA._scrub(str(e), BA.secrets_of("unifi", row["fields"]))[:300])
+    pj, now = json.dumps(params, sort_keys=True), _now().isoformat()
+    with closing(get_db()) as con:
+        if con.execute("SELECT 1 FROM action_requests WHERE app='unifi' AND params=? AND status IN ('approved','running')", (pj,)).fetchone():
+            raise HTTPException(status_code=409, detail="Something is already running or scheduled on %s. Wait for it, or cancel it below." % info["target"])
+        # An agent's waiting request for the same thing is settled by this click.
+        con.execute("UPDATE action_requests SET status='declined', result='Done from My devices instead.', decided_at=?, "
+                    "finished_at=? WHERE app='unifi' AND params=? AND status='pending'", (now, now, pj))
+        rid = con.execute("INSERT INTO action_requests(app, action, params, target, detail, why, agent, issue_id, issue_key, before, "
+                          "run_at, status, created_at, decided_at) VALUES('unifi',?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                          (action, pj, info["target"][:200], info["detail"][:400], "Started by the owner on My devices.", "You",
+                           "", "", json.dumps(info.get("state") or {}), run_at.isoformat() if run_at else None, "approved", now, now)).lastrowid
+        con.commit()
+    _DEC_CACHE.clear()
+    if not run_at:
+        _action_start(rid)
+    return _devices_view("%s %s. This page shows the result when it is checked." % (
+        info["target"], ("is scheduled for " + _when_words(run_at.isoformat())) if run_at else
+        ("is updating now" if action == "update_firmware" else "is restarting now")))
+
+
+@app.post("/devices/actions/{rid}/cancel")
+def devices_cancel(rid: int, _auth=Depends(require_auth)):
+    with closing(get_db()) as con:
+        n = con.execute("UPDATE action_requests SET status='declined', result='Cancelled before it ran.', finished_at=? "
+                        "WHERE id=? AND app='unifi' AND status IN ('pending','approved')", (_now().isoformat(), rid)).rowcount
+        con.commit()
+    if not n:
+        raise HTTPException(status_code=409, detail="It has already started or finished, so it cannot be cancelled.")
+    _DEC_CACHE.clear()
+    return _devices_view("Cancelled. Nothing was changed.")
+
+
+# ---- Computers and servers that report in ------------------------------------------------
+# UniFi only knows a computer is on the network. For CPU, memory, disk and backups, a small
+# script on each machine posts a report every 5 minutes with that machine's own token. Agent
+# OS never logs in to the machine and stores no password for it; the token can only post.
+COMPUTER_SILENT_MIN = 15
+BACKUP_STALE_DAYS = 3
+_REPORTER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reporter")
+
+
+class ComputerAdd(BaseModel):
+    name: str
+    os: str
+    base: str
+
+
+def _tok_hash(tok):
+    return hashlib.sha256(("agent-os-reporter:" + str(tok)).encode()).hexdigest()
+
+
+def _clip(v, n=120):
+    return re.sub(r"[\x00-\x1f\x7f]+", " ", str(v if v is not None else "")).strip()[:n]
+
+
+def _num(v, lo=0.0, hi=1e15):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if lo <= f <= hi else None
+
+
+def _report_clean(j):
+    """A machine's report, reduced to known fields with bounded sizes. The sender is not trusted."""
+    out = {"host": _clip(j.get("host"), 80), "os_name": _clip(j.get("os_name"), 120),
+           "uptime_s": _num(j.get("uptime_s")), "cpu": _num(j.get("cpu"), 0, 100),
+           "mem_total": _num(j.get("mem_total")), "mem_free": _num(j.get("mem_free")),
+           "reboot_pending": bool(j.get("reboot_pending")), "tz": _clip(j.get("tz"), 8), "disks": [], "veeam": None}
+    for d in (j.get("disks") or [])[:24] if isinstance(j.get("disks"), list) else []:
+        if isinstance(d, dict) and (_num(d.get("size")) or 0) >= 2 * 2 ** 30:      # skip tiny system mounts
+            out["disks"].append({"name": _clip(d.get("name"), 60), "size": _num(d.get("size")), "free": _num(d.get("free")) or 0})
+    v = j.get("veeam")
+    if isinstance(v, dict) and v.get("installed"):
+        ev = []
+        for e in (v.get("events") or [])[:300] if isinstance(v.get("events"), list) else []:
+            if isinstance(e, dict):
+                ev.append({"at": _clip(e.get("at"), 40), "level": _clip(e.get("level"), 16), "msg": _clip(e.get("msg"), 400)})
+        out["veeam"] = {"installed": True, "version": _clip(v.get("version"), 40), "service": _clip(v.get("service"), 24),
+                        "events": ev, "sessions": [_clip(x, 300) for x in (v.get("sessions") or [])[:120]] if isinstance(v.get("sessions"), list) else []}
+    return out
+
+
+_VEEAM_WIN = re.compile(r"'(.+?)'\s+finished with\s+(\w+)", re.I)
+_VEEAM_LNX = re.compile(r"^(.*\S)\s+(\w+)\s+\{[0-9a-fA-F-]{36}\}\s+(\w+)\s+(\d{4}-\d\d-\d\d \d\d:\d\d)(?:\s+(\d{4}-\d\d-\d\d \d\d:\d\d))?")
+
+
+def _veeam_jobs(v, tz=""):
+    """Latest result and last success per backup job, from what the machine sent."""
+    runs = []
+    for e in v.get("events") or []:
+        m = _VEEAM_WIN.search(e["msg"])
+        if m and _ts(e["at"]):
+            runs.append((m.group(1)[:80], m.group(2).capitalize(), _ts(e["at"]),
+                         re.sub(r"^[\s.:]+", "", e["msg"][m.end():])[:220]))
+    off = tz if re.match(r"^[+-]\d{4}$", tz or "") else "+0000"
+    for line in v.get("sessions") or []:
+        m = _VEEAM_LNX.match(line.strip())
+        if m and m.group(3).lower() != "running":
+            t = _ts((m.group(5) or m.group(4)).replace(" ", "T") + ":00" + off[:3] + ":" + off[3:])
+            if t:
+                runs.append((m.group(1)[:80], m.group(3).capitalize(), t, ""))
+    jobs = {}
+    for name, result, at, detail in sorted(runs, key=lambda r: r[2]):
+        j = jobs.setdefault(name, {"job": name, "result": result, "at": None, "last_success": None, "detail": ""})
+        j["result"], j["at"], j["detail"] = result, at.isoformat(), detail
+        if result == "Success" or result == "Warning":       # a warning run still made a restore point
+            j["last_success"] = at.isoformat()
+    return sorted(jobs.values(), key=lambda j: j["job"].lower())
+
+
+def _computer_view(r):
+    cid, name, osk, created, last_seen, data, status = r
+    d = json.loads(data) if data else {}
+    seen = _ts(last_seen) if last_seen else None
+    reporting = bool(seen and _now() - seen < datetime.timedelta(minutes=COMPUTER_SILENT_MIN))
+    out = {"id": cid, "name": name, "os": osk, "created_at": created, "last_seen": last_seen, "reporting": reporting,
+           "host": d.get("host") or "", "os_name": d.get("os_name") or "", "cpu": d.get("cpu"),
+           "uptime_days": round(d["uptime_s"] / 86400, 1) if d.get("uptime_s") else None,
+           "mem_pct": round(100 * (1 - d["mem_free"] / d["mem_total"])) if d.get("mem_total") and d.get("mem_free") is not None else None,
+           "mem_gb": round(d["mem_total"] / 2 ** 30, 1) if d.get("mem_total") else None,
+           "reboot_pending": bool(d.get("reboot_pending")),
+           "disks": [{"name": x["name"], "pct": round(100 * (1 - x["free"] / x["size"])), "free_gb": round(x["free"] / 2 ** 30, 1),
+                      "size_gb": round(x["size"] / 2 ** 30, 1)} for x in d.get("disks") or []],
+           "veeam": None, "problems": [], "pending": status == "pending"}
+    p = out["problems"]
+    if status == "pending":
+        return out
+    if not seen:
+        p.append("Waiting for its first report. Run the install command on it.")
+    elif not reporting:
+        p.append("No report since %s. It may be off, offline, or the report task stopped." % _when_words(last_seen))
+    for x in out["disks"]:
+        if x["pct"] >= 90:
+            p.append("Disk %s is %d%% full (%s GB free)." % (x["name"], x["pct"], x["free_gb"]))
+    v = d.get("veeam")
+    if v:
+        jobs = _veeam_jobs(v, d.get("tz") or "")
+        out["veeam"] = {"version": v.get("version"), "service": v.get("service"), "jobs": jobs}
+        if v.get("service") and v["service"].lower() not in ("running", "active"):
+            p.append("The Veeam service is %s." % v["service"].lower())
+        if not jobs:
+            p.append("Veeam is installed but no finished backup could be read from its log.")
+        for j in jobs:
+            if j["result"] not in ("Success", "Warning"):
+                p.append("Backup \"%s\" %s on %s." % (j["job"], j["result"].lower(), _when_words(j["at"])))
+            elif j["result"] == "Warning":
+                p.append("Backup \"%s\" finished with a warning on %s." % (j["job"], _when_words(j["at"])))
+            ok = _ts(j["last_success"]) if j["last_success"] else None
+            if not ok:
+                p.append("Backup \"%s\" has no completed run on record." % j["job"])
+            elif _now() - ok > datetime.timedelta(days=BACKUP_STALE_DAYS):
+                p.append("Backup \"%s\" last completed %d days ago." % (j["job"], (_now() - ok).days))
+    return out
+
+
+def _computers():
+    with closing(get_db()) as con:
+        rows = con.execute("SELECT id, name, os, created_at, last_seen, data, status FROM computers ORDER BY name COLLATE NOCASE").fetchall()
+    return [_computer_view(r) for r in rows]
+
+
+def _enroll_state():
+    try:
+        e = json.loads(_kv_get("computer_enroll") or "{}")
+    except Exception:
+        e = {}
+    return e if isinstance(e, dict) and e.get("hash") else {}
+
+
+def _reporter_file(name):
+    with open(os.path.join(_REPORTER_DIR, name), encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _reporter_base(u):
+    u = str(u or "").strip().rstrip("/")
+    if not re.match(r"^https?://[A-Za-z0-9.\-]+(:\d{1,5})?$", u):
+        raise HTTPException(status_code=400, detail="The Agent OS address must look like https://agent-os.example.com or http://server:9119.")
+    return u
+
+
+@app.post("/devices/computers")
+def computers_add(b: ComputerAdd, _auth=Depends(require_auth)):
+    name = _clip(b.name, 60)
+    if len(name) < 2 or b.os not in ("windows", "linux"):
+        raise HTTPException(status_code=400, detail="Give the computer a name and choose Windows or Linux.")
+    base = _reporter_base(b.base)
+    tok = secrets.token_urlsafe(24)
+    with closing(get_db()) as con:
+        if con.execute("SELECT count(*) FROM computers").fetchone()[0] >= 200:
+            raise HTTPException(status_code=400, detail="200 computers is the limit.")
+        if con.execute("SELECT 1 FROM computers WHERE name=? COLLATE NOCASE", (name,)).fetchone():
+            raise HTTPException(status_code=409, detail="A computer with that name is already listed.")
+        con.execute("INSERT INTO computers(name, token_hash, os, created_at) VALUES(?,?,?,?)", (name, _tok_hash(tok), b.os, _now().isoformat()))
+        con.commit()
+    url = "%s/api/connectors/devices/reporter/%s/install.%s?u=%s" % (base, tok, "ps1" if b.os == "windows" else "sh", quote(base, safe=""))
+    v = _devices_view("%s is added. Run the command on it once; it shows here within a minute." % name)
+    v["install"] = {"name": name, "os": b.os, "command":
+                    ("[Net.ServicePointManager]::SecurityProtocol='Tls12'; irm '%s' | iex" % url) if b.os == "windows"
+                    else ("curl -fsSL '%s' | sudo sh" % url),
+                    "where": "PowerShell opened with Run as administrator" if b.os == "windows" else "a terminal on that machine"}
+    return v
+
+
+@app.delete("/devices/computers/{cid}")
+def computers_remove(cid: int, _auth=Depends(require_auth)):
+    with closing(get_db()) as con:
+        n = con.execute("DELETE FROM computers WHERE id=?", (cid,)).rowcount
+        con.commit()
+    if not n:
+        raise HTTPException(status_code=404, detail="That computer is not listed.")
+    return _devices_view("Removed. Its reports are refused from now on; the report task on the machine can be deleted.")
+
+
+class EnrollKey(BaseModel):
+    base: str
+    approve: bool = True
+
+
+class EnrollReq(BaseModel):
+    host: str = ""
+    os: str = ""
+
+
+_enroll_hits = []
+
+
+@app.post("/devices/enroll-key")
+def enroll_key_make(b: EnrollKey, _auth=Depends(require_auth)):
+    """One key for pushing the reporter to many computers (MDM, RMM, a login script). Making a
+    new key ends the old one; computers already enrolled keep their own tokens."""
+    base = _reporter_base(b.base)
+    key = "aos-enroll-" + secrets.token_urlsafe(24)
+    _kv_set("computer_enroll", json.dumps({"hash": _tok_hash(key), "at": _now().isoformat(), "approve": bool(b.approve)}))
+    v = _devices_view("The enrollment scripts are ready. Download them now: the key inside is not shown again.")
+    v["enroll_scripts"] = {
+        "windows": _reporter_file("install.ps1").replace("__BASE__", base).replace("__TOKEN__", "").replace("__ENROLL__", key),
+        "linux": _reporter_file("install.sh").replace("__BASE__", base).replace("__TOKEN__", "").replace("__ENROLL__", key)}
+    return v
+
+
+@app.delete("/devices/enroll-key")
+def enroll_key_off(_auth=Depends(require_auth)):
+    _kv_set("computer_enroll", "{}")
+    return _devices_view("Enrollment is off. Scripts with the old key can no longer add computers; computers already listed keep reporting.")
+
+
+@app.post("/devices/computers/{cid}/approve")
+def computers_approve(cid: int, _auth=Depends(require_auth)):
+    with closing(get_db()) as con:
+        n = con.execute("UPDATE computers SET status='ok' WHERE id=? AND status='pending'", (cid,)).rowcount
+        con.commit()
+    if not n:
+        raise HTTPException(status_code=404, detail="That computer is not waiting for approval.")
+    return _devices_view("Approved.")
+
+
+@app.post("/devices/enroll")
+def computers_enroll(b: EnrollReq, request: Request):
+    """A computer signs itself up with the enrollment key and gets its own report token."""
+    e = _enroll_state()
+    auth = request.headers.get("authorization", "")
+    key = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    now = time.time()
+    _enroll_hits[:] = [t for t in _enroll_hits if now - t < 3600]
+    if len(_enroll_hits) >= 300:
+        raise HTTPException(status_code=429, detail="Too many enrollments this hour")
+    _enroll_hits.append(now)
+    if not e or not key or not hmac.compare_digest(_tok_hash(key), e["hash"]):
+        raise HTTPException(status_code=403, detail="Enrollment is off or the key is not valid")
+    name = re.sub(r"[^A-Za-z0-9._ -]", "", _clip(b.host, 60)).strip()
+    if len(name) < 2 or b.os not in ("windows", "linux"):
+        raise HTTPException(status_code=400, detail="Send host and os (windows or linux)")
+    tok = secrets.token_urlsafe(24)
+    status = "pending" if e.get("approve") else "ok"
+    with closing(get_db()) as con:
+        old = con.execute("SELECT id FROM computers WHERE name=? COLLATE NOCASE", (name,)).fetchone()
+        if old:     # the same computer set up again: it keeps its place and approval, with a new token
+            con.execute("UPDATE computers SET token_hash=?, os=? WHERE id=?", (_tok_hash(tok), b.os, old[0]))
+        else:
+            if con.execute("SELECT count(*) FROM computers").fetchone()[0] >= 200:
+                raise HTTPException(status_code=400, detail="200 computers is the limit")
+            con.execute("INSERT INTO computers(name, token_hash, os, created_at, status) VALUES(?,?,?,?,?)",
+                        (name, _tok_hash(tok), b.os, _now().isoformat(), status))
+        con.commit()
+    return {"token": tok}
+
+
+def _computer_by_token(tok):
+    if not re.match(r"^[A-Za-z0-9_-]{20,64}$", str(tok or "")):
+        raise HTTPException(status_code=404, detail="Not found")
+    with closing(get_db()) as con:
+        r = con.execute("SELECT id, os, last_seen FROM computers WHERE token_hash=?", (_tok_hash(tok),)).fetchone()
+    if not r:
+        raise HTTPException(status_code=404, detail="Not found")
+    return r
+
+
+@app.get("/devices/reporter/{tok}/{fname}")
+def reporter_script(tok: str, fname: str, u: str = ""):
+    """The install and report scripts, fetched by the machine itself with its own token."""
+    _cid, osk, _seen = _computer_by_token(tok)
+    ext = "ps1" if osk == "windows" else "sh"
+    if fname == "install." + ext:
+        base = _reporter_base(u)
+        body = _reporter_file("install." + ext).replace("__BASE__", base).replace("__TOKEN__", tok).replace("__ENROLL__", "")
+    elif fname == "report." + ext:
+        body = _reporter_file("report." + ext)
+    else:
+        raise HTTPException(status_code=404, detail="Not found")
+    return Response(content=body, media_type="text/plain; charset=utf-8", headers={"Cache-Control": "no-store"})
+
+
+@app.post("/devices/report")
+async def computers_report(request: Request):
+    auth = request.headers.get("authorization", "")
+    cid, _osk, seen = _computer_by_token(auth[7:].strip() if auth.lower().startswith("bearer ") else "")
+    last = _ts(seen) if seen else None
+    if last and _now() - last < datetime.timedelta(seconds=45):
+        raise HTTPException(status_code=429, detail="Too soon")
+    raw = await request.body()
+    if len(raw) > 200000:
+        raise HTTPException(status_code=413, detail="Report too large")
+    try:
+        j = json.loads(raw.decode("utf-8-sig"))
+        assert isinstance(j, dict)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Send a JSON object")
+    with closing(get_db()) as con:
+        con.execute("UPDATE computers SET last_seen=?, data=? WHERE id=?", (_now().isoformat(), json.dumps(_report_clean(j)), cid))
+        con.commit()
+    return {"ok": True}
+
+
+def t_my_devices(a):
+    """The owner's device list as last scanned or reported (no call to any device)."""
+    kind = str(a.get("kind") or "all").lower()
+    if kind not in ("network", "client", "computer", "all"):
+        raise ToolError("kind is network, client, computer or all.")
+    comps = [c for c in _computers() if not c["pending"]] if kind in ("computer", "all") else []
+    unifi = bool(_app_row("unifi"))
+    if not unifi and not comps:
+        raise ToolError("Nothing is listed yet. Tell the owner they can connect UniFi and add computers on the My devices page.")
+    rows = []
+    if unifi and kind != "computer":
+        rows = _devices_rows("kind='network'") if kind in ("network", "all") else []
+        if kind == "client" or (kind == "all" and a.get("search")):
+            rows += _devices_rows("kind='client'")
+    q = str(a.get("search") or "").lower().strip()
+    if q:
+        rows = [r for r in rows if q in " ".join(str(r[k] or "") for k in ("name", "model", "ip", "mac")).lower()]
+        comps = [c for c in comps if q in (c["name"] + " " + c["host"]).lower()]
+    if a.get("needs_update"):
+        rows, comps = [r for r in rows if r["updatable"]], []
+    if a.get("problems_only"):
+        rows, comps = [r for r in rows if r["kind"] == "network" and r["state"] != "ONLINE"], [c for c in comps if c["problems"]]
+    scan = json.loads(_kv_get("devices_scan") or "{}")
+    out = {"network_scanned_at": scan.get("at") if unifi else None,
+           "computers": [{k: c[k] for k in ("name", "os_name", "host", "last_seen", "reporting", "cpu", "mem_pct", "mem_gb",
+                                           "uptime_days", "reboot_pending", "disks", "veeam", "problems")} for c in comps],
+           "devices": [{"name": r["name"], "kind": r["kind"], "model": r["model"], "ip": r["ip"], "mac": r["mac"],
+                        "state": r["state"].lower(), "firmware": r["firmware"], "update_waiting": bool(r["updatable"]),
+                        "connection": r["link"], "site_id": r["site_id"], "device_id": r["ext_id"].split("/", 1)[1],
+                        "first_seen": r["first_seen"], "last_seen": r["last_seen"]} for r in rows[:400]]}
+    if kind == "all" and unifi and not q:
+        out["note"] = "Things connected to the network are left out here; ask with kind client or a search."
+    return BA.trim(out)
 
 
 def t_app_get(a):
@@ -10458,6 +11214,28 @@ MCP_TOOLS = {
         _schema({"app": {"type": "string"}, "action": {"type": "string"},
                  "params": {"type": "object", "description": "The action's params"},
                  "agent_id": {"type": "string", "description": "Your agent id, if you have one"}}, ("app", "action"))),
+    "propose_action": (t_propose_action, "all",
+        "Ask the owner to approve one action that can interrupt the business (restart a network device, power-cycle "
+        "a port, install a firmware update). They get a card with Approve and Decline; on approval Agent OS runs "
+        "exactly what you proposed, checks it worked and writes the result on the task. Use when 'now' or a time with "
+        "its offset for after hours. connected_apps marks which actions need this.",
+        _schema({"app": {"type": "string"}, "action": {"type": "string"},
+                 "params": {"type": "object", "description": "The action's params"},
+                 "why": {"type": "string", "description": "One plain sentence: what is wrong or what this fixes"},
+                 "when": {"type": "string", "description": "'now', or an ISO time with offset, e.g. 2026-01-15T23:00:00-05:00"},
+                 "task": {"type": "string", "description": "Your task key, so the result is written there"},
+                 "agent_id": {"type": "string"}}, ("app", "action", "params", "why"))),
+    "my_devices": (t_my_devices, "all",
+        "The owner's devices (the My devices page), without calling any device. computers: servers and PCs that "
+        "report in, with CPU, memory, disks, uptime, their Veeam backup jobs (last result, last completed run) and "
+        "a plain list of problems. devices: network gear with state, firmware and whether an update is waiting "
+        "(with the site_id and device_id propose_action needs), and with kind client the things connected to it. "
+        "Start here for 'are the backups OK', 'what is low on disk', 'what needs an update'.",
+        _schema({"kind": {"type": "string", "description": "all (default), computer, network or client"},
+                 "search": {"type": "string", "description": "Part of a name, model, IP or MAC"},
+                 "needs_update": {"type": "boolean", "description": "Only gear with a firmware update waiting"},
+                 "problems_only": {"type": "boolean", "description": "Only computers with a problem and gear that is not online"},
+                 "agent_id": {"type": "string"}}, ())),
     "app_get": (t_app_get, "all",
         "Read anything else from a connected app's own API (GET only), e.g. app github, path /repos/acme/site/pulls.",
         _schema({"app": {"type": "string"}, "path": {"type": "string", "description": "Starts with /"},
@@ -10671,7 +11449,7 @@ async def mcp_agent(request: Request):
 _REMOTE_TOOL_NAMES = ("list_agents", "complete_task", "need_owner_input", "split_task", "hand_off_task", "post_idea",
                       "get_business_plan", "update_business_plan", "save_file", "read_task", "wait_for_tasks",
                       "list_projects", "get_project", "read_project_file", "search_project", "create_project",
-                      "save_project_note", "connected_apps", "app_action", "app_get")
+                      "save_project_note", "connected_apps", "app_action", "app_get", "propose_action", "my_devices")
 _REMOTE_HELP = ("Task tools for an agent working an assigned task: split_task when the job will not fit in "
                 "one run, complete_task when it is finished, hand_off_task to pass it to a colleague, "
                 "need_owner_input when only the owner can decide, list_agents for colleagues' names. You "

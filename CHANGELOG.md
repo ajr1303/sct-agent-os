@@ -2,6 +2,55 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.77.0] — 2026-11-26
+
+### Added
+- **Approve an action and it really happens.** Actions that can interrupt the
+  business never run on an agent's say-so. The agent proposes one
+  (propose_action); the owner gets a card under Needs you with what will
+  happen, to which device, why and when, and Approve / Decline. On Approve,
+  Agent OS runs exactly what was shown, now or at the time given (for after
+  hours), then checks the result and writes it on the task and on My
+  devices. Before asking, it checks the device exists and is
+  online; a request nobody answers lapses after 3 days; the same action is
+  never asked twice.
+- **My devices: a new tab for your network.** Connect a UniFi console or a
+  self-hosted Network Server (version 9 or newer) with an API key and Agent OS
+  scans in every gateway, switch and access point (state, firmware, update
+  waiting) and everything connected to them (name, address, wired or Wi-Fi,
+  first and last seen). The list is rescanned every 10 minutes and on Scan
+  now; things that leave the network stay listed as offline for 30 days.
+  Each piece of gear has Restart and, when UniFi offers one, Update: choose
+  Tonight at 11 PM or Do it now, and the page shows the checked result
+  (firmware went from X to Y, back online after N minutes, or that it did not
+  come back). A scheduled one can be cancelled. UniFi is set up on this tab,
+  not on Connections.
+- **Computers, servers and Veeam backups on My devices.** Add a computer and
+  you get one command to run on it (Windows or Linux). It installs a small
+  task that sends that machine's CPU, memory, disk space, uptime and pending
+  restart to Agent OS every 5 minutes. Where Veeam Agent is installed (the
+  standalone agent, no Backup & Replication server needed) it also sends each
+  backup job's results, so the page shows the last result, when a backup last
+  completed, and the warning or error text. Each computer lists its problems
+  in plain words: not reporting for 15 minutes, a disk over 90% full, a failed
+  or warned backup, no completed backup in 3 days, the Veeam service stopped.
+  The script only reads; Agent OS never logs in to the machine and stores no
+  password for it. Each machine has its own token that can only post its
+  report, kept in a folder only administrators can read.
+- **Set up many computers at once (MDM).** My devices can create an enrollment
+  key and hands you one Windows script and one Linux script with it inside,
+  for Intune, another MDM, an RMM tool or a login script. Each computer that
+  runs it signs itself up under its own name and gets its own private token;
+  running it again changes nothing. New computers can wait for the owner's
+  approval before they count. Making a new key or turning enrollment off stops
+  the old scripts from adding computers and leaves enrolled ones reporting.
+- **Agents know your devices.** my_devices gives agents the same list, problems included; they
+  can also read sites, clients, networks, Wi-Fi, WAN links and firewall rules
+  from UniFi. With the owner's approval they can restart a device, power-cycle
+  a PoE port, and install a waiting firmware update. The controller's
+  self-signed certificate is remembered on first connect and is the only one
+  accepted afterwards.
+
 ## [0.76.0] — 2026-11-25
 
 ### Fixed

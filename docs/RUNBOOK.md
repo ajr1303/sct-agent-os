@@ -1457,3 +1457,45 @@ use it (tools `connected_apps`, `app_action`, `app_get`), and n8n has the same l
 `connectors/business_apps.py` (fields, how requests are signed, a test call, the actions, and
 the n8n credential type).
 
+## My devices
+
+The **My devices** tab (`plugins/suburban-devices`) is where UniFi is connected and where
+everything it finds is listed. `_devices_scan` in `connectors/app.py` reads every site's
+devices and clients into the `devices` table (connectors.db) on connect, on **Scan now**, and
+in the 10-minute check; the last scan's outcome is in kv `devices_scan`. Clients that have
+left are kept as offline for 30 days. Restart and Update on the page create an
+already-approved row in `action_requests` (the owner's click is the approval) and follow the
+same run-and-verify path as agent proposals. Agents read the list with `my_devices`. If the
+list is empty or stale, press Scan now: the error from the controller is shown on the page.
+To add another source of devices, write its rows into `devices` with its own `source`.
+
+**Computers and servers** report in themselves. **Add a computer** creates a row in
+`computers` (only a hash of the token is stored) and shows one install command. The
+command downloads `connectors/reporter/install.ps1` or `install.sh` from this box, which
+saves `report.ps1` / `report.sh` and the token (Windows: `%ProgramData%\AgentOS`, a scheduled
+task named "Agent OS report" running as SYSTEM; Linux: `/opt/agent-os-report` and
+`/etc/cron.d/agent-os-report`). Every 5 minutes the script posts to
+`/api/connectors/devices/report`; nginx lets that path and `/devices/reporter/` through
+without a browser session because the token is the check. Veeam Agent results come from the
+"Veeam Agent" Windows event log ("... finished with Success/Warning/Failed") and from
+`veeamconfig session list` on Linux; `_veeam_jobs` in `connectors/app.py` turns them into
+jobs, so a wording difference in a Veeam version is fixed there, not on the machines. **Set up many
+(MDM)** stores a hash of one enrollment key in kv `computer_enroll` and returns the same
+install scripts with the key inside instead of a token; a machine running one calls
+`/api/connectors/devices/enroll` with its hostname, gets its own token, and (if approval is
+on) is listed as waiting until the owner approves it. A
+computer that shows "no report yet": run `report.ps1` / `report.sh` by hand on it and read
+the error, and check the machine can open the Agent OS address used in the command.
+
+## Actions that need the owner's approval
+
+Some app actions can interrupt the business (restart a UniFi device, power-cycle a port,
+install firmware). They are marked `approval=True` in `connectors/business_apps.py` and
+cannot be run with `app_action`. An agent calls `propose_action`; the owner sees a card
+under **Needs you** and presses Approve or Decline. Agent OS then runs the stored action
+(straight away, or at the proposed time, checked every 10 minutes), calls the app's
+`confirm` check until the device is back, and records the result on the task and in
+**Recent use** on Connections. To add such an action for another app, add it to the
+catalog with `approval=True` and teach `describe` (pre-check and plain wording) and
+`confirm` (how to tell it worked) about it.
+
