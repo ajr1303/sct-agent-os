@@ -173,6 +173,17 @@ def get_db():
     # changed afterwards cannot be switched on under the old approval.
     if "fingerprint" not in [c[1] for c in con.execute("PRAGMA table_info(workflow_requests)").fetchall()]:
         con.execute("ALTER TABLE workflow_requests ADD COLUMN fingerprint TEXT")
+    # Actions that need the owner's yes before they run (a restart, a firmware update). The
+    # row is what runs: an agent cannot change it after the owner has seen it.
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS action_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            app TEXT NOT NULL, action TEXT NOT NULL, params TEXT NOT NULL,
+            target TEXT, detail TEXT, why TEXT, agent TEXT, issue_id TEXT, issue_key TEXT,
+            before TEXT, run_at TEXT, status TEXT NOT NULL, result TEXT,
+            created_at TEXT NOT NULL, decided_at TEXT, finished_at TEXT
+        )
+    """)
     # A copy of every workflow the owner archived or deleted from Chat, so nothing is lost.
     con.execute("""
         CREATE TABLE IF NOT EXISTS workflow_backups (
@@ -3192,6 +3203,10 @@ def stuck_watch_run(dry_run=False):
     if not dry_run:
         try:
             _idea_tick()       # the day's idea for the owner, once their morning has started
+            try:
+                _actions_tick()    # approved actions whose time has come
+            except Exception:
+                pass
         except Exception:
             pass
         try:
@@ -5311,6 +5326,16 @@ def _decisions(fresh=False):
                       "question": choices, "recommendation": "",
                       "buttons": btns + [_BTN_REPLY], "ref": ("decision", sid, riid)})
             cards.append(c)
+    for r in _action_rows("status='pending'"):
+        label = BA.CATALOG.get(r["app"], {}).get("label", r["app"])
+        when = (" It would run %s (your time)." % _when_words(r["run_at"])) if r["run_at"] else " It would run as soon as you approve."
+        cards.append({"id": "action:%d" % r["id"], "kind": "approval", "tag": "Action · " + label, "issue_id": None,
+                      "key": r["issue_key"] or "", "title": _clip("%s: %s" % (r["action"].replace("_", " ").capitalize(), r["target"]), 160),
+                      "agent": r["agent"], "at": r["created_at"],
+                      "summary": _clip("%s %s%s" % (r["why"], r["detail"], when), 900),
+                      "question": "Approve this?" if not r["run_at"] else "Approve this for %s?" % _when_words(r["run_at"]),
+                      "recommendation": "Agent OS runs exactly this, then checks the device came back and reports the result.",
+                      "buttons": [_BTN_APPROVE, _BTN_DECLINE], "ref": ("action", str(r["id"]), "")})
     cards.sort(key=lambda c: ({"decision": 0, "approval": 0, "interaction": 1, "review": 2, "problem": 2, "stuck": 3}.get(c["kind"], 4), -(_ts(c.get("at")) or _now()).timestamp()))
     out["decisions"] = cards[:120]
     out["alerts"] = out["alerts"][:60]
@@ -5678,6 +5703,28 @@ def decisions_act(b: DecisionAct, _auth=Depends(require_auth)):
     if act == "reply" and not note:
         raise HTTPException(status_code=400, detail="Type your reply first.")
     reply_md = "**Reply from the owner:**\n\n" + note
+    if typ == "action":
+        rows = _action_rows("id=? AND status='pending'", (int(rid),))
+        if not rows:
+            raise HTTPException(status_code=404, detail="That action is no longer waiting.")
+        r = rows[0]
+        if act == "approve":
+            _action_set(r["id"], status="approved", decided_at=_now().isoformat())
+            later = _ts(r["run_at"]) if r["run_at"] else None
+            if later and later > _now():
+                said = "Approved. It will run %s (your time), within 10 minutes of that, and the result will be on the task and under Recent use on Connections." % _when_words(r["run_at"])
+                _action_note(r, "**The owner approved** %s on %s for %s. Agent OS will run it and report here." % (
+                    r["action"].replace("_", " "), r["target"], _when_words(r["run_at"])))
+            else:
+                _action_start(r["id"])
+                said = "Approved. It is running now; Agent OS checks the device comes back and puts the result on the task and under Recent use on Connections."
+        else:
+            _action_set(r["id"], status="declined", decided_at=_now().isoformat(), finished_at=_now().isoformat())
+            _action_note(r, "**The owner declined** %s on %s.%s Do not propose it again unless something changes." % (
+                r["action"].replace("_", " "), r["target"], extra))
+            said = "Declined. Nothing was changed."
+        _DEC_CACHE.clear()
+        return {"ok": True, "message": said}
     if typ == "decision":
         if act.startswith("opt:"):
             _pc_send("POST", "/api/decisions/" + _safe_id(rid) + "/decide", {"optionId": act[4:]}, what="record your decision")
@@ -6599,6 +6646,7 @@ def apps_connect(app_id: str, b: AppConnect, _auth=Depends(require_auth)):
             if f.get("secret") and not str((b.fields or {}).get(f["key"]) or "").strip():
                 fields[f["key"]] = old["fields"].get(f["key"], "")
     try:
+        fields = BA.prepare(app_id, fields)
         who = BA.test(app_id, fields)
     except Exception as e:
         raise HTTPException(status_code=400, detail="That login did not work: " +
@@ -6723,7 +6771,8 @@ def t_connected_apps(a):
             if x["write"] and access != "write":
                 continue
             ps = ", ".join(k.rstrip("?") + (" (optional)" if k.endswith("?") else "") + ": " + v for k, v in x["params"].items())
-            out.append("  - %s%s: %s%s" % (n, " [changes data]" if x["write"] else "", x["desc"], (" Params: " + ps) if ps else ""))
+            out.append("  - %s%s: %s%s" % (n, " [needs the owner's approval: use propose_action]" if x.get("approval")
+                                           else (" [changes data]" if x["write"] else ""), x["desc"], (" Params: " + ps) if ps else ""))
     others = [c["label"] for k, c in BA.CATALOG.items() if k not in rows]
     out.append("Not connected (the owner can add them on the Connections page): " + ", ".join(others))
     out.append("Run an action with app_action; read anything else from an app's API with app_get.")
@@ -6754,6 +6803,169 @@ def t_app_action(a):
         raise ToolError(msg[:500])
     _app_log(app_id, action, spec["write"], who, True)
     return BA.trim(data)
+
+
+ACTION_PENDING_DAYS = 3
+
+
+def _when(text):
+    """'now' or an ISO time with offset -> aware datetime or None. Raises ToolError when unreadable."""
+    t = str(text or "").strip()
+    if not t or t.lower() == "now":
+        return None
+    d = _ts(t)
+    if not d or d.tzinfo is None:
+        raise ToolError("when must be 'now' or a full time with its offset, e.g. 2026-01-15T23:00:00-05:00.")
+    if d < _now() - datetime.timedelta(minutes=5):
+        raise ToolError("when is in the past.")
+    if d > _now() + datetime.timedelta(days=14):
+        raise ToolError("when must be within the next 14 days.")
+    return d
+
+
+def t_propose_action(a):
+    """Ask the owner to approve one action that can interrupt the business."""
+    app_id, row = _app_pick(a)
+    action = str(a.get("action") or "").strip()
+    spec = BA.CATALOG[app_id]["actions"].get(action)
+    if not spec:
+        raise ToolError("%s has no action %r." % (BA.CATALOG[app_id]["label"], action))
+    if not spec.get("approval"):
+        raise ToolError("%s does not need approval: run it with app_action." % action)
+    if row["access"] != "write":
+        raise ToolError("The owner set %s to read only, so nothing can be changed there." % BA.CATALOG[app_id]["label"])
+    params = a.get("params") or {}
+    if not isinstance(params, dict):
+        raise ToolError("params must be an object.")
+    why = re.sub(r"\s+", " ", str(a.get("why") or "")).strip()[:400]
+    if len(why) < 15:
+        raise ToolError("Give why in one plain sentence the owner can judge (what is wrong, or what the update fixes).")
+    run_at = _when(a.get("when"))
+    try:
+        info = BA.describe(app_id, row["fields"], action, params)
+    except ValueError as e:
+        raise ToolError(str(e))
+    except Exception as e:
+        raise ToolError(BA._scrub(str(e), BA.secrets_of(app_id, row["fields"]))[:400])
+    pj = json.dumps(params, sort_keys=True)
+    issue = None
+    if a.get("task"):
+        try:
+            issue = _pc_get("/api/issues/" + _safe_id(str(a["task"]).strip()))
+        except Exception:
+            issue = None
+    with closing(get_db()) as con:
+        dup = con.execute("SELECT id FROM action_requests WHERE app=? AND action=? AND params=? AND status IN "
+                          "('pending','approved','running')", (app_id, action, pj)).fetchone()
+        if dup:
+            return "The owner already has this exact action waiting. Stop here; you will be told the result."
+        if con.execute("SELECT count(*) FROM action_requests WHERE status='pending'").fetchone()[0] >= 20:
+            raise ToolError("Too many actions are already waiting for the owner. Wait for those to be decided.")
+        con.execute("INSERT INTO action_requests(app, action, params, target, detail, why, agent, issue_id, issue_key, before, "
+                    "run_at, status, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (app_id, action, pj, info["target"][:200], info["detail"][:400], why, _app_caller(a)[:80],
+                     str((issue or {}).get("id") or ""), str((issue or {}).get("identifier") or ""),
+                     json.dumps(info.get("state") or {}), run_at.isoformat() if run_at else None, "pending", _now().isoformat()))
+        con.commit()
+    _DEC_CACHE.clear()
+    return ("The owner now has a card to approve or decline this. Do not run it yourself and do not ask again. When "
+            "they approve, Agent OS runs it%s, checks the result and writes it on the task. Stop here." % (
+                " at the time you gave" if run_at else ""))
+
+
+def _action_rows(where, args=()):
+    keys = ("id", "app", "action", "params", "target", "detail", "why", "agent", "issue_id", "issue_key", "before",
+            "run_at", "status", "result", "created_at", "decided_at", "finished_at")
+    with closing(get_db()) as con:
+        rows = con.execute("SELECT %s FROM action_requests WHERE %s ORDER BY id DESC LIMIT 60" % (", ".join(keys), where), args).fetchall()
+    return [dict(zip(keys, r)) for r in rows]
+
+
+def _action_set(rid, **kw):
+    with closing(get_db()) as con:
+        con.execute("UPDATE action_requests SET %s WHERE id=?" % ", ".join(k + "=?" for k in kw), list(kw.values()) + [rid])
+        con.commit()
+
+
+def _action_note(r, text):
+    """Tell the task (and so the agent) what happened."""
+    if r.get("issue_id"):
+        try:
+            _pc_send("POST", "/api/issues/" + _safe_id(r["issue_id"]) + "/comments", {"body": text}, what="record the result")
+        except Exception:
+            pass
+
+
+def _action_run(rid):
+    """Run one approved action and check that it worked. Runs in its own thread."""
+    rows = _action_rows("id=? AND status IN ('approved','running')", (rid,))
+    if not rows:
+        return
+    r = rows[0]
+    with closing(get_db()) as con:      # claim it: only one runner per action
+        n = con.execute("UPDATE action_requests SET status='running' WHERE id=? AND status='approved'", (rid,)).rowcount
+        con.commit()
+    if not n:
+        return
+    label = BA.CATALOG.get(r["app"], {}).get("label", r["app"])
+    what = "%s on %s" % (r["action"].replace("_", " "), r["target"])
+    row = _app_row(r["app"])
+    params = json.loads(r["params"])
+    ok, result = False, ""
+    try:
+        if not row or row["access"] != "write":
+            raise RuntimeError("%s is no longer connected with changes allowed." % label)
+        info = BA.describe(r["app"], row["fields"], r["action"], params)       # still true now?
+        started = time.time()
+        BA.run(r["app"], row["fields"], r["action"], params, True, approved=True)
+        while True:
+            done, ok, result = BA.confirm(r["app"], row["fields"], r["action"], params, info.get("state") or {}, started)
+            if done:
+                break
+            time.sleep(20)
+    except Exception as e:
+        ok, result = False, "It did not run: " + BA._scrub(str(e), BA.secrets_of(r["app"], (row or {}).get("fields") or {}))[:400]
+    _action_set(rid, status="done" if ok else "failed", result=result, finished_at=_now().isoformat())
+    _app_log(r["app"], r["action"], True, "approved by the owner", ok, ("%s: %s" % (r["target"], result))[:300])
+    _action_note(r, ("**Approved action finished.** %s. %s" if ok else
+                     "**Approved action did not work.** %s. %s Do not try it again yourself; tell the owner what you "
+                     "found with need_owner_input if it needs them.") % (what[0].upper() + what[1:], result))
+    _DEC_CACHE.clear()
+
+
+def _action_start(rid):
+    threading.Thread(target=_action_run, args=(rid,), daemon=True).start()
+
+
+def _actions_tick():
+    """From the 10-minute check: run approved actions whose time has come, drop stale requests."""
+    now = _now()
+    for r in _action_rows("status='approved'"):
+        due = _ts(r["run_at"]) if r["run_at"] else now
+        if due and due <= now:
+            _action_start(r["id"])
+    for r in _action_rows("status='pending'"):
+        made = _ts(r["created_at"])
+        if made and now - made > datetime.timedelta(days=ACTION_PENDING_DAYS):
+            _action_set(r["id"], status="expired", finished_at=now.isoformat())
+            _action_note(r, "The owner did not decide on %s within %d days, so the request has lapsed. Propose it "
+                            "again only if it is still needed." % (r["action"].replace("_", " "), ACTION_PENDING_DAYS))
+    for r in _action_rows("status='running'"):      # a restart of this service mid-run
+        dec = _ts(r["decided_at"]) or now
+        if now - dec > datetime.timedelta(hours=2) and not (_ts(r["run_at"]) and _ts(r["run_at"]) > now - datetime.timedelta(hours=2)):
+            _action_set(r["id"], status="failed", result="Agent OS restarted while this was running, so the result "
+                        "was not checked. Look at the device.", finished_at=now.isoformat())
+            _action_note(r, "**Approved action: result unknown.** Agent OS restarted while %s was running. Check the "
+                            "device's state with app_action and report." % r["action"].replace("_", " "))
+
+
+def _when_words(iso):
+    d = _ts(iso)
+    if not d:
+        return ""
+    off = -(_idea_prefs()["tz"])            # the owner's offset from UTC in minutes, as the browser reported it
+    local = d.astimezone(datetime.timezone(datetime.timedelta(minutes=off)))
+    return local.strftime("%a %b %-d at %-I:%M %p")
 
 
 def t_app_get(a):
@@ -10458,6 +10670,17 @@ MCP_TOOLS = {
         _schema({"app": {"type": "string"}, "action": {"type": "string"},
                  "params": {"type": "object", "description": "The action's params"},
                  "agent_id": {"type": "string", "description": "Your agent id, if you have one"}}, ("app", "action"))),
+    "propose_action": (t_propose_action, "all",
+        "Ask the owner to approve one action that can interrupt the business (restart a network device, power-cycle "
+        "a port, install a firmware update). They get a card with Approve and Decline; on approval Agent OS runs "
+        "exactly what you proposed, checks it worked and writes the result on the task. Use when 'now' or a time with "
+        "its offset for after hours. connected_apps marks which actions need this.",
+        _schema({"app": {"type": "string"}, "action": {"type": "string"},
+                 "params": {"type": "object", "description": "The action's params"},
+                 "why": {"type": "string", "description": "One plain sentence: what is wrong or what this fixes"},
+                 "when": {"type": "string", "description": "'now', or an ISO time with offset, e.g. 2026-01-15T23:00:00-05:00"},
+                 "task": {"type": "string", "description": "Your task key, so the result is written there"},
+                 "agent_id": {"type": "string"}}, ("app", "action", "params", "why"))),
     "app_get": (t_app_get, "all",
         "Read anything else from a connected app's own API (GET only), e.g. app github, path /repos/acme/site/pulls.",
         _schema({"app": {"type": "string"}, "path": {"type": "string", "description": "Starts with /"},
@@ -10671,7 +10894,7 @@ async def mcp_agent(request: Request):
 _REMOTE_TOOL_NAMES = ("list_agents", "complete_task", "need_owner_input", "split_task", "hand_off_task", "post_idea",
                       "get_business_plan", "update_business_plan", "save_file", "read_task", "wait_for_tasks",
                       "list_projects", "get_project", "read_project_file", "search_project", "create_project",
-                      "save_project_note", "connected_apps", "app_action", "app_get")
+                      "save_project_note", "connected_apps", "app_action", "app_get", "propose_action")
 _REMOTE_HELP = ("Task tools for an agent working an assigned task: split_task when the job will not fit in "
                 "one run, complete_task when it is finished, hand_off_task to pass it to a colleague, "
                 "need_owner_input when only the owner can decide, list_agents for colleagues' names. You "

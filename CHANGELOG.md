@@ -2,6 +2,29 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.77.0] — 2026-11-26
+
+### Added
+- **Approve an action and it really happens.** Actions that can interrupt the
+  business never run on an agent's say-so. The agent proposes one
+  (propose_action); the owner gets a card under Needs you with what will
+  happen, to which device, why and when, and Approve / Decline. On Approve,
+  Agent OS runs exactly what was shown, now or at the time given (for after
+  hours), then checks the result and writes it on the task and under Recent
+  use on Connections. Before asking, it checks the device exists and is
+  online; a request nobody answers lapses after 3 days; the same action is
+  never asked twice.
+- **UniFi Network on the Connections page.** Connect a UniFi console or a
+  self-hosted Network Server (version 9 or newer) with an API key. Agents can
+  see sites, devices (state, firmware, update available), clients, networks,
+  Wi-Fi, WAN links and firewall rules. With the owner's approval they can
+  restart a device, power-cycle a PoE port, and install a waiting firmware
+  update; after a restart or update Agent OS waits for the device to come back
+  online (and, for an update, for the firmware version to change) and reports
+  how long it took, or that it did not come back. The controller's
+  self-signed certificate is remembered on first connect and is the only one
+  accepted afterwards.
+
 ## [0.76.0] — 2026-11-25
 
 ### Fixed

@@ -1457,3 +1457,15 @@ use it (tools `connected_apps`, `app_action`, `app_get`), and n8n has the same l
 `connectors/business_apps.py` (fields, how requests are signed, a test call, the actions, and
 the n8n credential type).
 
+## Actions that need the owner's approval
+
+Some app actions can interrupt the business (restart a UniFi device, power-cycle a port,
+install firmware). They are marked `approval=True` in `connectors/business_apps.py` and
+cannot be run with `app_action`. An agent calls `propose_action`; the owner sees a card
+under **Needs you** and presses Approve or Decline. Agent OS then runs the stored action
+(straight away, or at the proposed time, checked every 10 minutes), calls the app's
+`confirm` check until the device is back, and records the result on the task and in
+**Recent use** on Connections. To add such an action for another app, add it to the
+catalog with `approval=True` and teach `describe` (pre-check and plain wording) and
+`confirm` (how to tell it worked) about it.
+

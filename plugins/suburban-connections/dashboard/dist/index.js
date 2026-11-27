@@ -150,7 +150,7 @@
           return h("div", { key: i, className: "cx-row" + (x.ok ? "" : " cx-row-bad") },
             h("span", { className: "cx-when" }, when(x.at)),
             h("span", null, (x.who || "agent") + " · " + x.app + " · " + x.action.replace(/_/g, " ") + (x.write ? " (change)" : "")),
-            x.ok ? null : h("span", { className: "cx-why" }, x.note || "failed"));
+            (x.ok && !x.note) ? null : h("span", { className: "cx-why" }, x.note || "failed"));
         })) : null);
     }
     try { PLUGINS.register("suburban-connections", Connections); console.info(TAG, "registered"); }

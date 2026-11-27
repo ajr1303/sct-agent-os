@@ -12,6 +12,8 @@ can use it without the owner entering it twice.
 import base64
 import json
 import re
+import ssl
+import time
 
 import httpx
 
@@ -56,9 +58,54 @@ def _txt_adf(text):
 #   params: {name: "description"} - names in {braces} in the path fill the path; for GET the
 #   rest become the query; for other methods the rest become the JSON body. A name ending in
 #   "?" is optional. "body" as a param name takes a whole JSON object as the body.
-def A(method, path, desc, params=None, write=False, wrap=None, fixed=None):
-    return {"method": method, "path": path, "desc": desc, "params": params or {}, "write": write,
-            "wrap": wrap, "fixed": fixed or {}}
+#   approval=True: the action can interrupt the business (a restart, a firmware update), so it
+#   never runs on an agent's say-so. The agent proposes it, the owner approves the exact
+#   action on a card, and only then does Agent OS run it and check the result.
+def A(method, path, desc, params=None, write=False, wrap=None, fixed=None, approval=False):
+    return {"method": method, "path": path, "desc": desc, "params": params or {}, "write": write or approval,
+            "wrap": wrap, "fixed": fixed or {}, "approval": approval}
+
+
+def _unifi_prepare(f):
+    """Find where this controller serves its API and remember its certificate.
+
+    A UniFi console serves the API under /proxy/network; the self-hosted Network Server
+    serves it at the top. Most controllers use a self-signed certificate, so the one seen
+    now is stored and is the only one accepted from then on."""
+    site = _site(f["site"])
+    host = re.sub(r"^https://", "", site).split("/")[0]
+    name, _, port = host.partition(":")
+    out = dict(f, site=site, cert="")
+    try:
+        with httpx.Client(timeout=10) as c:
+            c.get(site)
+    except httpx.ConnectError as e:
+        if "CERTIFICATE_VERIFY_FAILED" not in str(e) and "certificate" not in str(e).lower():
+            raise RuntimeError("Could not reach %s from the Agent OS box. Check the address and port, and that "
+                               "this box can reach it on the network." % site)
+        out["cert"] = ssl.get_server_certificate((name, int(port or 443)), timeout=10)
+    except httpx.HTTPError:
+        raise RuntimeError("Could not reach %s from the Agent OS box. Check the address and port, and that this "
+                           "box can reach it on the network." % site)
+    last = None
+    for prefix in ("/proxy/network/integration", "/integration"):
+        out["prefix"] = prefix
+        try:
+            j = _send("unifi", out, "GET", "/v1/info")
+            if isinstance(j, dict) and j.get("applicationVersion"):
+                return out
+        except Exception as e:
+            last = e
+    raise RuntimeError("The controller did not accept the API key (%s). It needs UniFi Network 9 or newer, with a "
+                       "key made under Settings > Control Plane > Integrations." % str(last)[:160])
+
+
+def _unifi_verify(f):
+    if not f.get("cert"):
+        return True
+    ctx = ssl.create_default_context(cadata=f["cert"])
+    ctx.check_hostname = False          # the pinned certificate itself is what is trusted
+    return ctx
 
 
 CATALOG = {
@@ -503,6 +550,53 @@ CATALOG = {
                           {"content": "Text", "deal_id?": "Deal id", "person_id?": "Person id"}, write=True),
         },
     },
+    "unifi": {
+        "label": "UniFi Network", "category": "IT & security",
+        "about": "Your UniFi gateway, switches and access points: see devices, clients and firewall rules; "
+                 "restart a device or update its firmware with your approval.",
+        "fields": [{"key": "site", "label": "Controller address", "secret": False,
+                    "placeholder": "https://192.168.1.1 or https://unifi.example.com:8443"},
+                   {"key": "token", "label": "API key", "secret": True, "placeholder": "From Integrations"}],
+        "steps": ["Open your UniFi Network application (version 9 or newer) as an admin.",
+                  "Go to Settings > Control Plane > Integrations, create an API key named Agent OS and copy it.",
+                  "Enter the address you use to open the controller. The Agent OS box must be able to reach it "
+                  "(same network, VPN or Tailscale). Its certificate is remembered on first connect."],
+        "base": lambda f: _site(f["site"]) + (f.get("prefix") or "/proxy/network/integration"),
+        "headers": lambda f: {"X-API-KEY": f["token"]},
+        "prepare": _unifi_prepare, "verify": _unifi_verify,
+        "test": ("GET", "/v1/info", lambda j: "UniFi Network " + str(j.get("applicationVersion")) if j.get("applicationVersion") else None),
+        "n8n": ("httpHeaderAuth", lambda f: {"name": "X-API-KEY", "value": f["token"]}),
+        "actions": {
+            "list_sites": A("GET", "/v1/sites", "Sites on this controller (their id is needed by the other actions)."),
+            "list_devices": A("GET", "/v1/sites/{site_id}/devices", "Gateways, switches and access points with state, "
+                              "firmware version and whether an update is available (firmwareUpdatable).",
+                              {"site_id": "Site id", "limit?": "Up to 200", "filter?": "e.g. firmwareUpdatable.eq(true)"}),
+            "get_device": A("GET", "/v1/sites/{site_id}/devices/{device_id}", "One device in detail, with ports and radios.",
+                            {"site_id": "Site id", "device_id": "Device id"}),
+            "device_stats": A("GET", "/v1/sites/{site_id}/devices/{device_id}/statistics/latest", "Uptime, CPU, memory and load.",
+                              {"site_id": "Site id", "device_id": "Device id"}),
+            "list_clients": A("GET", "/v1/sites/{site_id}/clients", "Connected clients.",
+                              {"site_id": "Site id", "limit?": "Up to 200", "filter?": "e.g. type.eq('WIRELESS')"}),
+            "list_networks": A("GET", "/v1/sites/{site_id}/networks", "Networks and VLANs.", {"site_id": "Site id"}),
+            "list_wifi": A("GET", "/v1/sites/{site_id}/wifi/broadcasts", "Wi-Fi networks.", {"site_id": "Site id"}),
+            "list_wans": A("GET", "/v1/sites/{site_id}/wans", "Internet (WAN) connections.", {"site_id": "Site id"}),
+            "list_firewall_policies": A("GET", "/v1/sites/{site_id}/firewall/policies", "Firewall rules.",
+                                        {"site_id": "Site id", "limit?": "Up to 200"}),
+            "list_firewall_zones": A("GET", "/v1/sites/{site_id}/firewall/zones", "Firewall zones.", {"site_id": "Site id"}),
+            "list_pending_devices": A("GET", "/v1/pending-devices", "Devices waiting to be adopted."),
+            "restart_device": A("POST", "/v1/sites/{site_id}/devices/{device_id}/actions",
+                                "Restart a device. Everything behind it drops for a few minutes.",
+                                {"site_id": "Site id", "device_id": "Device id"}, fixed={"action": "RESTART"}, approval=True),
+            "power_cycle_port": A("POST", "/v1/sites/{site_id}/devices/{device_id}/interfaces/ports/{port_idx}/actions",
+                                  "Turn PoE off and on for one switch port, restarting what it powers (a camera, an access point).",
+                                  {"site_id": "Site id", "device_id": "Switch id", "port_idx": "Port number"},
+                                  fixed={"action": "POWER_CYCLE"}, approval=True),
+            "update_firmware": A("POST", "/v1/sites/{site_id}/devices/{device_id}/actions",
+                                 "Install the firmware update UniFi offers for a device. It restarts; everything behind "
+                                 "it drops for several minutes.",
+                                 {"site_id": "Site id", "device_id": "Device id"}, approval=True),
+        },
+    },
     "cloudflare": {
         "label": "Cloudflare", "category": "IT & security",
         "about": "Domains and DNS records. Read only.",
@@ -562,7 +656,8 @@ def public_catalog():
         out.append({"id": aid, "label": a["label"], "category": a["category"], "about": a["about"],
                     "fields": a["fields"], "steps": a["steps"], "read_only": bool(a.get("read_only")),
                     "has_writes": any(x["write"] for x in a["actions"].values()),
-                    "actions": [{"name": n, "desc": x["desc"], "write": x["write"]} for n, x in a["actions"].items()]})
+                    "actions": [{"name": n, "desc": x["desc"], "write": x["write"], "approval": bool(x.get("approval"))}
+                                for n, x in a["actions"].items()]})
     return out
 
 
@@ -593,10 +688,17 @@ def _scrub(text, secrets):
     return text
 
 
-def _send(app_id, fields, method, path, query=None, body=None):
+def prepare(app_id, fields):
+    """App-specific setup at connect time (find the API, remember a certificate)."""
+    fn = CATALOG[app_id].get("prepare")
+    return fn(fields) if fn else fields
+
+
+def _send(app_id, fields, method, path, query=None, body=None, url=None):
     a = CATALOG[app_id]
-    url = a["base"](fields) + path
-    with httpx.Client(timeout=TIMEOUT, follow_redirects=False) as c:
+    url = url or (a["base"](fields) + path)
+    verify = a["verify"](fields) if a.get("verify") else True
+    with httpx.Client(timeout=TIMEOUT, follow_redirects=False, verify=verify) as c:
         r = c.request(method, url, headers=dict(a["headers"](fields), **{"Accept": "application/json",
                                                                        "User-Agent": "SuburbanCyber-AgentOS/1"}),
                       params=query or None, json=body if method != "GET" else None)
@@ -635,7 +737,68 @@ def test(app_id, fields):
 _MUTATION = re.compile(r"^\s*mutation\b|\bmutation\s*[({]", re.I)
 
 
-def run(app_id, fields, action, params, allow_write):
+def _unifi_dev(fields, p):
+    return _send("unifi", fields, "GET", "/v1/sites/%s/devices/%s" % (p["site_id"], p["device_id"]))
+
+
+def describe(app_id, fields, action, params):
+    """Before the owner is asked: check the target is real and say exactly what would happen.
+    Returns {"target", "detail", "state"}; raises ValueError when the action makes no sense now."""
+    spec = CATALOG[app_id]["actions"][action]
+    if app_id != "unifi":
+        return {"target": CATALOG[app_id]["label"], "detail": spec["desc"], "state": {}}
+    for k in ("site_id", "device_id"):
+        if not re.match(r"^[A-Za-z0-9-]{1,64}$", str((params or {}).get(k) or "")):
+            raise ValueError("%s needs %s (from list_sites and list_devices)." % (action, k))
+    d = _unifi_dev(fields, params)
+    name = "%s (%s, %s)" % (d.get("name") or "device", d.get("model") or "UniFi", d.get("ipAddress") or d.get("macAddress") or "")
+    st = {"state": d.get("state"), "firmware": d.get("firmwareVersion"), "updatable": bool(d.get("firmwareUpdatable")),
+          "mac": d.get("macAddress")}
+    if str(d.get("state")).upper() != "ONLINE":
+        raise ValueError("%s is %s, not online, so this cannot run now." % (name, str(d.get("state")).lower()))
+    if action == "update_firmware":
+        if not d.get("firmwareUpdatable"):
+            raise ValueError("%s has no firmware update waiting (it is on %s)." % (name, d.get("firmwareVersion")))
+        detail = "Installs the firmware update UniFi offers (now on %s). The device restarts; expect several minutes offline." % d.get("firmwareVersion")
+    elif action == "power_cycle_port":
+        detail = "Turns PoE off and on for port %s, restarting what that port powers." % params.get("port_idx")
+    else:
+        detail = "Restarts the device. Everything connected through it drops for a few minutes."
+    return {"target": name, "detail": detail, "state": st}
+
+
+def _mins(sec):
+    m = max(1, round(sec / 60))
+    return "%d minute%s" % (m, "" if m == 1 else "s")
+
+
+def confirm(app_id, fields, action, params, before, started):
+    """After an approved action: (finished, worked, plain result). Called repeatedly until finished."""
+    if app_id != "unifi" or action == "power_cycle_port":
+        return True, True, "Done."
+    waited = time.time() - started
+    try:
+        d = _unifi_dev(fields, params)
+    except Exception as e:
+        if waited > 900:
+            return True, False, "The controller stopped answering and had not come back after 15 minutes (%s)." % str(e)[:120]
+        return False, False, ""
+    online = str(d.get("state")).upper() == "ONLINE"
+    if action == "restart_device":
+        if online and waited > 90:
+            return True, True, "It is back online after about %s." % _mins(waited)
+    else:
+        if online and d.get("firmwareVersion") != before.get("firmware"):
+            return True, True, "Firmware went from %s to %s and the device is back online after about %s." % (
+                before.get("firmware"), d.get("firmwareVersion"), _mins(waited))
+        if online and waited > 1200:
+            return True, False, "The device is online but still on firmware %s after 20 minutes: the update did not install." % d.get("firmwareVersion")
+    if waited > 1500:
+        return True, False, "The device had not come back online after 25 minutes (last state: %s). Check it on site." % str(d.get("state")).lower()
+    return False, False, ""
+
+
+def run(app_id, fields, action, params, allow_write, approved=False):
     """Run one named action. Returns the app's answer (JSON-able)."""
     a = CATALOG[app_id]
     if action not in a["actions"]:
@@ -643,6 +806,10 @@ def run(app_id, fields, action, params, allow_write):
     spec = a["actions"][action]
     if spec["write"] and not allow_write:
         raise PermissionError("The owner set %s to read only, so %s is not allowed." % (a["label"], action))
+    if spec.get("approval") and not approved:
+        raise PermissionError("%s can interrupt the business, so it needs the owner's approval. Call propose_action "
+                              "with the same app, action and params; the owner gets a card, and Agent OS runs it "
+                              "and checks the result when they approve." % action)
     p = dict(params or {})
     names = {k.rstrip("?"): k.endswith("?") for k in spec["params"]}
     for k, opt in names.items():
@@ -660,6 +827,16 @@ def run(app_id, fields, action, params, allow_write):
                             v.replace("/", "%2F").replace(" ", "%20"))
     p.update(spec["fixed"])
     # App-specific shapes
+    if app_id == "unifi" and action == "update_firmware":
+        # The official API has no firmware action yet; the controller's own command does it.
+        dev = _unifi_dev(fields, params)
+        sites = _send("unifi", fields, "GET", "/v1/sites", query={"limit": 200})
+        ref = next((x.get("internalReference") for x in (sites.get("data") or []) if str(x.get("id")) == str(params["site_id"])), None)
+        if not ref or not dev.get("macAddress"):
+            raise RuntimeError("Could not look up the device or its site on the controller.")
+        root = _site(fields["site"]) + ("/proxy/network" if str(fields.get("prefix") or "").startswith("/proxy") else "")
+        return _send("unifi", fields, "POST", "", url="%s/api/s/%s/cmd/devmgr" % (root, ref),
+                     body={"cmd": "upgrade", "mac": str(dev["macAddress"]).lower()})
     if app_id in ("linear", "monday"):
         if action == "query":
             if _MUTATION.search(str(p.get("query") or "")):
