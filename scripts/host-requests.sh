@@ -82,6 +82,28 @@ if [ -f data/backup/password-request ] && [ -x scripts/dashboard-password.sh ]; 
   ./scripts/dashboard-password.sh --from-request
 fi
 
+# --- Built-in SIEM: "Turn on" / "Turn off" on the Security events page -----------------
+# Setting up takes minutes, so it runs on its own; scripts/siem.sh reports through
+# data/backup/siem-state.json.
+if [ -f data/backup/siem-request ]; then
+  want=$(head -n1 data/backup/siem-request | tr -cd 'a-z ' | cut -c1-20)
+  rm -f data/backup/siem-request
+  case "$want" in
+    on) siem_args="on";;
+    "on console") siem_args="on --console";;
+    off) siem_args="off";;
+    *) siem_args="";;
+  esac
+  if [ -n "$siem_args" ] && [ -x scripts/siem.sh ]; then
+    # shellcheck disable=SC2086
+    if command -v setsid >/dev/null 2>&1; then
+      setsid nohup ./scripts/siem.sh $siem_args >/dev/null 2>&1 < /dev/null &
+    else
+      nohup ./scripts/siem.sh $siem_args >/dev/null 2>&1 < /dev/null &
+    fi
+  fi
+fi
+
 REQ=data/backup/link-paperclip
 RES=data/backup/link-result.json
 [ -f "$REQ" ] || exit 0

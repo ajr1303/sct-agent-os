@@ -1478,6 +1478,55 @@ and links; devices stay on My devices. Agents read a client with `client_info` a
 its notes log with `add_client_note`. Client records are in connectors.db, so the normal
 backup covers them. Passwords do not belong in notes or equipment details.
 
+## Security events (the built-in SIEM)
+
+Optional and off by default. The SIEM is [Wazuh](https://wazuh.com), run beside Agent OS
+as its own Compose project (`agent-os-siem`) from Wazuh's official single-node Docker
+setup, which `scripts/siem.sh` downloads at a pinned version into `data/siem/src`.
+`siem/overrides.yml` holds Agent OS's changes; nothing of Wazuh's lives in this repository.
+
+**Needs:** 12 GB of memory on the server and 40 GB of free disk (it refuses on less),
+Docker Compose 2.24 or newer, and the kernel setting `vm.max_map_count` at 262144 or more.
+The script sets that itself when it runs as root or has passwordless sudo; otherwise it
+stops and prints the one command to run.
+
+**Turn it on:** the **Security events** tab, or `scripts/siem.sh on` (add `--console` for
+Wazuh's own dashboard on port 5601). From the tab, the request goes through
+`data/backup/siem-request` and `scripts/host-requests.sh`, like "Update now". The first
+set-up downloads a few GB and takes 10 to 20 minutes. Progress and the outcome are in
+`data/backup/siem-state.json`; the full output is in `data/siem/setup.log`.
+
+What the set-up does, once:
+
+1. Downloads `wazuh-docker` at the pinned tag.
+2. Makes four passwords (indexer admin, API user, Wazuh dashboard user, agent enrolment),
+   writes them to `data/siem/siem.env` (mode 600) and puts the hashes into Wazuh's
+   `internal_users.yml` before the first start, so Wazuh's published defaults never work.
+3. Adds a syslog listener (514/udp, private address ranges only) and turns on the
+   enrolment password in the manager's settings.
+4. Makes the certificates with Wazuh's own generator and starts the manager and indexer.
+5. Waits until Agent OS's connectors service can sign in to the indexer over TLS, checking
+   the certificate against the SIEM's own CA (`data/backup/siem-ca.pem`). If that never
+   works, it stops the SIEM again and says why.
+
+**What is open:** 514/udp (syslog), 1514 and 1515/tcp (agents) on the server. The indexer
+(9200) and the manager's API (55000) are not published; the connectors service reaches
+them on the `agent-os_default` network. Set `SIEM_BIND` in `data/siem/siem.env` to one
+address to listen on that address only. Do not forward these ports from the internet.
+
+**Sending logs:** the tab's "Sending logs here" page has the syslog address and the agent
+install commands with this server's address filled in. If devices reach the server by
+another address (a VPN or mesh address), use that one. The Alerts page shows *alerts*: a
+log line appears only when it matches one of Wazuh's rules.
+
+**Turn it off:** the tab, or `scripts/siem.sh off`. Containers stop; volumes stay. To remove
+it for good: `docker compose -p agent-os-siem down -v`, then delete `data/siem` and
+`data/backup/siem-*`.
+
+**Not covered yet:** SIEM data is not in the Agent OS backup; moving to a newer Wazuh
+version is manual (change `WAZUH_VERSION` and follow Wazuh's upgrade notes); alerts are
+not tied to the Clients tab; Agent OS's own sign-ins and approvals are not sent to it.
+
 ## My devices
 
 The **My devices** tab (`plugins/suburban-devices`) is where UniFi is connected and where

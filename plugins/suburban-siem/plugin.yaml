@@ -1,0 +1,3 @@
+name: suburban-siem
+version: 0.1.0
+description: Suburban Cyber Agent OS - Security events (the optional built-in SIEM, alerts from computers and network gear)

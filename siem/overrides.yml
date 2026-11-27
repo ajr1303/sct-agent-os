@@ -1,0 +1,46 @@
+# Agent OS's changes to Wazuh's own single-node Docker setup (which scripts/siem.sh
+# downloads at a pinned version into data/siem/src; nothing of Wazuh's is kept in this
+# repository). Used as: docker compose -f <wazuh single-node compose> -f siem/overrides.yml
+#
+#  - no default passwords: every password comes from data/siem/siem.env
+#  - only the ports devices send to are published (agents 1514/1515, syslog 514/udp);
+#    the indexer and the manager's API are reachable from Agent OS's own network only
+#  - Wazuh's own dashboard is off unless asked for (profile "console"), on its own port
+#    so it never fights the Agent OS dashboard for 443
+services:
+  wazuh.manager:
+    restart: unless-stopped
+    ports: !override
+      - "${SIEM_BIND:-0.0.0.0}:1514:1514"
+      - "${SIEM_BIND:-0.0.0.0}:1515:1515"
+      - "${SIEM_BIND:-0.0.0.0}:514:514/udp"
+    environment:
+      - INDEXER_PASSWORD=${SIEM_INDEXER_PASSWORD:?run scripts/siem.sh on}
+      - API_PASSWORD=${SIEM_API_PASSWORD:?run scripts/siem.sh on}
+    volumes:
+      # The password a computer must give to enrol its agent.
+      - ./config/authd.pass:/wazuh-config-mount/etc/authd.pass
+    networks: [default, agent-os]
+
+  wazuh.indexer:
+    restart: unless-stopped
+    ports: !reset []
+    environment:
+      - "OPENSEARCH_JAVA_OPTS=-Xms${SIEM_HEAP:-1g} -Xmx${SIEM_HEAP:-1g}"
+    networks: [default, agent-os]
+
+  wazuh.dashboard:
+    profiles: ["console"]
+    restart: unless-stopped
+    ports: !override
+      - "${SIEM_CONSOLE_PORT:-5601}:5601"
+    environment:
+      - INDEXER_PASSWORD=${SIEM_INDEXER_PASSWORD:?run scripts/siem.sh on}
+      - DASHBOARD_PASSWORD=${SIEM_DASHBOARD_PASSWORD:?run scripts/siem.sh on}
+      - API_PASSWORD=${SIEM_API_PASSWORD:?run scripts/siem.sh on}
+
+networks:
+  # Agent OS's own network, so its dashboard service can read alerts.
+  agent-os:
+    external: true
+    name: agent-os_default

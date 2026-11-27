@@ -2,6 +2,36 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.79.0] — 2026-11-27
+
+### Added
+- **Security events: an optional built-in SIEM.** A new tab turns on Wazuh
+  (open source) beside Agent OS: **Turn on** asks the server, which downloads
+  Wazuh's official Docker setup at a pinned version (4.14.11), gives it
+  passwords of its own (none of Wazuh's defaults survive), makes its
+  certificates and starts it. Network gear sends syslog to port 514 (UDP,
+  private addresses only); computers and servers install Wazuh's agent with a
+  command the page gives you, which carries an enrolment password. The page
+  shows alerts by severity with period, level and search filters, the log line
+  behind each alert, and which computers and devices are sending. **Turn off**
+  stops it and keeps what it collected.
+- **Agents can read the alerts** with the read-only `security_events` tool.
+- `scripts/siem.sh on [--console] | off | status` does the same from the
+  server. `--console` (or the tick box on the page) also starts Wazuh's own
+  dashboard for technicians, on port 5601.
+
+### Notes
+- Off by default and separate from the main stack (its own Compose project,
+  `agent-os-siem`), so existing installs are unchanged until it is turned on.
+  It needs a server with at least 12 GB of memory and 40 GB of free disk and
+  refuses to start on less.
+- Only ports 514/udp, 1514 and 1515 are published. The indexer and the
+  manager's API are reachable from Agent OS's own Docker network only.
+- Nothing of Wazuh's is kept in this repository; `siem/overrides.yml` holds
+  only Agent OS's changes to its setup.
+- Not yet: Agent OS's own audit trail in the SIEM, alerts tied to clients,
+  keeping every raw log line (alerts only today), and SIEM data in backups.
+
 ## [0.78.0] — 2026-11-27
 
 ### Added

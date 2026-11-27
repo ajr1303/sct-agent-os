@@ -1,0 +1,10 @@
+{
+  "name": "suburban-siem",
+  "label": "Security events",
+  "description": "The built-in SIEM: security alerts from the computers and network gear that send their logs here",
+  "icon": "Gauge",
+  "version": "0.1.0",
+  "tab": { "path": "/siem" },
+  "entry": "dist/index.js",
+  "css": "dist/style.css"
+}

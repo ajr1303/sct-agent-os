@@ -45,6 +45,7 @@ from pydantic import BaseModel
 
 import business_apps as BA
 import clients as CLIENTS
+import siem as SIEM
 
 DB_PATH = os.environ.get("CONNECTORS_DB", "/data/connectors.db")
 HERMES_AUTH_URL = os.environ.get("HERMES_AUTH_URL", "http://hermes:9119/api/auth/me")
@@ -7571,6 +7572,28 @@ def t_add_client_note(a):
     return {"ok": True, "note": "Saved on the client's record."}
 
 
+# --- Security events (the optional built-in SIEM) -----------------------------------------
+# connectors/siem.py; the SIEM itself is set up on the host by scripts/siem.sh.
+SIEM_API = SIEM.mount(app, require_auth)
+
+
+def t_security_events(a):
+    """Recent alerts from the built-in SIEM, newest first."""
+    def num(k, d):
+        try:
+            return int(a.get(k) if a.get(k) not in (None, "") else d)
+        except (TypeError, ValueError):
+            raise ToolError("%s must be a whole number." % k)
+    try:
+        r = SIEM_API["alerts"](num("hours", 24), num("min_level", 7), str(a.get("source") or ""), str(a.get("search") or ""),
+                               min(num("limit", 40), 100))
+    except HTTPException as e:
+        raise ToolError(str(e.detail))
+    return BA.trim({"hours": r["hours"], "counts_all_levels": r["totals"], "matching": r["total"],
+                    "alerts": [{k: x[k] for k in ("time", "level", "severity", "rule", "rule_id", "source", "kind", "src_ip", "user", "log")
+                                if x[k] not in ("", None)} for x in r["alerts"]]})
+
+
 def t_app_get(a):
     app_id, row = _app_pick(a)
     path = str(a.get("path") or "").strip()
@@ -11307,6 +11330,16 @@ MCP_TOOLS = {
         "Never put passwords, keys or codes in a note.",
         _schema({"client": _S, "text": _S, "saved_by": {"type": "string", "description": "Your agent name"},
                  "agent_id": {"type": "string"}}, ("client", "text"))),
+    "security_events": (t_security_events, "all",
+        "Read-only: recent security alerts from the built-in SIEM (sign-in failures, malware, changed system files, "
+        "firewall and network events from computers and network gear that send their logs to it), newest first, with "
+        "counts by severity. Levels run 0 to 15: 7 and up is worth a look, 12 and up is serious. Fails with a plain "
+        "message when the owner has not turned the SIEM on.",
+        _schema({"hours": {"type": "integer", "description": "How far back, default 24"},
+                 "min_level": {"type": "integer", "description": "Lowest level to return, default 7"},
+                 "source": {"type": "string", "description": "A computer's name, or a network device's IP address"},
+                 "search": {"type": "string", "description": "Words to look for in the alert or its log line"},
+                 "limit": {"type": "integer"}, "agent_id": {"type": "string"}}, ())),
     "app_get": (t_app_get, "all",
         "Read anything else from a connected app's own API (GET only), e.g. app github, path /repos/acme/site/pulls.",
         _schema({"app": {"type": "string"}, "path": {"type": "string", "description": "Starts with /"},
@@ -11521,7 +11554,7 @@ _REMOTE_TOOL_NAMES = ("list_agents", "complete_task", "need_owner_input", "split
                       "get_business_plan", "update_business_plan", "save_file", "read_task", "wait_for_tasks",
                       "list_projects", "get_project", "read_project_file", "search_project", "create_project",
                       "save_project_note", "connected_apps", "app_action", "app_get", "propose_action", "my_devices",
-                      "client_info", "add_client_note")
+                      "client_info", "add_client_note", "security_events")
 _REMOTE_HELP = ("Task tools for an agent working an assigned task: split_task when the job will not fit in "
                 "one run, complete_task when it is finished, hand_off_task to pass it to a colleague, "
                 "need_owner_input when only the owner can decide, list_agents for colleagues' names. You "
