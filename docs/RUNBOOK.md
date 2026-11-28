@@ -1054,6 +1054,40 @@ and acts:
   "unknown" and is simply retried. The watch log on the Automations page shows each
   action.
 
+### An agent that cannot work at all (0.77.1)
+
+The section above only covers an agent the team board has marked **error**. An agent whose
+AI call hangs never gets that mark: its own watchdog cuts the run off, the run ends
+`cancelled`, the agent stays `idle`, and the board holds the task ("a step may already have
+happened"). With the model out of credit, that is every task the agent has.
+
+So each pass of the watch also reads the last 500 runs (`_down_scan` in `connectors/app.py`):
+
+- **Down** means `DOWN_MIN_STREAK` (3) finished runs in a row that did not succeed, on at
+  least two tasks, or `DOWN_ONE_TASK_STREAK` (5) on one task, the newest within 7 days. Runs
+  cancelled because a task was reassigned do not count. One bad task is not a down agent.
+- **Why** comes from the assistant's own `logs/errors.log` (read-only mount), matched by
+  time to the failed runs: credit, a rejected key, a spending limit, or a busy provider.
+  When the log is on another machine or says nothing clear, the card says the AI stopped
+  answering and points at the agent's model, sign-in and plan.
+- **While down:** one card under Needs you (`down:<agent id>`), no card for each of its
+  stopped tasks, no automatic fresh starts or nudges for them, no revive, and the lead
+  agent gets nothing if the lead is the one that is down. The record is in the `kv` table
+  under `agent_down`; the log shows `not working`, `tried again`, `working again`.
+- **Trying again:** one task after 30, 60, 120, then every 240 minutes
+  (`DOWN_PROBE_WAIT_MIN`), counted from the last failure or the last try. A queued task
+  first; else a held task whose broken run provably took no step; else a plain wake-up.
+  **Try it now** on the card does the same at once and may use any one held task, since
+  the owner asked. **Pause this agent** stops the tries and keeps the card.
+- **Back:** the first run that succeeds clears the record. Held tasks then start fresh
+  three per pass as before, and the twice-a-day limit per task title starts from zero.
+
+**Restart all / Close all** (`POST /orchestration/decisions/act-many`) act on a group of
+stopped-task cards. Restart marks held tasks with the owner's go-ahead (the same comment
+the single button writes, plus an `ownergo` row so the card is hidden and counted as
+"starting again"), and the watch starts those three per pass; tasks the board does not
+hold go back to `todo` and one per agent is woken.
+
 ## 32. Memory page, and upgrading the memory service
 
 **The Memory page** (menu: Memory) shows what the assistant has learned about the

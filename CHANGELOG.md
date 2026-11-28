@@ -2,6 +2,47 @@
 
 All notable changes to Suburban Cyber Agent OS. Dates are UTC.
 
+## [0.77.1] — 2026-11-27
+
+### Fixed
+- **An agent that cannot work no longer fills Needs you with one card per
+  task.** When an agent's AI call hangs (out of credit, a dropped sign-in),
+  its own watchdog cuts each run off: the run ends "cancelled", the agent
+  stays "idle", and the board holds the task for the owner. Every task the
+  agent had became a card, and Start it fresh only made a new task that died
+  the same way. The watch now reads the runs themselves: three or more in a
+  row with none finishing, on at least two tasks, means the agent is down. A
+  down agent gets **one card** ("<agent> is not working: its AI plan or credit
+  has run out"), with how long it has been failing, how many tasks wait on it
+  and what to fix. Its stopped tasks wait without cards, the watch stops
+  restarting and nudging them, and nothing is handed to a lead agent that is
+  itself down. The cause is read from the assistant's own error log, since the
+  board records only "cancelled".
+- **It comes back by itself.** The watch gives a down agent one safe task to
+  try after 30 minutes, then 1, 2 and 4 hours; **Try it now** on the card does
+  it at once. When a run finishes, the card goes and the waiting tasks start
+  again three per pass, with no card each.
+- **Anthropic's "credit balance is too low"** is now recognised as a credit
+  problem everywhere agent errors are explained.
+- **The one-time repair of lost restarts brought every task back in the same
+  minute** (up to 60), which the agent's gateway refused. It now brings back
+  five per pass, skips agents that are down, and never brings a task back
+  twice.
+- **Triage stopped holding stuck tasks for the lead agent after the first
+  card was built**, because one variable was reused. More stuck tasks reached
+  the owner than the setting intended.
+
+### Changed
+- **Stopped-task cards say what they are.** Each now shows the task's own
+  first lines, why its last run ended in plain words ("the AI stopped
+  answering and the run was cut off after 14 minutes"), and what each button
+  does.
+- **One choice for many.** Four or more stopped tasks of the same agent show
+  as one block with **Restart all** and **Close all**; the single cards are a
+  click away. Restart all does not start them together: held tasks are started
+  a few per pass, the rest go back to the agent's queue. The same task filed
+  several times over is one card, with **Close the older copies**.
+
 ## [0.77.0] — 2026-11-26
 
 ### Added
